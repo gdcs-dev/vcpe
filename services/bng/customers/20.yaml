@@ -1,0 +1,38 @@
+customer_id: 20
+attachments:
+  - network: mgmt
+    interface: eth0
+    mac: 02:10:00:00:00:20
+  - network: wan
+    interface: eth1
+    mac: 02:20:00:00:00:20
+  - network: cm
+    interface: eth2
+    mac: 02:30:00:00:00:20
+management:
+  ipv4: 10.10.10.120/24
+  ipv6: 2001:dbf:0:1::120/64
+access:
+  - interface: eth1.100
+    parent: eth1
+    vlan: 100
+    network: wan
+    ipv4: 10.120.200.1/24
+    ipv6: 2001:dae:20:1::129/64
+    radvd:
+      send_advert: true
+      managed_flag: true
+      other_config_flag: false
+      default_lifetime: 240
+      min_delay_between_ras: 3
+      min_rtr_adv_interval: 120
+      max_rtr_adv_interval: 180
+nat_ipv4_cidrs:
+  - 10.120.200.0/24
+template_replacements:
+  - file: etc/dhcp/dhcpd.conf
+    pattern: 10\.100\.
+    replacement: 10.120.
+  - file: etc/dhcp/dhcpd6.conf
+    pattern: 2001:dae:0:1
+    replacement: 2001:dae:20:1

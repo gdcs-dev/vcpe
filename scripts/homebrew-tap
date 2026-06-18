@@ -1,0 +1,195 @@
+#!/bin/bash
+set -euo pipefail
+
+SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
+INSTALL_ROOT=${VCPE_INSTALL_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}
+
+export VCPE_INSTALL_ROOT="$INSTALL_ROOT"
+
+source "$INSTALL_ROOT/platform/scripts/lib/common.sh"
+
+TAP_NAME_DEFAULT=${VCPE_HOMEBREW_TAP:-gdcs-dev/vcpe}
+FORMULA_NAME=vcpe
+REPO_URL_DEFAULT=${VCPE_HOMEBREW_REPO_URL:-https://github.com/gdcs-dev/vcpe}
+CHANNEL_DEFAULT=${VCPE_HOMEBREW_CHANNEL:-main}
+
+usage() {
+    cat <<'EOF'
+Usage: scripts/homebrew-tap <init|sync|path|formula> [tap-name]
+
+Commands:
+  init [tap-name]     create the Homebrew tap layout
+  sync [tap-name]     render the formula into the tap
+  path [tap-name]     print the resolved tap path
+  formula             print the rendered formula to stdout
+
+Environment:
+  VCPE_HOMEBREW_TAP_DIR    override the tap directory for testing
+  VCPE_HOMEBREW_CHANNEL    main or release (default: main)
+  VCPE_HOMEBREW_VERSION    required for release channel
+  VCPE_HOMEBREW_SHA256     required for release channel
+  VCPE_HOMEBREW_URL        optional source URL override
+EOF
+}
+
+tap_name() {
+  printf '%s\n' "$(normalize_tap_name "${1:-$TAP_NAME_DEFAULT}")"
+}
+
+normalize_tap_name() {
+  local requested_tap=$1
+  local tap_owner=${requested_tap%%/*}
+  local tap_repo=${requested_tap#*/}
+
+  [[ -n "$tap_owner" && -n "$tap_repo" && "$requested_tap" == */* ]] || die "tap name must be in owner/repo form"
+
+  if [[ "$tap_repo" != homebrew-* ]]; then
+    tap_repo="homebrew-$tap_repo"
+  fi
+
+  printf '%s/%s\n' "$tap_owner" "$tap_repo"
+}
+
+tap_path() {
+    local requested_tap
+    local brew_repo
+    local tap_owner
+    local tap_repo
+
+    if [[ -n "${VCPE_HOMEBREW_TAP_DIR:-}" ]]; then
+      printf '%s\n' "$VCPE_HOMEBREW_TAP_DIR"
+        return 0
+    fi
+
+    requested_tap=$(tap_name "$1")
+    tap_owner=${requested_tap%%/*}
+    tap_repo=${requested_tap#*/}
+    [[ -n "$tap_owner" && -n "$tap_repo" && "$requested_tap" == */* ]] || die "tap name must be in owner/repo form"
+    brew_repo=$(brew --repository)
+    printf '%s/Library/Taps/%s/%s\n' "$brew_repo" "$tap_owner" "$tap_repo"
+}
+
+formula_path() {
+    printf '%s/Formula/%s.rb\n' "$(tap_path "$1")" "$FORMULA_NAME"
+}
+
+render_formula() {
+    local channel=${VCPE_HOMEBREW_CHANNEL:-$CHANNEL_DEFAULT}
+    local repo_url=${VCPE_HOMEBREW_REPO_URL:-$REPO_URL_DEFAULT}
+    local version_value
+    local url_value
+    local sha_value
+    local head_line='  head "https://github.com/gdcs-dev/vcpe.git", branch: "main"'
+
+    case "$channel" in
+        main)
+            version_value='"main"'
+            url_value=${VCPE_HOMEBREW_URL:-${repo_url}/archive/refs/heads/main.tar.gz}
+            sha_value=':no_check'
+            ;;
+        release)
+            version_value=${VCPE_HOMEBREW_VERSION:-}
+            sha_value=${VCPE_HOMEBREW_SHA256:-}
+            [[ -n "$version_value" ]] || die "set VCPE_HOMEBREW_VERSION for release channel"
+            [[ -n "$sha_value" ]] || die "set VCPE_HOMEBREW_SHA256 for release channel"
+            url_value=${VCPE_HOMEBREW_URL:-${repo_url}/archive/refs/tags/v${version_value}.tar.gz}
+            version_value=$(printf '"%s"' "$version_value")
+            sha_value=$(printf '"%s"' "$sha_value")
+            ;;
+        *)
+            die "unsupported Homebrew channel: $channel"
+            ;;
+    esac
+
+    cat <<EOF
+class Vcpe < Formula
+  desc "Podman-based vCPE lab orchestration"
+  homepage "$repo_url"
+  url "$url_value"
+  version $version_value
+  sha256 $sha_value
+  license "MIT"
+$head_line
+
+  depends_on "podman"
+  depends_on "podman-compose"
+  depends_on "python@3"
+
+  def install
+    libexec.install Dir["*"]
+
+    env = { "VCPE_INSTALL_ROOT" => libexec }
+    %w[vcpe bng mv1 webpa xb10 net homebrew-tap].each do |script_name|
+      (bin/script_name).write_env_script libexec/"scripts/#{script_name}", env
+    end
+  end
+
+  def caveats
+    <<~EOS
+      Run \`podman machine init\` and \`podman machine start\` on macOS before using vcpe.
+      Then initialize the user config with:
+
+        vcpe init
+
+      The default deployment profile starts bng-7, webpa, and mv1-7.
+    EOS
+  end
+
+  test do
+    output = shell_output("#{bin}/vcpe init")
+    assert_match "VCPE_PROFILE=default", output
+  end
+end
+EOF
+}
+
+ensure_tap_layout() {
+    local target_tap_path
+    local requested_tap
+
+    target_tap_path=$(tap_path "$1")
+    requested_tap=$(tap_name "$1")
+
+    if [[ -n "${VCPE_HOMEBREW_TAP_DIR:-}" ]]; then
+        mkdir -p "$target_tap_path/Formula"
+        return 0
+    fi
+
+    if [[ -d "$target_tap_path/Formula" ]]; then
+        return 0
+    fi
+
+    require_cmd brew
+    brew tap-new --no-git --branch main "$requested_tap"
+}
+
+sync_tap() {
+    local target_formula_path
+
+    ensure_tap_layout "$1"
+    target_formula_path=$(formula_path "$1")
+    mkdir -p "$(dirname "$target_formula_path")"
+    render_formula >"$target_formula_path"
+}
+
+cmd=${1:-}
+requested_tap=${2:-}
+
+case "$cmd" in
+    init)
+        ensure_tap_layout "$requested_tap"
+        ;;
+    sync)
+        sync_tap "$requested_tap"
+        ;;
+    path)
+        tap_path "$requested_tap"
+        ;;
+    formula)
+        render_formula
+        ;;
+    *)
+        usage
+        exit 1
+        ;;
+esac

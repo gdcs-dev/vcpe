@@ -1,0 +1,144 @@
+{
+    "urn:settings:DCMSettings:DownloadConfig:StartTime": "01:00",
+    "urn:settings:DCMSettings:DownloadConfig:MaxRandomDelay": "180",
+    "urn:settings:TelemetryProfile": {
+        "id": "d45419bb-6b21-4d54-a8a5-f29fda4e8229",
+        "telemetryProfile": [{
+                "header": "LoadAvg_split",
+                "content": "LOAD_AVERAGE:",
+                "type": "SelfHeal.txt.0",
+                "pollingFrequency": "0"
+            },
+            {
+                "header": "MPSTAT_USR_split",
+                "content": "MPSTAT_USR:",
+                "type": "SelfHeal.txt.0",
+                "pollingFrequency": "0"
+            },
+            {
+                "header": "MPSTAT_SYS_split",
+                "content": "MPSTAT_SYS:",
+                "type": "SelfHeal.txt.0",
+                "pollingFrequency": "0"
+            },
+            {
+                "header": "MPSTAT_NICE_split",
+                "content": "MPSTAT_NICE:",
+                "type": "SelfHeal.txt.0",
+                "pollingFrequency": "0"
+            },
+            {
+                "header": "MPSTAT_IRQ_split",
+                "content": "MPSTAT_IRQ:",
+                "type": "SelfHeal.txt.0",
+                "pollingFrequency": "0"
+            },
+            {
+                "header": "MPSTAT_IDLE_split",
+                "content": "MPSTAT_IDLE:",
+                "type": "SelfHeal.txt.0",
+                "pollingFrequency": "0"
+            },
+            {
+                "header": "TMPFS_USE_PERCENTAGE_split",
+                "content": "TMPFS_USE_PERCENTAGE:",
+                "type": "SelfHeal.txt.0",
+                "pollingFrequency": "0"
+            },
+            {
+                "header": "RDKLOGS_USE_PERCENTAGE_split",
+                "content": "RDKLOGS_USE_PERCENTAGE:",
+                "type": "SelfHeal.txt.0",
+                "pollingFrequency": "0"
+            },
+            {
+                "header": "NVRAM_USE_PERCENTAGE_split",
+                "content": "NVRAM_USE_PERCENTAGE:",
+                "type": "SelfHeal.txt.0",
+                "pollingFrequency": "0"
+            },
+            {
+                "header": "SWAP_MEMORY_split",
+                "content": "SWAP_MEMORY:",
+                "type": "SelfHeal.txt.0",
+                "pollingFrequency": "0"
+            },
+            {
+                "header": "CACHE_MEMORY_split",
+                "content": "CACHE_MEMORY:",
+                "type": "SelfHeal.txt.0",
+                "pollingFrequency": "0"
+            },
+            {
+                "header": "BUFFER_MEMORY_split",
+                "content": "BUFFER_MEMORY:",
+                "type": "SelfHeal.txt.0",
+                "pollingFrequency": "0"
+            },
+            {
+                "header": "Total_Ethernet_Clients_split",
+                "content": "ccsp-lm-lite",
+                "type": "<event>",
+                "pollingFrequency": "0"
+            },
+            {
+                "header": "Total_online_clients_split",
+                "content": "ccsp-lm-lite",
+                "type": "<event>",
+                "pollingFrequency": "0"
+            },
+            {
+                "header": "Total_devices_connected_split",
+                "content": "ccsp-lm-lite",
+                "type": "<event>",
+                "pollingFrequency": "0"
+            },
+            {
+                "header": "SYS_SH_Zebra_restart",
+                "content": "telemetry_client",
+                "type": "<event>",
+                "pollingFrequency": "0"
+            },
+            {
+                "header": "SYS_SH_Dibbler_restart",
+                "content": "telemetry_client",
+                "type": "<event>",
+                "pollingFrequency": "0"
+            },
+            {
+                "header": "SYS_SH_PAM_Restart",
+                "content": "telemetry_client",
+                "type": "<event>",
+                "pollingFrequency": "0"
+            },
+            {
+                "header": "SYS_INFO_NoIPv6_Address",
+                "content": "telemetry_client",
+                "type": "<event>",
+                "pollingFrequency": "0"
+            },
+            {
+                "header": "RF_ERROR_IPV6PingFailed",
+                "content": "telemetry_client",
+                "type": "<event>",
+                "pollingFrequency": "0"
+            },
+            {
+                "header": "RF_ERROR_IPV4PingFailed",
+                "content": "telemetry_client",
+                "type": "<event>",
+                "pollingFrequency": "0"
+            },
+            {
+                "header": "SYS_ERROR_PSMCrash_reboot",
+                "content": "telemetry_client",
+                "type": "<event>",
+                "pollingFrequency": "0"
+            }
+        ],
+        "schedule": "*/15 * * * *",
+        "telemetryProfile:name": "RDKB-MNG",
+        "uploadRepository:URL": "http://192.168.2.120/",
+        "uploadRepository:uploadProtocol": "HTTP"
+    }
+}

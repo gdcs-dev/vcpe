@@ -1,0 +1,58 @@
+customer_id: 9
+attachments:
+  - network: mgmt
+    interface: eth0
+    mac: 02:10:00:00:00:09
+  - network: wan
+    interface: eth1
+    mac: 02:20:00:00:00:09
+  - network: cm
+    interface: eth2
+    mac: 02:30:00:00:00:09
+management:
+  ipv4: 10.10.10.109/24
+  ipv6: 2001:dbf:0:1::109/64
+access:
+  - interface: eth1.1081
+    parent: eth1
+    vlan: 1081
+    network: wan
+    ipv4: 10.178.200.1/24
+    ipv6: 2001:dbe:0:1::129/64
+    radvd:
+      send_advert: true
+      managed_flag: true
+      other_config_flag: true
+      default_lifetime: 7200
+      min_rtr_adv_interval: 120
+      max_rtr_adv_interval: 180
+  - interface: eth1.881
+    parent: eth1
+    vlan: 881
+    network: wan
+    ipv4: 10.177.200.1/24
+    ipv6: 2001:dbd:0:1::129/64
+    radvd:
+      send_advert: true
+      managed_flag: true
+      other_config_flag: true
+      default_lifetime: 7200
+      min_rtr_adv_interval: 120
+      max_rtr_adv_interval: 180
+  - interface: eth1.981
+    parent: eth1
+    vlan: 981
+    network: wan
+    ipv4: 10.179.200.1/24
+    ipv6: 2001:dbc:0:1::129/64
+    radvd:
+      send_advert: true
+      managed_flag: true
+      other_config_flag: true
+      default_lifetime: 7200
+      min_rtr_adv_interval: 120
+      max_rtr_adv_interval: 180
+nat_ipv4_cidrs:
+  - 10.177.200.0/24
+  - 10.178.200.0/24
+  - 10.179.200.0/24

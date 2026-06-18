@@ -1,0 +1,111 @@
+build: 0.9.9
+control:
+  address: :6203
+device:
+  manager:
+    deviceMessageQueueSize: 1000
+    idlePeriod: 2m
+    maxDevices: 100
+    pingPeriod: 1m
+    upgrader:
+      handshakeTimeout: 10s
+  outbound:
+    allowedSchemes:
+      - http
+      - https
+    authKey: dXNlcjpwYXNz
+    clientTimeout: 2m
+    defaultScheme: http
+    enableConsulRoundRobin: true
+    eventEndpoints:
+      default: http://127.0.0.1:6000/api/v4/notify
+    method: POST
+    outboundQueueSize: 2000
+    requestTimeout: 2m
+    retries: 3
+    transport:
+      idleConnTimeout: 120s
+      maxIdleConns: 0
+      maxIdleConnsPerHost: 100
+    workerPoolSize: 50
+domain: ""
+eventMap:
+  default: http://127.0.0.1:6000/api/v3/notify
+flavor: mint
+health:
+  address: :6201
+inbound:
+  authKey: dXNlcjpwYXNz
+  requestTimeout: 120s
+jwtValidator:
+  Config:
+    Resolve:
+      Template: http://127.0.0.1:6500/keys/{keyID}
+log:
+  file: stdout
+  json: true
+  level: DEBUG
+  maxage: 30
+  maxbackups: 10
+  maxsize: 50
+metric:
+  address: :6204
+  metricsOptions:
+    namespace: xmidt
+    subsystem: talaria
+pprof:
+  address: :6202
+primary:
+  address: :6200
+region: east
+server: webpa
+service:
+  consul:
+    client:
+      address: 127.0.0.1:8500
+      scheme: http
+      waitTime: 30s
+    datacenterRetries: 3
+    disableGenerateID: true
+    registrations:
+      - address: 127.0.0.1
+        checks:
+          - checkID: talaria:http
+            deregisterCriticalServiceAfter: 70s
+            http: http://127.0.0.1:6201/health
+            interval: 30s
+        id: talaria
+        name: talaria
+        port: 6200
+        tags:
+          - stage=dev
+          - flavor=mint
+    watches:
+      - crossDatacenter: false
+        passingOnly: true
+        service: talaria
+        tags:
+          - stage=dev
+          - flavor=mint
+      - crossDatacenter: false
+        passingOnly: true
+        service: caduceus
+        tags:
+          - stage=dev
+          - flavor=mint
+  defaultScheme: http
+  vnodeCount: 211
+stage: dev
+tracing:
+  provider: noop
+zap:
+  encoderConfig:
+    levelEncoder: lowercase
+    levelKey: key
+    messageKey: message
+  encoding: json
+  errorOutputPaths:
+    - stderr
+  level: INFO
+  outputPaths:
+    - stdout

@@ -1,0 +1,48 @@
+type: object
+required:
+  - customer_id
+  - attachments
+  - management
+  - access
+  - nat_ipv4_cidrs
+properties:
+  customer_id:
+    type: integer
+  attachments:
+    type: array
+    items:
+      type: object
+      required:
+        - network
+        - interface
+        - mac
+  management:
+    type: object
+    properties:
+      ipv4:
+        type: string
+      ipv6:
+        type: string
+  access:
+    type: array
+    description: Access-side interface and VLAN definitions for WAN or CM networks.
+    items:
+      type: object
+      required:
+        - interface
+        - network
+        - ipv4
+        - ipv6
+        - radvd
+  nat_ipv4_cidrs:
+    type: array
+    items:
+      type: string
+  template_replacements:
+    type: array
+    items:
+      type: object
+      required:
+        - file
+        - pattern
+        - replacement

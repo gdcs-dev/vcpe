@@ -1,0 +1,67 @@
+build: 0.4.1
+flavor: mint
+health:
+  address: :6401
+log:
+  file: stdout
+  json: true
+  level: INFO
+  maxage: 30
+  maxbackups: 10
+  maxsize: 50
+metric:
+  address: :6403
+  metricsOptions:
+    namespace: xmidt
+    subsystem: petasos
+pprof:
+  address: :6402
+primary:
+  address: :6400
+region: east
+server: webpa
+service:
+  consul:
+    client:
+      address: 127.0.0.1:8500
+      scheme: http
+      waitTime: 30s
+    datacenterRetries: 3
+    disableGenerateID: true
+    registrations:
+      - address: 127.0.0.1
+        checks:
+          - checkID: petasos:http
+            deregisterCriticalServiceAfter: 70s
+            http: http://127.0.0.1:6401/health
+            interval: 30s
+        id: petasos
+        name: petasos
+        port: 6400
+        scheme: http
+        tags:
+          - stage=dev
+          - flavor=mint
+    watches:
+      - allDatacenters: false
+        passingOnly: true
+        service: talaria
+        tags:
+          - stage=dev
+          - flavor=mint
+  defaultScheme: http
+  vnodeCount: 211
+stage: dev
+tracing:
+  provider: noop
+zap:
+  encoderConfig:
+    levelEncoder: lowercase
+    levelKey: key
+    messageKey: message
+  encoding: json
+  errorOutputPaths:
+    - stderr
+  level: INFO
+  outputPaths:
+    - stdout

@@ -1,0 +1,68 @@
+authx:
+  inbound:
+    accessLevel:
+      attributeKey: access-level
+      capabilitySource:
+        name: x1:issuer:test:.*:all
+        path:
+          - capabilities
+    basic:
+      - dXNlcjpwYXNz
+build: 0.11.3
+health:
+  custom:
+    server: webpa
+  disableLogging: false
+jwtValidator:
+  Config:
+    Resolve:
+      Template: http://127.0.0.1:6500/keys/{keyID}
+logging:
+  development: true
+  encoderConfig:
+    levelKey: level
+    messageKey: msg
+  level: info
+prometheus:
+  constLabels:
+    development: "true"
+  defaultNamespace: xmidt
+  defaultSubsystem: argus
+  handler:
+    instrumentMetricHandler: true
+    maxRequestsInFlight: 5
+    timeout: 5s
+server: webpa
+servers:
+  health:
+    address: :6602
+    disableHTTPKeepAlives: true
+    header:
+      X-Midt-Server:
+        - argus
+      X-Midt-Version:
+        - development
+  metrics:
+    address: :6601
+    disableHTTPKeepAlives: true
+    header:
+      X-Midt-Server:
+        - argus
+      X-Midt-Version:
+        - unknown
+  primary:
+    address: :6600
+    disableHTTPKeepAlives: true
+    header:
+      X-Midt-Server:
+        - argus
+      X-Midt-Version:
+        - unknown
+stage: development
+tracing:
+  provider: noop
+userInputValidation:
+  bucketFormatRegex: ^[0-9a-z][0-9a-z-]{1,61}[0-9a-z]$
+  itemDataMaxDepth: 30
+  itemMaxTTL: 24h
+  ownerFormatRegex: ^.{4,60}$

@@ -1,0 +1,18 @@
+{
+  "node_name": "consul0",
+  "server": true,
+  "bootstrap": true,
+  "skip_leave_on_interrupt": true,
+  "ui_config": {
+    "enabled": true
+  },
+  "datacenter": "vcpe",
+  "data_dir": "consul/data",
+  "log_level": "INFO",
+  "addresses": {
+    "http": "0.0.0.0"
+  },
+  "connect": {
+    "enabled": true
+  }
+}

@@ -1,0 +1,96 @@
+argusClientTimeout:
+  clientTimeout: 50s
+  netDialerTimeout: 5s
+authHeader:
+  - dXNlcjpwYXNz
+authToken: dXNlcjpwYXNz
+build: 0.11.0
+flavor: mint
+fqdn: webpa
+health:
+  address: :6001
+jwtValidator:
+  Config:
+    Resolve:
+      Template: http://127.0.0.1:6500/keys/{keyID}
+log:
+  file: stdout
+  json: true
+  level: DEBUG
+  maxage: 30
+  maxbackups: 10
+  maxsize: 50
+metric:
+  address: :6003
+  metricsOptions:
+    namespace: xmidt
+    subsystem: caduceus
+pprof:
+  address: :6002
+previousVersionSupport: true
+primary:
+  address: :6000
+region: east
+sender:
+  customPIDs: []
+  cutOffPeriod: 10s
+  deliveryInterval: 10ms
+  deliveryRetries: 1
+  disableClientHostnameValidation: false
+  disablePartnerIDs: true
+  linger: 180s
+  numWorkersPerSender: 5000
+  queueSizePerSender: 10000
+  responseHeaderTimeout: 10s
+server: webpa
+service:
+  consul:
+    client:
+      address: 127.0.0.1:8500
+      scheme: http
+      waitTime: 30s
+    disableGenerateID: true
+    registrations:
+      - address: 127.0.0.1
+        checks:
+          - checkID: caduceus:http
+            deregisterCriticalServiceAfter: 70s
+            http: http://127.0.0.1:6001/health
+            interval: 30s
+        id: caduceus
+        name: caduceus
+        port: 6000
+        scheme: http
+        tags:
+          - stage=dev
+          - flavor=mint
+stage: dev
+touchstone:
+  defaultNamespace: xmidt
+  defaultSubsystem: caduceus
+tracing:
+  provider: noop
+webhook:
+  BasicClientConfig:
+    address: http://127.0.0.1:6600
+    auth:
+      basic: Basic dXNlcjpwYXNz
+      jwt:
+        authURL: http://127.0.0.1:6501/issue
+        buffer: 2m
+        timeout: 1m
+    bucket: webhooks
+    listen:
+      pullInterval: 5s
+  JWTParserType: raw
+zap:
+  encoderConfig:
+    levelEncoder: lowercase
+    levelKey: key
+    messageKey: message
+  encoding: json
+  errorOutputPaths:
+    - stderr
+  level: debug
+  outputPaths:
+    - stdout

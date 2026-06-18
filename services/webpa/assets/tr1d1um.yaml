@@ -1,0 +1,109 @@
+WRPSource: dns:webpa
+argusClientTimeout:
+  clientTimeout: 50s
+  netDialerTimeout: 5s
+authAcquirer:
+  Basic: Basic dXNlcjpwYXNz
+authToken: dXNlcjpwYXNz
+authx:
+  inbound:
+    basic:
+      - dXNlcjpwYXNz
+build: 0.11.29
+flavor: mint
+health:
+  custom:
+    server: webpa
+  disableLogging: false
+jwtValidator:
+  Config:
+    Refresh:
+      Sources:
+        - URI: http://127.0.0.1:6500/keys/available
+    Resolve:
+      Template: http://127.0.0.1:6500/keys/{keyID}
+logging:
+  development: true
+  encoderConfig:
+    levelKey: level
+    messageKey: msg
+  level: info
+previousVersionSupport: true
+prometheus:
+  constLabels:
+    development: "true"
+  defaultNamespace: xmidt
+  defaultSubsystem: tr1d1um
+  handler:
+    instrumentMetricHandler: true
+    maxRequestsInFlight: 5
+    timeout: 5s
+region: east
+requestMaxRetries: 2
+requestRetryInterval: 2s
+server: webpa
+servers:
+  health:
+    address: :6102
+    disableHTTPKeepAlives: true
+    header:
+      X-Midt-Server:
+        - tr1d1um
+      X-Midt-Version:
+        - development
+  metrics:
+    address: :6101
+    disableHTTPKeepAlives: true
+    header:
+      X-Midt-Server:
+        - tr1d1um
+      X-Midt-Version:
+        - development
+  pprof:
+    address: :6103
+  primary:
+    address: :6100
+    disableHTTPKeepAlives: true
+    header:
+      X-Midt-Server:
+        - tr1d1um
+      X-Midt-Version:
+        - development
+supportedServices:
+  - config
+targetURL: http://127.0.0.1:6300/api/v3
+touchstone:
+  defaultNamespace: xmidt
+  defaultSubsystem: tr1d1um
+tracing:
+  provider: noop
+webhook:
+  BasicClientConfig:
+    address: http://127.0.0.1:6600
+    auth:
+      basic: Basic dXNlcjpwYXNz
+      jwt:
+        authURL: http://127.0.0.1:6501/issue
+        buffer: 2m
+        timeout: 1m
+    bucket: webhooks
+    listen:
+      pullInterval: 5s
+  JWTParserType: raw
+  disablePartnerIDs: false
+  validation:
+    ttl:
+      jitter: 10s
+      max: 1m
+    url:
+      allowIP: true
+      allowLoopback: true
+      allowSpecialUseHosts: true
+      allowSpecialUseIPs: true
+      httpsOnly: false
+      invalidHosts: []
+      invalidSubnets: []
+xmidtClientTimeout:
+  clientTimeout: 135s
+  netDialerTimeout: 5s
+  requestTimeout: 129s

@@ -1,0 +1,112 @@
+authHeader:
+  - dXNlcjpwYXNz
+authToken: dXNlcjpwYXNz
+build: 0.13.2
+capabilityConfig:
+  acceptAllMethod: all
+  firstPiece: p1
+  secondPiece: p2
+  thirdPiece: p3
+fallback_endpoints:
+  - http://127.0.0.1:6400/api/v2/device/send
+fanout:
+  authorization: dXNlcjpwYXNz
+  clientTimeout: 127s
+  concurrency: 10
+  fanoutTimeout: 127s
+  maxRedirects: 3
+  pathPrefix: /api/v3
+  redirectExcludeHeaders:
+    - X-Xmidt-Log-Level
+  transport:
+    idleConnTimeout: 120s
+    maxIdleConns: 0
+    maxIdleConnsPerHost: 100
+flavor: mint
+health:
+  address: :6301
+jwtValidator:
+  keys:
+    factory:
+      uri: http://127.0.0.1:6500/keys/{keyID}
+    purpose: 0
+    updateInterval: 604800000000000
+log:
+  file: stdout
+  json: true
+  level: DEBUG
+  maxage: 30
+  maxbackups: 10
+  maxsize: 50
+metric:
+  address: :6303
+  metricsOptions:
+    namespace: xmidt
+    subsystem: scytale
+pprof:
+  address: :6302
+previousVersionSupport: true
+primary:
+  address: :6300
+region: east
+server: webpa
+service:
+  consul:
+    chrysom:
+      address: http://127.0.0.1:6600
+      auth:
+        basic: Basic dXNlcjpwYXNz
+        jwt:
+          authURL: http://127.0.0.1:6501/issue
+          buffer: 2m
+          timeout: 1m
+      bucket: inactivedcs
+      listen:
+        pullInterval: 5s
+    client:
+      address: 127.0.0.1:8500
+      scheme: http
+      waitTime: 30s
+    datacenterRetries: 3
+    datacenterWatchInterval: 10s
+    disableGenerateID: true
+    registrations:
+      - address: 127.0.0.1
+        checks:
+          - checkID: scytale:http
+            deregisterCriticalServiceAfter: 70s
+            http: http://127.0.0.1:6301/health
+            interval: 30s
+        id: scytale
+        name: scytale
+        port: 6300
+        scheme: http
+        tags:
+          - stage=dev
+          - flavor=mint
+    watches:
+      - crossDatacenter: true
+        passingOnly: true
+        service: talaria
+        tags:
+          - stage=dev
+          - flavor=mint
+  defaultScheme: http
+  vnodeCount: 211
+stage: dev
+touchstone:
+  defaultNamespace: xmidt
+  defaultSubsystem: scytale
+tracing:
+  provider: noop
+zap:
+  encoderConfig:
+    levelEncoder: lowercase
+    levelKey: key
+    messageKey: message
+  encoding: json
+  errorOutputPaths:
+    - stderr
+  level: INFO
+  outputPaths:
+    - stdout

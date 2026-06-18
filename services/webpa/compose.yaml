@@ -1,0 +1,17 @@
+services:
+  webpa:
+    image: ${WEBPA_IMAGE_NAME:-ghcr.io/gdcs-dev/webpa:dev}
+    container_name: webpa
+    hostname: webpa
+    privileged: true
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    networks:
+      mgmt:
+        mac_address: "02:10:00:00:00:fe"
+
+networks:
+  mgmt:
+    external: true
+    name: mgmt

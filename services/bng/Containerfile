@@ -1,0 +1,45 @@
+FROM debian:bookworm-slim
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update \
+   && apt-get install -y --no-install-recommends \
+   apache2 \
+   dnsmasq \
+   gettext-base \
+   iproute2 \
+   iptables \
+   iputils-ping \
+   isc-dhcp-server \
+   jq \
+   mosquitto \
+   mosquitto-clients \
+   ndisc6 \
+   ntp \
+   procps \
+   python3 \
+   python3-pip \
+   radvd \
+   tcpdump \
+   tini \
+   vlan \
+   net-tools \
+   dnsutils \
+   && python3 -m pip install --break-system-packages --no-cache-dir paho-mqtt protobuf==3.20.* \
+   && rm -rf /var/lib/apt/lists/*
+
+RUN mkdir -p /runtime-config /var/log/bng /run/mosquitto \
+   && chown mosquitto:mosquitto /run/mosquitto
+
+COPY container/entrypoint.sh /usr/local/bin/entrypoint.sh
+COPY container/start-services.sh /usr/local/bin/start-services.sh
+COPY container/healthcheck.sh /usr/local/bin/healthcheck.sh
+COPY assets/dhcpd-notify.sh /etc/dhcpd-notify.sh
+
+RUN chmod +x /usr/local/bin/entrypoint.sh \
+   /usr/local/bin/start-services.sh \
+   /usr/local/bin/healthcheck.sh \
+   /etc/dhcpd-notify.sh
+
+ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/entrypoint.sh"]
+HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 CMD ["/usr/local/bin/healthcheck.sh"]

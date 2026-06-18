@@ -1,0 +1,148 @@
+#!/bin/bash
+set -euo pipefail
+
+SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
+source "$SCRIPT_DIR/../../../platform/scripts/lib/common.sh"
+source "$REPO_ROOT/platform/scripts/lib/bridges.sh"
+source "$REPO_ROOT/platform/scripts/lib/firewall.sh"
+
+MV1_IMAGE_NAME=${MV1_IMAGE_NAME:-ghcr.io/gdcs-dev/mv1:dev}
+CUSTOMERS_DIR="$MV1_ROOT/customers"
+
+usage() {
+    cat <<'EOF'
+Usage: services/mv1/scripts/mv1 <build|push|up|down|status|logs> [customer-id]
+EOF
+}
+
+require_mv1_customer_id() {
+    [[ -n "${1:-}" ]] || die "customer id is required"
+    case "$1" in
+        7|9|20)
+            ;;
+        *)
+            die "first-pass mv1 supports only customer ids 7, 9, and 20"
+            ;;
+    esac
+}
+
+ensure_mv1_runtime_root() {
+    mkdir -p "$MV1_RUNTIME_ROOT"
+}
+
+compose_project_name() {
+    local customer_id=$1
+    printf 'podman-mv1-%s\n' "$customer_id"
+}
+
+compose_env_file() {
+    local customer_id=$1
+    local runtime_dir="$MV1_RUNTIME_ROOT/$customer_id"
+    local env_file="$runtime_dir/compose.env"
+    local customer_file="$CUSTOMERS_DIR/${customer_id}.env"
+
+    [[ -f "$customer_file" ]] || die "missing mv1 customer config: $customer_file"
+    mkdir -p "$runtime_dir"
+    (
+        # shellcheck source=/dev/null
+        source "$customer_file"
+        cat >"$env_file" <<EOF
+CUSTOMER_ID=$customer_id
+IMAGE_NAME=$MV1_IMAGE_NAME
+WAN_NETWORK=wan-$customer_id
+CM_NETWORK=cm-$customer_id
+LAN1_NETWORK=lan-p1-$customer_id
+LAN2_NETWORK=lan-p2-$customer_id
+LAN3_NETWORK=lan-p3-$customer_id
+LAN4_NETWORK=lan-p4-$customer_id
+LAN1_MAC=$LAN1_MAC
+LAN2_MAC=$LAN2_MAC
+LAN3_MAC=$LAN3_MAC
+LAN4_MAC=$LAN4_MAC
+WAN0_MAC=$WAN0_MAC
+EROUTER0_MAC=$EROUTER0_MAC
+BRLAN0_IPV4=$BRLAN0_IPV4
+BRLAN0_IPV6=$BRLAN0_IPV6
+WAN0_IPV4=${WAN0_IPV4:-}
+WAN0_IPV6=${WAN0_IPV6:-}
+EROUTER0_VLAN=${EROUTER0_VLAN:-}
+EROUTER0_IPV4=$EROUTER0_IPV4
+EROUTER0_IPV4_GATEWAY=$EROUTER0_IPV4_GATEWAY
+EROUTER0_IPV6=$EROUTER0_IPV6
+EROUTER0_IPV6_GATEWAY=$EROUTER0_IPV6_GATEWAY
+EOF
+    )
+
+    printf '%s\n' "$env_file"
+}
+
+build_image() {
+    require_cmd podman
+    podman build -t "$MV1_IMAGE_NAME" "$MV1_ROOT"
+}
+
+push_image() {
+    push_container_image "$MV1_IMAGE_NAME"
+}
+
+compose_up() {
+    local customer_id=$1
+    local env_file
+    env_file=$(compose_env_file "$customer_id")
+    (cd "$MV1_ROOT" && "$PODMAN_COMPOSE_BIN" -p "$(compose_project_name "$customer_id")" --env-file "$env_file" up -d)
+}
+
+compose_down() {
+    local customer_id=$1
+    local env_file
+    env_file=$(compose_env_file "$customer_id")
+    (cd "$MV1_ROOT" && "$PODMAN_COMPOSE_BIN" -p "$(compose_project_name "$customer_id")" --env-file "$env_file" down)
+}
+
+container_status() {
+    local customer_id=$1
+    podman ps -a --filter "name=mv1-r21-${customer_id}"
+}
+
+container_logs() {
+    local customer_id=$1
+    podman logs "mv1-r21-${customer_id}"
+}
+
+cmd=${1:-}
+customer_id=${2:-}
+
+case "$cmd" in
+    build)
+        build_image
+        ;;
+    push)
+        push_image
+        ;;
+    up)
+        require_mv1_customer_id "$customer_id"
+        ensure_mv1_runtime_root
+        setup_bridges
+        ensure_nat_rule
+        compose_up "$customer_id"
+        setup_bridges
+        ensure_nat_rule
+        ;;
+    down)
+        require_mv1_customer_id "$customer_id"
+        ensure_mv1_runtime_root
+        compose_down "$customer_id"
+        ;;
+    status)
+        require_mv1_customer_id "$customer_id"
+        container_status "$customer_id"
+        ;;
+    logs)
+        require_mv1_customer_id "$customer_id"
+        container_logs "$customer_id"
+        ;;
+    *)
+        usage
+        exit 1
+        ;;
+esac

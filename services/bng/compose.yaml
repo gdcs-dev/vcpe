@@ -1,0 +1,34 @@
+services:
+  bng:
+    image: ${IMAGE_NAME:-ghcr.io/gdcs-dev/bng:dev}
+    container_name: bng-${CUSTOMER_ID}
+    hostname: bng-${CUSTOMER_ID}
+    privileged: true
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    environment:
+      CUSTOMER_ID: ${CUSTOMER_ID}
+      MGMT_MAC: ${MGMT_MAC}
+      WAN_MAC: ${WAN_MAC}
+      CM_MAC: ${CM_MAC}
+    volumes:
+      - ./runtime/${CUSTOMER_ID}:/runtime-config:ro
+    networks:
+      mgmt:
+        mac_address: ${MGMT_MAC}
+      wan:
+        mac_address: ${WAN_MAC}
+      cm:
+        mac_address: ${CM_MAC}
+
+networks:
+  mgmt:
+    external: true
+    name: mgmt
+  wan:
+    external: true
+    name: ${WAN_NETWORK}
+  cm:
+    external: true
+    name: ${CM_NETWORK}

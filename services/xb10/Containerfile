@@ -1,0 +1,36 @@
+FROM localhost/xb10-dev
+
+ARG TARGET_ARCH=cortexa53
+
+RUN mkdir -p /nvram/secure \
+   && mkdir -p /rdklogs/logs
+
+RUN systemctl mask \
+   reboot.target \
+   rebootCleanUp.service \
+   systemd-reboot.service \
+   brcm-license.service \
+   brcm-cm.service \
+   miniupnpd.service \
+   rdkssaeccdaemon.service \
+   cpcd.service \
+   zigbeed-tty.path \
+   ble_rcp.service \
+   radiusauthd.service \
+   rdkssainit.service \
+   oem-cm-verification.service \
+   rng-tools.service \
+   brcm-net.service \
+   ProcessResetDetect.service
+
+RUN ln -s /bin/ifconfig /sbin/ifconfig
+RUN touch /nvram/ETHWAN_ENABLE
+ENV SDKTARGETSYSROOT=/
+ENV TARGET_ARCH=${TARGET_ARCH}
+RUN echo 'PS1="[\u@xb10-dev \W]\\$ "' >> /home/root/.bashrc
+
+COPY container/entrypoint.sh /usr/local/bin/xb10-entrypoint.sh
+RUN chmod 0755 /usr/local/bin/xb10-entrypoint.sh
+
+ENTRYPOINT ["/usr/local/bin/xb10-entrypoint.sh"]
+CMD ["/sbin/init"]
