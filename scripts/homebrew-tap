@@ -12,6 +12,7 @@ TAP_NAME_DEFAULT=${VCPE_HOMEBREW_TAP:-gdcs-dev/vcpe}
 FORMULA_NAME=vcpe
 REPO_URL_DEFAULT=${VCPE_HOMEBREW_REPO_URL:-https://github.com/gdcs-dev/vcpe}
 CHANNEL_DEFAULT=${VCPE_HOMEBREW_CHANNEL:-main}
+MAIN_SHA256_DEFAULT=${VCPE_HOMEBREW_MAIN_SHA256:-55afcf077ddaecca608b745ddea81ebd6335c66d936bdbd2ada2b5ad5ce3f65a}
 
 usage() {
     cat <<'EOF'
@@ -26,6 +27,7 @@ Commands:
 Environment:
   VCPE_HOMEBREW_TAP_DIR    override the tap directory for testing
   VCPE_HOMEBREW_CHANNEL    main or release (default: main)
+  VCPE_HOMEBREW_MAIN_SHA256  checksum for the main branch archive
   VCPE_HOMEBREW_VERSION    required for release channel
   VCPE_HOMEBREW_SHA256     required for release channel
   VCPE_HOMEBREW_URL        optional source URL override
@@ -85,7 +87,7 @@ render_formula() {
         main)
             version_value='"main"'
             url_value=${VCPE_HOMEBREW_URL:-${repo_url}/archive/refs/heads/main.tar.gz}
-            sha_value=':no_check'
+          sha_value="$MAIN_SHA256_DEFAULT"
             ;;
         release)
             version_value=${VCPE_HOMEBREW_VERSION:-}
@@ -107,7 +109,7 @@ class Vcpe < Formula
   homepage "$repo_url"
   url "$url_value"
   version $version_value
-  sha256 $sha_value
+  sha256 "$sha_value"
   license "MIT"
 $head_line
 
@@ -132,6 +134,8 @@ $head_line
         vcpe init
 
       The default deployment profile starts bng-7, webpa, and mv1-7.
+      This formula currently tracks the main branch. Replace the branch tarball
+      with a tagged release URL and fixed sha256 once release artifacts exist.
     EOS
   end
 

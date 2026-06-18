@@ -287,8 +287,10 @@ def render_customer(repo_root: Path, customer_id: str, runtime_root: Path) -> No
 def emit_compose_env(repo_root: Path, customer_id: str, image_name: str) -> None:
     customer = load_customer(repo_root, customer_id)
     attachments = attachments_by_network(customer)
+    runtime_root = (repo_root / "runtime").resolve()
     print(f"CUSTOMER_ID={customer_id}")
     print(f"IMAGE_NAME={image_name}")
+    print(f"RUNTIME_ROOT={runtime_root}")
     print(f"MGMT_MAC={attachments['mgmt']['mac']}")
     print(f"WAN_MAC={attachments['wan']['mac']}")
     print(f"CM_MAC={attachments['cm']['mac']}")

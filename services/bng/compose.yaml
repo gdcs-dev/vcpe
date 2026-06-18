@@ -13,7 +13,7 @@ services:
       WAN_MAC: ${WAN_MAC}
       CM_MAC: ${CM_MAC}
     volumes:
-      - ./runtime/${CUSTOMER_ID}:/runtime-config:ro
+      - ${RUNTIME_ROOT}/${CUSTOMER_ID}:/runtime-config:ro
     networks:
       mgmt:
         mac_address: ${MGMT_MAC}
