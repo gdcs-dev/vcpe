@@ -1,0 +1,40 @@
+name: Homebrew Tap
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  validate-tap:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.2'
+
+      - name: Generate tap files
+        run: |
+          chmod +x scripts/homebrew-tap scripts/sync-homebrew-vcpe
+          export VCPE_INSTALL_ROOT="$PWD"
+          export VCPE_HOMEBREW_TAP_DIR="$RUNNER_TEMP/homebrew-vcpe"
+          scripts/homebrew-tap sync gdcs-dev/vcpe
+          mkdir -p "$RUNNER_TEMP/homebrew-vcpe"
+          cp packaging/homebrew/README.md "$RUNNER_TEMP/homebrew-vcpe/README.md"
+
+      - name: Validate formula syntax
+        run: ruby -c "$RUNNER_TEMP/homebrew-vcpe/Formula/vcpe.rb"
+
+      - name: Upload tap artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: homebrew-vcpe
+          path: |
+            ${{ runner.temp }}/homebrew-vcpe/Formula/vcpe.rb
+            ${{ runner.temp }}/homebrew-vcpe/README.md

@@ -56,6 +56,13 @@ brew trust gdcs-dev/vcpe
 brew install gdcs-dev/vcpe/vcpe
 ```
 
+If you also have the `homebrew-vcpe` tap repository checked out next to this
+repo, you can sync the tap files directly into that checkout with:
+
+```bash
+./scripts/sync-homebrew-vcpe
+```
+
 For tagged releases, set the release metadata before syncing:
 
 ```bash

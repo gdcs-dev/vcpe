@@ -53,6 +53,12 @@ brew trust gdcs-dev/vcpe
 brew install gdcs-dev/vcpe/vcpe
 ```
 
+To sync a checked-out `homebrew-vcpe` repository next to this repo:
+
+```bash
+./scripts/sync-homebrew-vcpe
+```
+
 ## Scope
 
 - Included: host bridge setup, Podman image build, customer render, BNG startup,

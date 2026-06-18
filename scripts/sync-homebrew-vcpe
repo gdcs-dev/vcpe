@@ -1,0 +1,47 @@
+#!/bin/bash
+set -euo pipefail
+
+SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
+INSTALL_ROOT=${VCPE_INSTALL_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}
+
+export VCPE_INSTALL_ROOT="$INSTALL_ROOT"
+
+source "$INSTALL_ROOT/platform/scripts/lib/common.sh"
+
+TAP_REPO_DIR_DEFAULT=${VCPE_HOMEBREW_REPO_DIR:-$(cd "$REPO_ROOT/.." && pwd)/homebrew-vcpe}
+TAP_README_TEMPLATE="$REPO_ROOT/packaging/homebrew/README.md"
+
+usage() {
+    cat <<'EOF'
+Usage: scripts/sync-homebrew-vcpe [tap-repo-dir]
+
+Sync the generated Homebrew formula and tap README into a checked-out
+homebrew-vcpe repository.
+
+Environment:
+  VCPE_HOMEBREW_REPO_DIR   default checkout path for the tap repository
+EOF
+}
+
+sync_checkout() {
+    local tap_repo_dir=${1:-$TAP_REPO_DIR_DEFAULT}
+
+    [[ -d "$tap_repo_dir" ]] || die "missing tap repository directory: $tap_repo_dir"
+    [[ -d "$tap_repo_dir/.git" ]] || die "tap repository is not a git checkout: $tap_repo_dir"
+    [[ -f "$TAP_README_TEMPLATE" ]] || die "missing tap README template: $TAP_README_TEMPLATE"
+
+    VCPE_HOMEBREW_TAP_DIR="$tap_repo_dir" "$REPO_ROOT/scripts/homebrew-tap" sync gdcs-dev/vcpe
+    cp "$TAP_README_TEMPLATE" "$tap_repo_dir/README.md"
+
+    ruby -c "$tap_repo_dir/Formula/vcpe.rb" >/dev/null
+    log "synced Homebrew tap files into $tap_repo_dir"
+}
+
+case "${1:-}" in
+    -h|--help)
+        usage
+        ;;
+    *)
+        sync_checkout "${1:-}"
+        ;;
+esac
