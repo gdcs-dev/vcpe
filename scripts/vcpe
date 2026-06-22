@@ -15,18 +15,18 @@ usage() {
 Usage: scripts/vcpe <init|up|down|status|logs|config|profile> [args]
 
 Commands:
-    init                 create user config under ~/.config/vcpe
-  up                   start the configured deployment profile
-  down                 stop the configured deployment profile
-  status               show status for the configured deployment profile
-  logs <service>       show logs for bng, mv1, webpa, or xb10
-    config show          print resolved config and profile values
-    config set KEY VALUE update ~/.config/vcpe/config.env
-    profile list         list available deployment profiles
-    profile show [name]  print a deployment profile
-    profile use NAME     select the active deployment profile
-    profile create NAME [base] copy a profile from an existing base
-    profile set NAME KEY VALUE  update a deployment profile key
+   init                 create user config under ~/.config/vcpe
+   up                   start the configured deployment profile
+   down                 stop the configured deployment profile
+   status               show status for the configured deployment profile
+   logs <service>       show logs for bng, mv1, webpa, or xb10
+   config show          print resolved config and profile values
+   config set KEY VALUE update ~/.config/vcpe/config.env
+   profile list         list available deployment profiles
+   profile show [name]  print a deployment profile
+   profile use NAME     select the active deployment profile
+   profile create NAME [base] copy a profile from an existing base
+   profile set NAME KEY VALUE  update a deployment profile key
 EOF
 }
 

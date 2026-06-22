@@ -284,10 +284,9 @@ def render_customer(repo_root: Path, customer_id: str, runtime_root: Path) -> No
     print(f"rendered customer {customer_id} into {customer_root}")
 
 
-def emit_compose_env(repo_root: Path, customer_id: str, image_name: str) -> None:
+def emit_compose_env(repo_root: Path, customer_id: str, image_name: str, runtime_root: Path) -> None:
     customer = load_customer(repo_root, customer_id)
     attachments = attachments_by_network(customer)
-    runtime_root = (repo_root / "runtime").resolve()
     print(f"CUSTOMER_ID={customer_id}")
     print(f"IMAGE_NAME={image_name}")
     print(f"RUNTIME_ROOT={runtime_root}")
@@ -313,12 +312,13 @@ def main(argv: list[str]) -> int:
         return 0
 
     if command == "compose-env":
-        if len(argv) != 5:
-            die("usage: customer_config.py compose-env <repo_root> <customer_id> <image_name>")
+        if len(argv) != 6:
+            die("usage: customer_config.py compose-env <repo_root> <customer_id> <image_name> <runtime_root>")
         repo_root = Path(argv[2]).resolve()
         customer_id = argv[3]
         image_name = argv[4]
-        emit_compose_env(repo_root, customer_id, image_name)
+        runtime_root = Path(argv[5]).resolve()
+        emit_compose_env(repo_root, customer_id, image_name, runtime_root)
         return 0
 
     die(f"unsupported command: {command}")

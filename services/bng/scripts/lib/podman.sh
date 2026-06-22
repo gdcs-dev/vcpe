@@ -19,8 +19,7 @@ compose_project_name() {
 compose_env_file() {
     local customer_id=$1
     local env_file="$RUNTIME_ROOT/$customer_id/compose.env"
-    python3 "$PODMAN_LIB_DIR/customer_config.py" compose-env "$BNG_ROOT" "$customer_id" "$IMAGE_NAME" >"$env_file"
-    printf 'RUNTIME_ROOT=%s\n' "$RUNTIME_ROOT" >>"$env_file"
+    python3 "$PODMAN_LIB_DIR/customer_config.py" compose-env "$BNG_ROOT" "$customer_id" "$IMAGE_NAME" "$RUNTIME_ROOT" >"$env_file"
     printf '%s\n' "$env_file"
 }
 
