@@ -17,7 +17,6 @@ COMMON_LIB_DIR="$PLATFORM_ROOT/scripts/lib"
 SERVICES_ROOT="$REPO_ROOT/services"
 BNG_ROOT="$SERVICES_ROOT/bng"
 MV1_ROOT="$SERVICES_ROOT/mv1"
-MV1_RUNTIME_ROOT="$MV1_ROOT/runtime"
 WEBPA_ROOT="$SERVICES_ROOT/webpa"
 XB10_ROOT="$SERVICES_ROOT/xb10"
 CONFIG_ROOT=${VCPE_CONFIG_ROOT:-${XDG_CONFIG_HOME:-$HOME/.config}/vcpe}
@@ -26,11 +25,8 @@ IMAGE_NAME=${IMAGE_NAME:-ghcr.io/gdcs-dev/bng:dev}
 PODMAN_COMPOSE_BIN=${PODMAN_COMPOSE_BIN:-podman-compose}
 HOST_OS=$(uname -s)
 
-if [[ "$HOST_OS" == "Darwin" && "$REPO_ROOT" == /opt/homebrew/Cellar/* ]]; then
-    RUNTIME_ROOT="$STATE_ROOT/services/bng/runtime"
-else
-    RUNTIME_ROOT="$BNG_ROOT/runtime"
-fi
+RUNTIME_ROOT=${VCPE_RUNTIME_ROOT:-$STATE_ROOT/services/bng/runtime}
+MV1_RUNTIME_ROOT=${VCPE_MV1_RUNTIME_ROOT:-$STATE_ROOT/services/mv1/runtime}
 
 ensure_dir() {
     mkdir -p "$1"

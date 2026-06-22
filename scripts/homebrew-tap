@@ -12,7 +12,7 @@ TAP_NAME_DEFAULT=${VCPE_HOMEBREW_TAP:-gdcs-dev/vcpe}
 FORMULA_NAME=vcpe
 REPO_URL_DEFAULT=${VCPE_HOMEBREW_REPO_URL:-https://github.com/gdcs-dev/vcpe}
 CHANNEL_DEFAULT=${VCPE_HOMEBREW_CHANNEL:-main}
-MAIN_SHA256_DEFAULT=${VCPE_HOMEBREW_MAIN_SHA256:-55afcf077ddaecca608b745ddea81ebd6335c66d936bdbd2ada2b5ad5ce3f65a}
+MAIN_SHA256_DEFAULT=${VCPE_HOMEBREW_MAIN_SHA256:-:no_check}
 
 usage() {
     cat <<'EOF'
@@ -87,7 +87,9 @@ render_formula() {
         main)
             version_value='"main"'
             url_value=${VCPE_HOMEBREW_URL:-${repo_url}/archive/refs/heads/main.tar.gz}
-          sha_value="$MAIN_SHA256_DEFAULT"
+            sha_value="$MAIN_SHA256_DEFAULT"
+            # quote hex digests; leave Ruby symbols (e.g. :no_check) unquoted
+            [[ "$sha_value" != :* ]] && sha_value=$(printf '"\%s"' "$sha_value")
             ;;
         release)
             version_value=${VCPE_HOMEBREW_VERSION:-}
@@ -109,7 +111,7 @@ class Vcpe < Formula
   homepage "$repo_url"
   url "$url_value"
   version $version_value
-  sha256 "$sha_value"
+  sha256 $sha_value
   license "MIT"
 $head_line
 
