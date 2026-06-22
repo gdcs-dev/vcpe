@@ -12,7 +12,6 @@ TAP_NAME_DEFAULT=${VCPE_HOMEBREW_TAP:-gdcs-dev/vcpe}
 FORMULA_NAME=vcpe
 REPO_URL_DEFAULT=${VCPE_HOMEBREW_REPO_URL:-https://github.com/gdcs-dev/vcpe}
 CHANNEL_DEFAULT=${VCPE_HOMEBREW_CHANNEL:-main}
-MAIN_SHA256_DEFAULT=${VCPE_HOMEBREW_MAIN_SHA256:-5a661f73a01515a28f29c2aafa2a454ffeaed5c262f325069c0d12f68ae24fa3}
 
 usage() {
     cat <<'EOF'
@@ -27,7 +26,7 @@ Commands:
 Environment:
   VCPE_HOMEBREW_TAP_DIR    override the tap directory for testing
   VCPE_HOMEBREW_CHANNEL    main or release (default: main)
-  VCPE_HOMEBREW_MAIN_SHA256  checksum for the main branch archive
+  VCPE_HOMEBREW_MAIN_SHA256  override checksum for the main branch archive (computed from live tarball if unset)
   VCPE_HOMEBREW_VERSION    required for release channel
   VCPE_HOMEBREW_SHA256     required for release channel
   VCPE_HOMEBREW_URL        optional source URL override
@@ -87,7 +86,15 @@ render_formula() {
         main)
             version_value='"main"'
             url_value=${VCPE_HOMEBREW_URL:-${repo_url}/archive/refs/heads/main.tar.gz}
-            sha_value="$MAIN_SHA256_DEFAULT"
+            if [[ -n "${VCPE_HOMEBREW_MAIN_SHA256:-}" ]]; then
+                sha_value="$VCPE_HOMEBREW_MAIN_SHA256"
+            else
+                local tmp_archive
+                tmp_archive=$(mktemp /tmp/vcpe-sha-XXXXXX.tar.gz)
+                curl -fsSL "$url_value" -o "$tmp_archive" || die "failed to download $url_value"
+                sha_value=$(shasum -a 256 "$tmp_archive" | awk '{print $1}')
+                rm -f "$tmp_archive"
+            fi
             ;;
         release)
             version_value=${VCPE_HOMEBREW_VERSION:-}
