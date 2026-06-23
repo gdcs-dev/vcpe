@@ -3,7 +3,7 @@ services:
     build:
       context: .
       dockerfile: Containerfile
-    image: ${IMAGE_NAME:-ghcr.io/gdcs-dev/xb10:dev}
+    image: ${XB10_IMAGE_NAME:-ghcr.io/gdcs-dev/xb10:dev}
     container_name: xb10-${CUSTOMER_ID}
     hostname: xb10-${CUSTOMER_ID}
     privileged: true

@@ -1,6 +1,6 @@
 services:
   routerd:
-    image: ${IMAGE_NAME:-ghcr.io/gdcs-dev/routerd:dev}
+    image: ${ROUTERD_IMAGE_NAME:-ghcr.io/gdcs-dev/routerd:dev}
     container_name: routerd-${CUSTOMER_ID}
     hostname: routerd-${CUSTOMER_ID}
     privileged: true

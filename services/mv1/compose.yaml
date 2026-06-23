@@ -1,6 +1,6 @@
 services:
   mv1:
-    image: ${IMAGE_NAME:-ghcr.io/gdcs-dev/mv1:dev}
+    image: ${MV1_IMAGE_NAME:-ghcr.io/gdcs-dev/mv1:dev}
     container_name: mv1-r21-${CUSTOMER_ID}
     hostname: mv1-r21-${CUSTOMER_ID}
     privileged: true
