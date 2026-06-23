@@ -62,9 +62,10 @@ To sync a checked-out `homebrew-vcpe` repository next to this repo:
 ## Scope
 
 - Included: host bridge setup, Podman image build, customer render, BNG startup,
-  smoke verification, first-pass `mv1-r21-{7,9,20}` direct BNG peers, and
-  `xb10-{7,9,20}` gateway simulator peers built from a local wrapper image.
-- Excluded: full MV feature parity, client containers, scene orchestration,
+    smoke verification, first-pass `mv1-r21-{7,9,20}` direct BNG peers,
+    `xb10-{7,9,20}` gateway simulator peers built from a local wrapper image,
+    and Alpine test clients on current LAN access ports.
+- Excluded: full MV feature parity, scene orchestration,
   graphing, and full topology migration.
 
 ## Prerequisites
@@ -95,6 +96,7 @@ The lower-level per-service commands remain available:
 ./scripts/mv1 up 7
 ./scripts/xb10 build
 ./scripts/xb10 up 7
+./scripts/client up mv1-r21-7-p1
 ./scripts/bng status 7
 ```
 

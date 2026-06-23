@@ -19,7 +19,7 @@ Commands:
    up                   start the configured deployment profile
    down                 stop the configured deployment profile
    status               show status for the configured deployment profile
-   logs <service>       show logs for bng, mv1, webpa, or xb10
+   logs <service>       show logs for bng, client, mv1, routerd, webpa, or xb10
    config show          print resolved config and profile values
    config set KEY VALUE update ~/.config/vcpe/config.env
    profile list         list available deployment profiles
@@ -48,11 +48,31 @@ install_template_if_missing() {
     fi
 }
 
+merge_env_file_missing_keys() {
+    local source_file=$1
+    local target_file=$2
+    local raw_line
+    local key
+    local value
+
+    [[ -f "$source_file" && -f "$target_file" ]] || return 0
+
+    while IFS= read -r raw_line || [[ -n "$raw_line" ]]; do
+        [[ -n "$raw_line" && "$raw_line" != \#* && "$raw_line" == *=* ]] || continue
+        key=${raw_line%%=*}
+        value=${raw_line#*=}
+        if ! grep -q "^${key}=" "$target_file"; then
+            update_env_file_key "$target_file" "$key" "$value"
+        fi
+    done < "$source_file"
+}
+
 update_env_file_key() {
     local env_file=$1
     local key=$2
     local value=$3
     local temp_file
+    local last_char
 
     temp_file=$(mktemp)
 
@@ -60,6 +80,12 @@ update_env_file_key() {
         awk -F= -v key="$key" -v value="$value" 'BEGIN { updated = 0 } $1 == key { print key "=" value; updated = 1; next } { print } END { if (!updated) print key "=" value }' "$env_file" >"$temp_file"
     else
         cat "$env_file" >"$temp_file"
+        if [[ -s "$env_file" ]]; then
+            last_char=$(tail -c 1 "$env_file" || true)
+            if [[ -n "$last_char" ]]; then
+                printf '\n' >>"$temp_file"
+            fi
+        fi
         printf '%s=%s\n' "$key" "$value" >>"$temp_file"
     fi
 
@@ -69,13 +95,18 @@ update_env_file_key() {
 ensure_user_config() {
     local template_file
     local profile_name
+    local target_file
 
     ensure_config_dirs
-    install_template_if_missing "$TEMPLATES_ROOT/defaults.env" "$(config_file_path)"
+    target_file=$(config_file_path)
+    install_template_if_missing "$TEMPLATES_ROOT/defaults.env" "$target_file"
+    merge_env_file_missing_keys "$TEMPLATES_ROOT/defaults.env" "$target_file"
 
     for template_file in "$TEMPLATES_ROOT"/profiles/*.env; do
         profile_name=$(basename "$template_file")
-        install_template_if_missing "$template_file" "$CONFIG_ROOT/profiles/$profile_name"
+        target_file="$CONFIG_ROOT/profiles/$profile_name"
+        install_template_if_missing "$template_file" "$target_file"
+        merge_env_file_missing_keys "$template_file" "$target_file"
     done
 }
 
@@ -100,12 +131,20 @@ validate_enabled_profile() {
         [[ -n "${DEPLOY_BNG_CUSTOMER_ID:-}" ]] || die "DEPLOY_BNG_CUSTOMER_ID is required when DEPLOY_BNG=1"
     fi
 
+    if [[ ${DEPLOY_CLIENT:-0} == 1 ]]; then
+        [[ -n "${DEPLOY_CLIENT_TARGET:-}" ]] || die "DEPLOY_CLIENT_TARGET is required when DEPLOY_CLIENT=1"
+    fi
+
     if [[ ${DEPLOY_MV1:-0} == 1 ]]; then
         [[ -n "${DEPLOY_MV1_CUSTOMER_ID:-}" ]] || die "DEPLOY_MV1_CUSTOMER_ID is required when DEPLOY_MV1=1"
     fi
 
     if [[ ${DEPLOY_XB10:-0} == 1 ]]; then
         [[ -n "${DEPLOY_XB10_CUSTOMER_ID:-}" ]] || die "DEPLOY_XB10_CUSTOMER_ID is required when DEPLOY_XB10=1"
+    fi
+
+    if [[ ${DEPLOY_ROUTERD:-0} == 1 ]]; then
+        [[ -n "${DEPLOY_ROUTERD_CUSTOMER_ID:-}" ]] || die "DEPLOY_ROUTERD_CUSTOMER_ID is required when DEPLOY_ROUTERD=1"
     fi
 }
 
@@ -163,6 +202,10 @@ pull_deployment_images() {
         pull_image_if_needed "$IMAGE_NAME"
     fi
 
+    if [[ ${DEPLOY_CLIENT:-0} == 1 ]]; then
+        pull_image_if_needed "$CLIENT_IMAGE"
+    fi
+
     if [[ ${DEPLOY_WEBPA:-0} == 1 ]]; then
         pull_image_if_needed "$WEBPA_IMAGE_NAME"
     fi
@@ -173,6 +216,10 @@ pull_deployment_images() {
 
     if [[ ${DEPLOY_XB10:-0} == 1 ]]; then
         pull_image_if_needed "$XB10_IMAGE_NAME"
+    fi
+
+    if [[ ${DEPLOY_ROUTERD:-0} == 1 ]]; then
+        pull_image_if_needed "$ROUTERD_IMAGE_NAME"
     fi
 }
 
@@ -197,6 +244,14 @@ deployment_up() {
     if [[ ${DEPLOY_XB10:-0} == 1 ]]; then
         run_service xb10 up "${DEPLOY_XB10_CUSTOMER_ID}"
     fi
+
+    if [[ ${DEPLOY_ROUTERD:-0} == 1 ]]; then
+        run_service routerd up "${DEPLOY_ROUTERD_CUSTOMER_ID}"
+    fi
+
+    if [[ ${DEPLOY_CLIENT:-0} == 1 ]]; then
+        run_service client up "${DEPLOY_CLIENT_TARGET}"
+    fi
 }
 
 deployment_down() {
@@ -206,6 +261,14 @@ deployment_down() {
 
     if [[ ${DEPLOY_XB10:-0} == 1 ]]; then
         run_service xb10 down "${DEPLOY_XB10_CUSTOMER_ID}"
+    fi
+
+    if [[ ${DEPLOY_ROUTERD:-0} == 1 ]]; then
+        run_service routerd down "${DEPLOY_ROUTERD_CUSTOMER_ID}"
+    fi
+
+    if [[ ${DEPLOY_CLIENT:-0} == 1 ]]; then
+        run_service client down "${DEPLOY_CLIENT_TARGET}"
     fi
 
     if [[ ${DEPLOY_MV1:-0} == 1 ]]; then
@@ -236,6 +299,11 @@ deployment_status() {
         run_service bng status "${DEPLOY_BNG_CUSTOMER_ID}"
     fi
 
+    if [[ ${DEPLOY_CLIENT:-0} == 1 ]]; then
+        print_status_section "client-${DEPLOY_CLIENT_TARGET}"
+        run_service client status "${DEPLOY_CLIENT_TARGET}"
+    fi
+
     if [[ ${DEPLOY_WEBPA:-0} == 1 ]]; then
         print_status_section "webpa"
         run_service webpa status
@@ -250,6 +318,11 @@ deployment_status() {
         print_status_section "xb10-${DEPLOY_XB10_CUSTOMER_ID}"
         run_service xb10 status "${DEPLOY_XB10_CUSTOMER_ID}"
     fi
+
+    if [[ ${DEPLOY_ROUTERD:-0} == 1 ]]; then
+        print_status_section "routerd-${DEPLOY_ROUTERD_CUSTOMER_ID}"
+        run_service routerd status "${DEPLOY_ROUTERD_CUSTOMER_ID}"
+    fi
 }
 
 deployment_logs() {
@@ -263,8 +336,14 @@ deployment_logs() {
         bng)
             run_service bng logs "${DEPLOY_BNG_CUSTOMER_ID}"
             ;;
+        client)
+            run_service client logs "${DEPLOY_CLIENT_TARGET}"
+            ;;
         mv1)
             run_service mv1 logs "${DEPLOY_MV1_CUSTOMER_ID}"
+            ;;
+        routerd)
+            run_service routerd logs "${DEPLOY_ROUTERD_CUSTOMER_ID}"
             ;;
         webpa)
             run_service webpa logs
@@ -273,7 +352,7 @@ deployment_logs() {
             run_service xb10 logs "${DEPLOY_XB10_CUSTOMER_ID}"
             ;;
         *)
-            die "usage: scripts/vcpe logs <bng|mv1|webpa|xb10>"
+            die "usage: scripts/vcpe logs <bng|client|mv1|routerd|webpa|xb10>"
             ;;
     esac
 }
@@ -297,16 +376,22 @@ VCPE_PROFILE=$profile_name
 VCPE_PULL_POLICY=${VCPE_PULL_POLICY:-missing}
 PODMAN_COMPOSE_BIN=$PODMAN_COMPOSE_BIN
 IMAGE_NAME=$IMAGE_NAME
+CLIENT_IMAGE=$CLIENT_IMAGE
 MV1_IMAGE_NAME=$MV1_IMAGE_NAME
+ROUTERD_IMAGE_NAME=$ROUTERD_IMAGE_NAME
 WEBPA_IMAGE_NAME=$WEBPA_IMAGE_NAME
 XB10_IMAGE_NAME=$XB10_IMAGE_NAME
 DEPLOY_BNG=${DEPLOY_BNG:-0}
 DEPLOY_BNG_CUSTOMER_ID=${DEPLOY_BNG_CUSTOMER_ID:-}
+DEPLOY_CLIENT=${DEPLOY_CLIENT:-0}
+DEPLOY_CLIENT_TARGET=${DEPLOY_CLIENT_TARGET:-}
 DEPLOY_WEBPA=${DEPLOY_WEBPA:-0}
 DEPLOY_MV1=${DEPLOY_MV1:-0}
 DEPLOY_MV1_CUSTOMER_ID=${DEPLOY_MV1_CUSTOMER_ID:-}
 DEPLOY_XB10=${DEPLOY_XB10:-0}
 DEPLOY_XB10_CUSTOMER_ID=${DEPLOY_XB10_CUSTOMER_ID:-}
+DEPLOY_ROUTERD=${DEPLOY_ROUTERD:-0}
+DEPLOY_ROUTERD_CUSTOMER_ID=${DEPLOY_ROUTERD_CUSTOMER_ID:-}
 EOF
 }
 

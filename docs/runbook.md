@@ -89,6 +89,19 @@ export VCPE_HOMEBREW_SHA256=<archive-sha256>
 ```bash
 ./tests/smoke/net-verify.sh
 ./tests/smoke/bng-7.sh
+./tests/smoke/client-7-p1.sh
+```
+
+## Test Client
+
+To attach an Alpine test client to a customer LAN port, target the current peer
+name plus the access port suffix:
+
+```bash
+./scripts/client up mv1-r21-7-p1
+./scripts/client status mv1-r21-7-p1
+./scripts/client shell mv1-r21-7-p1
+./scripts/client down mv1-r21-7-p1
 ```
 
 ## Stop And Cleanup
@@ -101,6 +114,5 @@ export VCPE_HOMEBREW_SHA256=<archive-sha256>
 ## Out Of Scope
 
 - MV migration
-- client migration
 - scene orchestration
 - graphing and topology tooling

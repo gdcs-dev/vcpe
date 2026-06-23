@@ -128,7 +128,7 @@ $head_line
     libexec.install Dir["*"]
 
     env = { "VCPE_INSTALL_ROOT" => libexec }
-    %w[vcpe bng mv1 webpa xb10 net homebrew-tap].each do |script_name|
+    %w[vcpe bng client mv1 routerd webpa xb10 net homebrew-tap].each do |script_name|
       (bin/script_name).write_env_script libexec/"scripts/#{script_name}", env
     end
   end

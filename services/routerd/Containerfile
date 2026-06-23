@@ -1,0 +1,33 @@
+FROM docker.io/library/rust:1-slim
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Match routerd/Dockerfile.test: thin Rust dev image with the runtime tooling
+# routerd's controllers need (netlink, ping, ps/net-tools, dnsutils, udhcpc,
+# busybox/dnsmasq for the dhcp-* controllers). Source is NOT copied; it is
+# bind-mounted at runtime so the workspace stays a single source of truth.
+RUN apt-get update \
+   && apt-get install -y --no-install-recommends \
+   iproute2 \
+   iputils-ping \
+   procps \
+   net-tools \
+   dnsutils \
+   udhcpc \
+   busybox \
+   dnsmasq \
+   ca-certificates \
+   && rm -rf /var/lib/apt/lists/*
+
+COPY container/entrypoint.sh /usr/local/bin/entrypoint.sh
+COPY container/healthcheck.sh /usr/local/bin/healthcheck.sh
+COPY container/render-config.sh /usr/local/bin/render-config.sh
+
+RUN chmod +x /usr/local/bin/entrypoint.sh \
+              /usr/local/bin/healthcheck.sh \
+              /usr/local/bin/render-config.sh \
+   && mkdir -p /var/lib/routerd /run/routerd /etc/routerd \
+   && chmod 0700 /run/routerd
+
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 CMD ["/usr/local/bin/healthcheck.sh"]
