@@ -246,6 +246,8 @@ deployment_up() {
     fi
 
     if [[ ${DEPLOY_ROUTERD:-0} == 1 ]]; then
+        run_service routerd fetch
+        run_service routerd compile
         run_service routerd up "${DEPLOY_ROUTERD_CUSTOMER_ID}"
     fi
 
