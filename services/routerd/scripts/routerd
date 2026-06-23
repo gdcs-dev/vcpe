@@ -102,7 +102,7 @@ resolve_routerd_source_root() {
         candidate=$(cd "$REPO_ROOT/../routerd" 2>/dev/null && pwd || true)
     fi
     [[ -n "$candidate" && -f "$candidate/Cargo.toml" ]] \
-        || die "set ROUTERD_SOURCE_ROOT to the routerd checkout (Cargo.toml not found)"
+        || die "routerd checkout not found; set ROUTERD_SOURCE_ROOT (e.g. 'vcpe config set ROUTERD_SOURCE_ROOT /path/to/routerd') or clone routerd next to vcpe"
     printf '%s\n' "$candidate"
 }
 
