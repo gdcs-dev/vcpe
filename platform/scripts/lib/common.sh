@@ -45,8 +45,11 @@ source_env_file() {
 
     [[ -f "$env_file" ]] || return 0
 
+    # auto-export each assignment so child processes (e.g. service scripts) inherit it
+    set -a
     # shellcheck source=/dev/null
     source "$env_file"
+    set +a
 }
 
 log() {
