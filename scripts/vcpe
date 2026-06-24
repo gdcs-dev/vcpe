@@ -16,6 +16,7 @@ Usage: scripts/vcpe <init|up|down|status|logs|config|profile> [args]
 
 Commands:
    init                 create user config under ~/.config/vcpe
+   build                build container images for the active profile's services
    up                   start the configured deployment profile
    down                 stop the configured deployment profile
    status               show status for the configured deployment profile
@@ -124,6 +125,11 @@ load_profile_config() {
     profile_file=$(profile_file_path "$profile_name")
     [[ -f "$profile_file" ]] || die "missing deployment profile: $profile_file"
     source_env_file "$profile_file"
+
+    # PODMAN_COMPOSE_BIN is an internal command path, not a podman-compose runtime setting.
+    if [[ -n "${PODMAN_COMPOSE_BIN:-}" ]]; then
+        export -n PODMAN_COMPOSE_BIN
+    fi
 }
 
 validate_enabled_profile() {
@@ -220,6 +226,31 @@ pull_deployment_images() {
 
     if [[ ${DEPLOY_ROUTERD:-0} == 1 ]]; then
         pull_image_if_needed "$ROUTERD_IMAGE_NAME"
+    fi
+}
+
+deployment_build() {
+    load_profile_config
+    validate_enabled_profile
+
+    if [[ ${DEPLOY_BNG:-1} == 1 ]]; then
+        run_service bng build
+    fi
+
+    if [[ ${DEPLOY_WEBPA:-0} == 1 ]]; then
+        run_service webpa build
+    fi
+
+    if [[ ${DEPLOY_MV1:-0} == 1 ]]; then
+        run_service mv1 build
+    fi
+
+    if [[ ${DEPLOY_XB10:-0} == 1 ]]; then
+        run_service xb10 build
+    fi
+
+    if [[ ${DEPLOY_ROUTERD:-0} == 1 ]]; then
+        run_service routerd build
     fi
 }
 
@@ -475,6 +506,9 @@ case "$cmd" in
     init)
         ensure_user_config
         config_show
+        ;;
+    build)
+        deployment_build
         ;;
     up)
         deployment_up
