@@ -128,24 +128,6 @@ var commandHelp = map[string]CommandHelp{
 			"vcpe logs --name bng-7 --json",
 		},
 	},
-	"service": {
-		Synopsis:      "Manage individual services within a deployment",
-		Description:   "Targets a specific service type (bng, gateway, webpa, routerd, xb10, client) with a subcommand (status, logs, up, down, build). For down, --name and --force are required.",
-		Positionals:   []string{"<service>", "<subcommand>"},
-		RequiredFlags: []FlagHelp{},
-		OptionalFlags: []FlagHelp{
-			{Name: "--name", Arg: "<deployment>", Description: "Required for service down: selects the deployment"},
-			{Name: "--force", Description: "Required for service down: confirms teardown"},
-			{Name: "--manifest", Arg: "<path>", Description: "Required for service up and build"},
-			{Name: "--state-root", Arg: "<path>", Description: "Override the default state root directory"},
-			{Name: "--json", Description: "Emit structured JSON output"},
-		},
-		Examples: []string{
-			"vcpe service bng status",
-			"vcpe service bng logs --name bng-7",
-			"vcpe service bng down --name bng-7 --force",
-		},
-	},
 	"config": {
 		Synopsis:      "Show effective configuration",
 		Description:   "Displays the resolved configuration values that vcpe will use, including the effective state root, socket path, and any environment overrides.",
@@ -170,6 +152,19 @@ var commandHelp = map[string]CommandHelp{
 			"vcpe state reset",
 		},
 	},
+	"list": {
+		Synopsis:      "List known deployments",
+		Description:   "Prints the name of every deployment that has ever been applied, drawn from persisted IPAM leases and desired-state snapshots.",
+		RequiredFlags: []FlagHelp{},
+		OptionalFlags: []FlagHelp{
+			{Name: "--state-root", Arg: "<path>", Description: "Override the default state root directory"},
+			{Name: "--json", Description: `Emit {"deployments":[...]} JSON`},
+		},
+		Examples: []string{
+			"vcpe list",
+			"vcpe list --json",
+		},
+	},
 }
 
 // GlobalHelp returns the top-level help string listing all public commands.
@@ -180,7 +175,7 @@ func GlobalHelp() string {
 
 	// Fixed column width for aligned synopsis column.
 	const synopsisCol = 10
-	order := []string{"init", "build", "up", "plan", "down", "status", "logs", "service", "config", "state"}
+	order := []string{"init", "build", "up", "plan", "down", "list", "status", "logs", "config", "state"}
 	for _, cmd := range order {
 		h := commandHelp[cmd]
 		padding := synopsisCol - len(cmd)

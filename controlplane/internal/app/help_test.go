@@ -97,11 +97,6 @@ func TestHelpForLogs(t *testing.T) {
 	checkGolden(t, "logs", got)
 }
 
-func TestHelpForService(t *testing.T) {
-	got := HelpFor("service")
-	checkGolden(t, "service", got)
-}
-
 func TestHelpForConfig(t *testing.T) {
 	got := HelpFor("config")
 	checkGolden(t, "config", got)

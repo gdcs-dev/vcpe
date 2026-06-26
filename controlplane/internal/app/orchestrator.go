@@ -205,6 +205,7 @@ func runApply(opts Options) (daemon.CommandResponse, error) {
 // changed.
 func rollback(ps *persist.Store, opID, name string) {
 	_ = ps.ReplaceCustomerLeases(name, nil)
+	_ = ps.DeleteDeploymentSnapshot(name)
 	_ = ps.RecordPhase(opID, "rollback", "succeeded", "reverted allocation")
 }
 

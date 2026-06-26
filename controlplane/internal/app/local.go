@@ -38,12 +38,12 @@ func executeLocal(opts Options) (daemon.CommandResponse, error) {
 		return runPlan(opts)
 	case "down", "destroy":
 		return runDown(opts)
+	case "list":
+		return runList(opts)
 	case "status":
 		return runStatus(opts)
 	case "logs":
 		return runLogs(opts)
-	case "service":
-		return runService(opts)
 	case "config":
 		return runConfig(opts)
 	case "state":
@@ -153,59 +153,6 @@ func runLogs(opts Options) (daemon.CommandResponse, error) {
 		return daemon.CommandResponse{Message: "logs unavailable without --name; showing recent operations only"}, nil
 	}
 	return daemon.CommandResponse{Message: fmt.Sprintf("logs deployment=%s", opts.Name)}, nil
-}
-
-// runService routes a `service <name> <subcommand>` invocation. status routes
-// through the canonical status path with a service marker; logs reports a
-// per-service marker. With --json the service name is embedded in the JSON
-// payload so consumers can parse a single document.
-func runService(opts Options) (daemon.CommandResponse, error) {
-	service := opts.CommandArgs[0]
-	sub := opts.CommandArgs[1]
-
-	switch sub {
-	case "status":
-		statusResp, err := runStatus(opts)
-		if err != nil {
-			return daemon.CommandResponse{}, err
-		}
-		if opts.OutputJSON {
-			return daemon.CommandResponse{Message: injectServiceField(statusResp.Message, service)}, nil
-		}
-		statusResp.Message = fmt.Sprintf("service=%s\n%s", service, statusResp.Message)
-		return statusResp, nil
-	case "logs":
-		logsResp, err := runLogs(opts)
-		if err != nil {
-			return daemon.CommandResponse{}, err
-		}
-		if opts.OutputJSON {
-			return daemon.CommandResponse{Message: injectServiceField(logsResp.Message, service)}, nil
-		}
-		target := opts.Name
-		if target == "" {
-			return daemon.CommandResponse{Message: fmt.Sprintf("logs service=%s (no --name; showing recent operations only)", service)}, nil
-		}
-		return daemon.CommandResponse{Message: fmt.Sprintf("logs deployment=%s service=%s", target, service)}, nil
-	default:
-		return daemon.CommandResponse{Message: fmt.Sprintf("service=%s subcommand=%s acknowledged", service, sub)}, nil
-	}
-}
-
-// injectServiceField adds a top-level "service" field to a JSON object string.
-// It re-marshals to keep the document valid; on any parse failure it falls back
-// to the original message.
-func injectServiceField(jsonText, service string) string {
-	var obj map[string]any
-	if err := json.Unmarshal([]byte(jsonText), &obj); err != nil {
-		return jsonText
-	}
-	obj["service"] = service
-	out, err := json.MarshalIndent(obj, "", "  ")
-	if err != nil {
-		return jsonText
-	}
-	return string(out)
 }
 
 // runConfig exposes the control-plane file configuration. It is intentionally

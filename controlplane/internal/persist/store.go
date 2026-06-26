@@ -363,6 +363,38 @@ func (s *Store) Metrics() (MetricsSnapshot, error) {
 	return metrics, nil
 }
 
+// ListKnownDeployments returns the deployment names (metadata.name) that
+// currently have active IPAM leases. A deployment disappears from this list
+// once vcpe down releases its leases.
+func (s *Store) ListKnownDeployments() ([]string, error) {
+	rows, err := s.db.Query(`
+		SELECT DISTINCT customer_id FROM ipam_leases ORDER BY customer_id ASC
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("list known deployments: %w", err)
+	}
+	defer rows.Close()
+	var names []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, fmt.Errorf("scan deployment name: %w", err)
+		}
+		names = append(names, name)
+	}
+	return names, rows.Err()
+}
+
+// DeleteDeploymentSnapshot removes all desired-state snapshots for the named
+// deployment. Called by vcpe down so torn-down deployments do not reappear in
+// history queries.
+func (s *Store) DeleteDeploymentSnapshot(customerID string) error {
+	if _, err := s.db.Exec(`DELETE FROM desired_snapshots WHERE customer_id = ?`, customerID); err != nil {
+		return fmt.Errorf("delete deployment snapshot %s: %w", customerID, err)
+	}
+	return nil
+}
+
 func (s *Store) CountKnownCustomers() (int, error) {
 	var count int
 	err := s.db.QueryRow(`

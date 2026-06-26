@@ -6,9 +6,9 @@ Commands:
   up        Bring up a deployment from a manifest
   plan      Show planned changes without applying
   down      Tear down a named deployment
+  list      List known deployments
   status    Show control-plane status
   logs      Show operation timeline and deployment logs
-  service   Manage individual services within a deployment
   config    Show effective configuration
   state     Manage persisted control-plane state
 

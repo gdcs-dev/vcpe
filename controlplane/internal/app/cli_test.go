@@ -89,34 +89,9 @@ func TestUpRequiresManifest(t *testing.T) {
 	}
 }
 
-func TestServiceGrammar(t *testing.T) {
-	opts, err := parseArgs("vcpe", []string{"service", "bng", "status"})
-	if err != nil {
-		t.Fatalf("service bng status: %v", err)
-	}
-	if opts.Command != "service" || opts.CommandArgs[0] != "bng" || opts.CommandArgs[1] != "status" {
-		t.Fatalf("unexpected service parse: %+v", opts)
-	}
-
-	_, err = parseArgs("vcpe", []string{"service", "unknown", "status"})
-	if err == nil || !strings.Contains(err.Error(), "unsupported service") {
-		t.Fatalf("expected unsupported service error, got %v", err)
-	}
-
-	_, err = parseArgs("vcpe", []string{"service", "bng", "down"})
-	if err == nil || !strings.Contains(err.Error(), "requires --name") {
-		t.Fatalf("expected service down to require --name, got %v", err)
-	}
-
-	_, err = parseArgs("vcpe", []string{"service", "bng", "down", "--name", "edge"})
-	if err == nil || !strings.Contains(err.Error(), "requires --force") {
-		t.Fatalf("expected service down to require --force, got %v", err)
-	}
-}
-
 func TestRetiredWrapperHints(t *testing.T) {
 	_, err := parseArgs("vcpe", []string{"bng", "status"})
-	if err == nil || !strings.Contains(err.Error(), "vcpe service bng") {
+	if err == nil || !strings.Contains(err.Error(), "vcpe up --manifest") {
 		t.Fatalf("expected bng wrapper hint, got %v", err)
 	}
 

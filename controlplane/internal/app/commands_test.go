@@ -51,48 +51,6 @@ func TestLogsOutputModes(t *testing.T) {
 	}
 }
 
-func TestServiceStatusRoutesThroughCanonicalStatus(t *testing.T) {
-	stateRoot := t.TempDir()
-	resp, err := executeLocal(Options{Command: "service", CommandArgs: []string{"bng", "status"}, StateRoot: stateRoot})
-	if err != nil {
-		t.Fatalf("service status: %v", err)
-	}
-	if !strings.Contains(resp.Message, "service=bng") || !strings.Contains(resp.Message, "vCPE status") {
-		t.Fatalf("expected service marker + canonical status, got %q", resp.Message)
-	}
-}
-
-func TestServiceLogsWithName(t *testing.T) {
-	stateRoot := t.TempDir()
-	resp, err := executeLocal(Options{Command: "service", CommandArgs: []string{"bng", "logs"}, Name: "edge", StateRoot: stateRoot})
-	if err != nil {
-		t.Fatalf("service logs: %v", err)
-	}
-	if !strings.Contains(resp.Message, "deployment=edge") || !strings.Contains(resp.Message, "service=bng") {
-		t.Fatalf("expected deployment+service markers, got %q", resp.Message)
-	}
-}
-
-func TestServiceJSONEmbedsServiceField(t *testing.T) {
-	stateRoot := t.TempDir()
-
-	statusResp, err := executeLocal(Options{Command: "service", CommandArgs: []string{"bng", "status"}, OutputJSON: true, StateRoot: stateRoot})
-	if err != nil {
-		t.Fatalf("service status json: %v", err)
-	}
-	if !strings.HasPrefix(strings.TrimSpace(statusResp.Message), "{") || !strings.Contains(statusResp.Message, "\"service\": \"bng\"") {
-		t.Fatalf("expected valid json with service field, got %q", statusResp.Message)
-	}
-
-	logsResp, err := executeLocal(Options{Command: "service", CommandArgs: []string{"bng", "logs"}, OutputJSON: true, StateRoot: stateRoot})
-	if err != nil {
-		t.Fatalf("service logs json: %v", err)
-	}
-	if !strings.Contains(logsResp.Message, "\"service\": \"bng\"") || !strings.Contains(logsResp.Message, "\"timeline\"") {
-		t.Fatalf("expected json with service + timeline, got %q", logsResp.Message)
-	}
-}
-
 func TestConfigShow(t *testing.T) {
 	stateRoot := t.TempDir()
 	resp, err := executeLocal(Options{Command: "config", CommandArgs: []string{"show"}, StateRoot: stateRoot})

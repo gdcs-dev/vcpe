@@ -11,7 +11,6 @@ package app
 import (
 	"flag"
 	"fmt"
-	"sort"
 	"strings"
 )
 
@@ -36,17 +35,6 @@ type Options struct {
 	OutputJSON      bool
 }
 
-// supportedServices is the set of service names the `service` command accepts as
-// a target. It mirrors the registered service types plus the curated workloads.
-var supportedServices = map[string]struct{}{
-	"bng":     {},
-	"gateway":     {},
-	"webpa":   {},
-	"routerd": {},
-	"xb10":    {},
-	"client":  {},
-}
-
 // topLevelCommands are the public operator commands.
 var topLevelCommands = map[string]struct{}{
 	"init":    {},
@@ -56,9 +44,9 @@ var topLevelCommands = map[string]struct{}{
 	"down":    {},
 	"destroy": {},
 	"plan":    {},
+	"list":    {},
 	"status":  {},
 	"logs":    {},
-	"service": {},
 	"config":  {},
 	"state":   {},
 }
@@ -67,12 +55,12 @@ var topLevelCommands = map[string]struct{}{
 // command that replaces it, so users running the old grammar get an actionable
 // migration hint instead of a silent failure.
 var retiredWrappers = map[string]string{
-	"bng":     "vcpe service bng <subcommand>",
-	"gateway":     "vcpe service gateway <subcommand>",
-	"webpa":   "vcpe service webpa <subcommand>",
-	"routerd": "vcpe service routerd <subcommand>",
-	"xb10":    "vcpe service xb10 <subcommand>",
-	"client":  "vcpe service client <subcommand>",
+	"bng":     "vcpe up --manifest <path>",
+	"gateway": "vcpe up --manifest <path>",
+	"webpa":   "vcpe up --manifest <path>",
+	"routerd": "vcpe up --manifest <path>",
+	"xb10":    "vcpe up --manifest <path>",
+	"client":  "vcpe up --manifest <path>",
 }
 
 // extractHelpCommand scans args for -h or --help anywhere in the argument list.
@@ -239,8 +227,6 @@ func parseArgs(_ string, args []string) (Options, error) {
 // validateCommandShape enforces per-command positional/flag grammar.
 func validateCommandShape(opts *Options) error {
 	switch opts.Command {
-	case "service":
-		return validateServiceCommand(opts)
 	case "up", "apply", "build", "plan":
 		if opts.ManifestPath == "" {
 			return fmt.Errorf("%s requires --manifest <path>; run `vcpe %s --help` for usage", opts.Command, opts.Command)
@@ -254,42 +240,6 @@ func validateCommandShape(opts *Options) error {
 		}
 	}
 	return nil
-}
-
-// validateServiceCommand parses the `service [<name>] <subcommand>` grammar.
-func validateServiceCommand(opts *Options) error {
-	args := opts.CommandArgs
-	if len(args) < 2 {
-		return fmt.Errorf("service requires a service name and a subcommand, e.g. `vcpe service bng status`")
-	}
-	service := args[0]
-	sub := args[1]
-	if _, ok := supportedServices[service]; !ok {
-		return fmt.Errorf("unsupported service %q: supported services are %s", service, supportedServiceList())
-	}
-	switch sub {
-	case "status", "logs", "up", "down", "build":
-	default:
-		return fmt.Errorf("unsupported service subcommand %q", sub)
-	}
-	if sub == "down" {
-		if opts.Name == "" {
-			return fmt.Errorf("service %s down requires --name <deployment>; run `vcpe service --help` for usage", service)
-		}
-		if !opts.Force {
-			return fmt.Errorf("service %s down requires --force; run `vcpe service --help` for usage", service)
-		}
-	}
-	return nil
-}
-
-func supportedServiceList() string {
-	names := make([]string, 0, len(supportedServices))
-	for name := range supportedServices {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	return strings.Join(names, ", ")
 }
 
 // consumeGlobalFlags reads leading global flags (--state-root/--socket/--config)
