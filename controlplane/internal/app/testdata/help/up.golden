@@ -1,0 +1,16 @@
+Usage: vcpe up --manifest <path> [flags]
+
+Reconciles networks, images, IPAM allocation, and compose lifecycle in a single journaled operation. Alias: apply
+
+Required flags:
+  --manifest <path>       Path to deployment manifest YAML
+
+Optional flags:
+  --allow-disruptive      Permit CIDR changes and scale-to-zero operations that would otherwise be blocked
+  --state-root <path>     Override the default state root directory
+  --socket <path>         Override the daemon socket path
+  --json                  Emit structured JSON output
+
+Examples:
+  vcpe up --manifest ./manifest-bng-7.yaml
+  vcpe up --manifest ./manifest.yaml --allow-disruptive

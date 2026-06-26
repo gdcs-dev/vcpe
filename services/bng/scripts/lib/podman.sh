@@ -4,6 +4,7 @@ PODMAN_LIB_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 
 build_image() {
     require_cmd podman
+    "$REPO_ROOT/scripts/stage-runtime-init-binaries" bng
     podman build -t "$IMAGE_NAME" "$BNG_ROOT"
 }
 

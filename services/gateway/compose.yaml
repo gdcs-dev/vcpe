@@ -1,0 +1,49 @@
+# Curated compose for the gateway service type. The control plane renders a
+# compose.env in this directory before `up`, populating the canonical
+# IFACE_<ROLE>_* contract plus DEPLOYMENT_NAME/SERVICE_NAME/IMAGE and the
+# gateway-specific LAN_*/EROUTER_* variables. No customer/deployment literals live
+# here.
+services:
+  gateway:
+    image: ${IMAGE}
+    container_name: ${DEPLOYMENT_NAME}-${SERVICE_NAME}
+    hostname: ${SERVICE_NAME}
+    privileged: true
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    env_file:
+      - compose.env
+    networks:
+      lan-p1:
+        mac_address: ${IFACE_LAN_P1_MAC}
+      lan-p2:
+        mac_address: ${IFACE_LAN_P2_MAC}
+      lan-p3:
+        mac_address: ${IFACE_LAN_P3_MAC}
+      lan-p4:
+        mac_address: ${IFACE_LAN_P4_MAC}
+      cm:
+        mac_address: ${IFACE_CM_MAC}
+      wan:
+        mac_address: ${IFACE_WAN_MAC}
+
+networks:
+  lan-p1:
+    external: true
+    name: ${IFACE_LAN_P1_NETWORK}
+  lan-p2:
+    external: true
+    name: ${IFACE_LAN_P2_NETWORK}
+  lan-p3:
+    external: true
+    name: ${IFACE_LAN_P3_NETWORK}
+  lan-p4:
+    external: true
+    name: ${IFACE_LAN_P4_NETWORK}
+  cm:
+    external: true
+    name: ${IFACE_CM_NETWORK}
+  wan:
+    external: true
+    name: ${IFACE_WAN_NETWORK}

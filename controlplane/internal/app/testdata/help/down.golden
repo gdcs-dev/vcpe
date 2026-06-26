@@ -1,0 +1,13 @@
+Usage: vcpe down --name <deployment> [flags]
+
+Stops compose services and releases all IPAM leases for the named deployment. Alias: destroy (destroy also requires --force).
+
+Required flags:
+  --name <deployment>     Name of the deployment to tear down (metadata.name from the manifest)
+
+Optional flags:
+  --state-root <path>     Override the default state root directory
+  --socket <path>         Override the daemon socket path
+
+Examples:
+  vcpe down --name bng-7

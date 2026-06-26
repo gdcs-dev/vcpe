@@ -5,7 +5,7 @@ MGMT_IPV4_CIDR=10.10.10.1/24
 MGMT_IPV6_CIDR=2001:dbf:0:1::1/64
 CUSTOMER_NETWORK_IDS=(7 9 20)
 
-# LAN access ports are bridged together inside each mv1 router (brlan0). They
+# LAN access ports are bridged together inside each gateway router (brlan0). They
 # must therefore be per-customer: a shared LAN bridge would tie every router's
 # internal bridge into a single layer-2 loop and cause a broadcast storm.
 LAN_PORTS=(lan-p1 lan-p2 lan-p3 lan-p4)

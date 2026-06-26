@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Render a routerd desired-state config from the gateway env vars used by
-# mv1/xb10 (BRLAN0_*, WAN0_*, EROUTER0_*). Output goes to stdout as JSON.
+# gateway/xb10 (BRLAN0_*, WAN0_*, EROUTER0_*). Output goes to stdout as JSON.
 
 erouter_iface=erouter0
 vlans_json='[]'

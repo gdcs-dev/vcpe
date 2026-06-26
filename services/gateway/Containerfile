@@ -1,0 +1,23 @@
+FROM docker.io/library/debian:bookworm-slim
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update \
+   && apt-get install -y --no-install-recommends \
+   dnsmasq \
+   iproute2 \
+   iputils-ping \
+   procps \
+   net-tools \
+   dnsutils \
+   && rm -rf /var/lib/apt/lists/*
+
+COPY container/runtime-init-gateway /usr/local/bin/runtime-init-gateway
+COPY container/entrypoint.sh /usr/local/bin/gateway-legacy-entrypoint.sh
+COPY container/healthcheck.sh /usr/local/bin/healthcheck.sh
+
+RUN chmod +x /usr/local/bin/runtime-init-gateway /usr/local/bin/gateway-legacy-entrypoint.sh /usr/local/bin/healthcheck.sh
+
+ENTRYPOINT ["/usr/local/bin/runtime-init-gateway"]
+CMD ["/usr/local/bin/gateway-legacy-entrypoint.sh"]
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 CMD ["/usr/local/bin/healthcheck.sh"]

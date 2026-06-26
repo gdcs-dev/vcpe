@@ -2,29 +2,58 @@
 
 ## Goal
 
-Recreate the current BNG lifecycle from `meta-lxd-master/gen/bng-base.sh` and
-`meta-lxd-master/gen/bng.sh` using Podman instead of LXD.
+Provide a local Podman harness for containerized broadband components driven
+entirely by a declarative desired-state manifest. The `vcpe` control plane
+reconciles a `vcpe.dev/v1` `Deployment` into Podman projects: manifest -> plan ->
+apply.
 
-## Mapping
+## Control-plane pipeline
 
-- `lxdbr1` becomes `mgmt`
-- LXD profile NIC attachments become Podman external networks on host bridges
-- `lxc file push` and `lxc exec` become render-time config generation into
-  `services/bng/runtime/<customer-id>`
-- `bng-base` becomes a Podman image built from `services/bng/Containerfile`
+`vcpe` resolves a validated manifest into a concrete plan and reconciles it
+through deterministic, journaled phases:
 
-## Phase-1 Runtime Contract
+1. **Preflight** — schema validation plus registry-aware checks (unregistered
+   type, strict per-type `config` decode, expected-role satisfaction) and
+   host-network intent preflight. No mutation happens until preflight passes.
+2. **Images** — image lifecycle per service `image.pullPolicy`
+   (`build-if-missing` | `always-pull` | `never-build`).
+3. **Allocation** — IPAM leases and per-interface address assignment.
+4. **Render** — typed renderers dispatched by service `type`.
+5. **Runtime-init** — per-service startup contracts generated from the resolved
+   plan and verified.
+6. **Lifecycle** — compose group application.
 
-- One multi-service BNG container
-- Three attached networks: `mgmt`, `wan`, `cm`
-- Customer-specific IPv4 and IPv6 config for `7`, `9`, and `20`
-- DHCPv4, DHCPv6, `radvd`, Apache, Mosquitto, and NTP available in-container
-- Host-managed bridge and NAT setup
+A failure after allocation triggers a bounded, reverse-order rollback. Operation
+phases are recorded in the state store for status and timeline inspection.
 
-## Known Risk
+## Service type registry
 
-Deterministic interface naming inside a multi-network Podman container remains a
-runtime risk area. The current implementation assigns fixed per-network MAC
-addresses in `services/bng/compose.yaml` and renames attached interfaces by
-MAC-to-role mapping at container startup, with the older order-based rename kept
-only as fallback.
+Service behavior is a compile-time registry rather than a per-deployment
+catalog. Each `services[].type` maps to a registered `ServiceType` that provides
+a config validator, a renderer, the expected host-network roles, and a default
+image policy. The registry holds no deployment-, customer-, or instance-derived
+data; "supported type" means "registered". The v1 type set is `bng`, `gateway`,
+`webpa`, and `generic-container`; new types register additively without schema
+changes.
+
+## IPAM as the sole IP authority
+
+IPAM is the only component that assigns IP addresses. Explicit interface
+addresses are validated as in-CIDR and reserved; all other addresses are
+allocated from the network's `pool`. Overlapping allocations are rejected. The
+deterministic-identity fallback assigns MACs only, keyed on
+`metadata.name/service/role[/index]`, and never invents IP addresses.
+
+## Identity and naming
+
+Network and bridge names derive from the manifest: an explicit `bridge`, or the
+`<metadata.name>-<role>` default. Derived names are capped at the 15-character
+kernel interface-name limit (IFNAMSIZ) with a deterministic hash suffix on
+overflow. The planner and the runtime-init contract use the same canonical-MAC
+and bridge-name helpers, so they never diverge.
+
+## State
+
+Persisted state is stamped `schemaVersion: vcpe.dev/v1`. A non-empty state root
+with a missing or mismatched stamp is refused with an actionable error directing
+the operator to run `vcpe state reset`; there is no automatic migration.

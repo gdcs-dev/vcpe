@@ -25,6 +25,7 @@ RUN apt-get update \
    curl \
    iproute2 \
    iputils-ping \
+   isc-dhcp-client \
    procps \
    tcpdump \
    wget \
@@ -51,15 +52,18 @@ COPY assets/caduceus.yaml /etc/caduceus/caduceus.yaml
 COPY assets/petasos.yaml  /etc/petasos/petasos.yaml
 COPY assets/themis.yaml   /etc/themis/themis.yaml
 COPY assets/consul.json   /etc/consul.d/consul.json
-COPY container/entrypoint.sh     /usr/local/bin/entrypoint.sh
+COPY container/runtime-init-webpa /usr/local/bin/runtime-init-webpa
+COPY container/entrypoint.sh     /usr/local/bin/webpa-legacy-entrypoint.sh
 COPY container/start-services.sh /usr/local/bin/start-services.sh
 COPY container/healthcheck.sh    /usr/local/bin/healthcheck.sh
 
 RUN chmod +x \
-   /usr/local/bin/entrypoint.sh \
+   /usr/local/bin/runtime-init-webpa \
+   /usr/local/bin/webpa-legacy-entrypoint.sh \
    /usr/local/bin/start-services.sh \
    /usr/local/bin/healthcheck.sh
 
-ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+ENTRYPOINT ["/usr/local/bin/runtime-init-webpa"]
+CMD ["/usr/local/bin/webpa-legacy-entrypoint.sh"]
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
    CMD ["/usr/local/bin/healthcheck.sh"]

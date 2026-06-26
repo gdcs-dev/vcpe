@@ -3,8 +3,6 @@ set -euo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 source "$SCRIPT_DIR/../../../platform/scripts/lib/common.sh"
-source "$REPO_ROOT/platform/scripts/lib/bridges.sh"
-source "$REPO_ROOT/platform/scripts/lib/firewall.sh"
 source "$SCRIPT_DIR/lib/render.sh"
 source "$SCRIPT_DIR/lib/podman.sh"
 
@@ -30,12 +28,8 @@ case "$cmd" in
         ;;
     up)
         require_customer_id "$customer_id"
-        setup_bridges
-        ensure_nat_rule
         render_customer "$customer_id"
         compose_up "$customer_id"
-        setup_bridges
-        ensure_nat_rule
         ;;
     down)
         require_customer_id "$customer_id"

@@ -1,48 +1,113 @@
 # Runbook
 
-The operator commands stay at the repo root. Their implementations now live under
-`platform/` and `services/bng/`.
+The only operator command is the Go `vcpe` binary. Script paths under
+`scripts/` are retired stubs and are not a working run path.
 
-## Orchestrated Default Deployment
-
-The highest-level workflow now goes through `vcpe`, which manages user
-config in `~/.config/vcpe/` and starts the default profile of
-`bng-7 + webpa + mv1-7`.
+When running from macOS, delegated host-network mode is auto-detected so
+bridge/NAT/firewall reconciliation executes inside the Podman machine Linux
+host. You can still set it explicitly:
 
 ```bash
-./scripts/vcpe init
-./scripts/vcpe up
-./scripts/vcpe status
+export VCPE_HOSTNET_DELEGATED=1
+```
+
+## Primary Command Path
+
+Build once:
+
+```bash
+cd controlplane
+go build -o bin/vcpe ./cmd/vcpe
+```
+
+Author a `vcpe.dev/v1` manifest (identity is `metadata.name`):
+
+```bash
+cat > ./manifest-bng-7.yaml <<'EOF'
+apiVersion: vcpe.dev/v1
+kind: Deployment
+metadata:
+  name: bng-7
+  labels:
+    customer: "7"
+spec:
+  maxReplicasPerService: 3
+  maxActiveDeployments: 10
+  networks:
+    - role: mgmt
+      ipv4: { cidr: 10.10.10.0/24, gateway: 10.10.10.1, pool: { start: 10.10.10.10, end: 10.10.10.250 } }
+    - role: wan
+      nat: true
+      firewall: true
+      ipv4: { cidr: 10.7.200.0/24, gateway: 10.7.200.1, pool: { start: 10.7.200.10, end: 10.7.200.250 } }
+    - role: cm
+      ipv4: { cidr: 10.7.201.0/24, gateway: 10.7.201.1, pool: { start: 10.7.201.10, end: 10.7.201.250 } }
+  services:
+    - name: bng
+      type: bng
+      replicas: 1
+      image: { repository: ghcr.io/gdcs-dev/bng, tag: dev, pullPolicy: build-if-missing }
+      interfaces:
+        - { role: mgmt }
+        - { role: wan, defaultRoute: true }
+        - { role: cm }
+      config:
+        access:
+          - role: wan
+            dhcp4:
+              subnet: 10.7.200.0/24
+              ranges:
+                - { start: 10.7.200.100, end: 10.7.200.200 }
+              options: { routers: 10.7.200.1 }
+              leaseSeconds: 3600
+EOF
+
+controlplane/bin/vcpe init
+controlplane/bin/vcpe up --manifest ./manifest-bng-7.yaml
+controlplane/bin/vcpe status --name bng-7
 ```
 
 Useful follow-up commands:
 
 ```bash
-./scripts/vcpe logs bng
-./scripts/vcpe logs webpa
-./scripts/vcpe config show
-./scripts/vcpe profile list
-./scripts/vcpe profile show
-./scripts/vcpe down
+controlplane/bin/vcpe logs --name bng-7
+controlplane/bin/vcpe config show
+controlplane/bin/vcpe down --name bng-7
 ```
 
-## Profile Management
+### Rollback Guidance
 
-Profiles live in `~/.config/vcpe/profiles/` and are simple env files.
-You can create and select them through the orchestrator instead of editing the
-main config manually.
+- Inspect state directly:
 
 ```bash
-./scripts/vcpe profile create bng-9 default
-./scripts/vcpe profile set bng-9 DEPLOY_BNG_CUSTOMER_ID 9
-./scripts/vcpe profile set bng-9 DEPLOY_MV1_CUSTOMER_ID 9
-./scripts/vcpe profile use bng-9
-./scripts/vcpe config show
+controlplane/bin/vcpe status --name bng-7
 ```
 
-Built-in profiles are copied into `~/.config/vcpe/profiles/` on first
-`vcpe init`. Current templates include `default`, `bng-9`, `bng-20`,
-and `xb10-7`.
+- Review operation timeline and drift summary:
+
+```bash
+controlplane/bin/vcpe status --name bng-7 --json
+```
+
+## Deployment Selection And Scaling Limits
+
+- Deployment-targeting commands (`status`, `logs`, `down`, `destroy`, `service`)
+  identify a deployment by `--name <metadata.name>`. An unknown name is reported
+  as an error.
+- The active-deployment cap is `spec.maxActiveDeployments`, counting distinct
+  active `metadata.name` values. Applying a new deployment beyond the cap fails
+  with a cap-violation error.
+- Per-service replica count is bounded by `spec.maxReplicasPerService`.
+
+## State Schema-Version Cutover
+
+Persisted state is stamped `schemaVersion: vcpe.dev/v1`. A state root written by
+an incompatible schema is refused with an actionable error. Reset and re-stamp
+the root before applying v1 manifests (there is no automatic migration):
+
+```bash
+controlplane/bin/vcpe state reset
+```
 
 ## Homebrew Tap Sync
 
@@ -75,40 +140,34 @@ export VCPE_HOMEBREW_SHA256=<archive-sha256>
 ## Build And Start
 
 ```bash
-./scripts/net setup
-./scripts/net verify
-./scripts/bng build
-./scripts/bng render 7
-./scripts/bng up 7
-./scripts/bng status 7
-./scripts/bng logs 7
+controlplane/bin/vcpe build --manifest ./manifest-bng-7.yaml
+controlplane/bin/vcpe up --manifest ./manifest-bng-7.yaml
+controlplane/bin/vcpe status --name bng-7
+controlplane/bin/vcpe logs --name bng-7
 ```
 
 ## Smoke Checks
 
 ```bash
-./tests/smoke/net-verify.sh
-./tests/smoke/bng-7.sh
-./tests/smoke/client-7-p1.sh
+./tests/smoke/vcpe-primary-status.sh
+./tests/smoke/vcpe-service-coverage.sh
+./tests/smoke/controlplane-bng-7.sh
+./tests/smoke/controlplane-bng-20.sh
 ```
 
-## Test Client
-
-To attach an Alpine test client to a customer LAN port, target the current peer
-name plus the access port suffix:
+## Release Gate
 
 ```bash
-./scripts/client up mv1-r21-7-p1
-./scripts/client status mv1-r21-7-p1
-./scripts/client shell mv1-r21-7-p1
-./scripts/client down mv1-r21-7-p1
+make release-gate
 ```
+
+This target enforces direct `vcpe` command coverage and control-plane integration
+smokes before release packaging.
 
 ## Stop And Cleanup
 
 ```bash
-./scripts/bng down 7
-./scripts/net cleanup
+controlplane/bin/vcpe down --name bng-7
 ```
 
 ## Out Of Scope

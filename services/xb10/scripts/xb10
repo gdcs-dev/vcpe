@@ -3,8 +3,6 @@ set -euo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 source "$SCRIPT_DIR/../../../platform/scripts/lib/common.sh"
-source "$REPO_ROOT/platform/scripts/lib/bridges.sh"
-source "$REPO_ROOT/platform/scripts/lib/firewall.sh"
 
 XB10_ROOT="$XB10_ROOT"
 XB10_RUNTIME_ROOT="$XB10_ROOT/runtime"
@@ -80,6 +78,7 @@ EOF
 
 build_image() {
     require_cmd podman
+    "$REPO_ROOT/scripts/stage-runtime-init-binaries" xb10
     podman build -t "$XB10_IMAGE_NAME" "$XB10_ROOT"
 }
 
@@ -124,11 +123,7 @@ case "$cmd" in
     up)
         require_xb10_customer_id "$customer_id"
         ensure_xb10_runtime_root
-        setup_bridges
-        ensure_nat_rule
         compose_up "$customer_id"
-        setup_bridges
-        ensure_nat_rule
         ;;
     down)
         require_xb10_customer_id "$customer_id"

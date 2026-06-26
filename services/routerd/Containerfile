@@ -19,15 +19,18 @@ RUN apt-get update \
    ca-certificates \
    && rm -rf /var/lib/apt/lists/*
 
-COPY container/entrypoint.sh /usr/local/bin/entrypoint.sh
+COPY container/runtime-init-routerd /usr/local/bin/runtime-init-routerd
+COPY container/entrypoint.sh /usr/local/bin/routerd-legacy-entrypoint.sh
 COPY container/healthcheck.sh /usr/local/bin/healthcheck.sh
 COPY container/render-config.sh /usr/local/bin/render-config.sh
 
-RUN chmod +x /usr/local/bin/entrypoint.sh \
+RUN chmod +x /usr/local/bin/runtime-init-routerd \
+              /usr/local/bin/routerd-legacy-entrypoint.sh \
               /usr/local/bin/healthcheck.sh \
               /usr/local/bin/render-config.sh \
    && mkdir -p /var/lib/routerd /run/routerd /etc/routerd \
    && chmod 0700 /run/routerd
 
-ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+ENTRYPOINT ["/usr/local/bin/runtime-init-routerd"]
+CMD ["/usr/local/bin/routerd-legacy-entrypoint.sh"]
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 CMD ["/usr/local/bin/healthcheck.sh"]

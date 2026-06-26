@@ -1,0 +1,13 @@
+Usage: vcpe plan --manifest <path> [flags]
+
+Validates a manifest and reports the intended deployment shape, network count, service count, and whether any changes are disruptive. Does not mutate any state.
+
+Required flags:
+  --manifest <path>       Path to deployment manifest YAML
+
+Optional flags:
+  --state-root <path>     Override the default state root directory
+  --json                  Emit structured JSON output
+
+Examples:
+  vcpe plan --manifest ./manifest-bng-7.yaml

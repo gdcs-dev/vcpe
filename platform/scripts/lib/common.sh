@@ -16,18 +16,22 @@ PLATFORM_ROOT="$REPO_ROOT/platform"
 COMMON_LIB_DIR="$PLATFORM_ROOT/scripts/lib"
 SERVICES_ROOT="$REPO_ROOT/services"
 BNG_ROOT="$SERVICES_ROOT/bng"
-MV1_ROOT="$SERVICES_ROOT/mv1"
+GATEWAY_ROOT="$SERVICES_ROOT/gateway"
 ROUTERD_ROOT="$SERVICES_ROOT/routerd"
 WEBPA_ROOT="$SERVICES_ROOT/webpa"
 XB10_ROOT="$SERVICES_ROOT/xb10"
 CONFIG_ROOT=${VCPE_CONFIG_ROOT:-${XDG_CONFIG_HOME:-$HOME/.config}/vcpe}
 STATE_ROOT=${VCPE_STATE_ROOT:-${XDG_STATE_HOME:-$HOME/.local/state}/vcpe}
+CONTROLPLANE_STATE_ROOT=${VCPE_CONTROLPLANE_STATE_ROOT:-${XDG_STATE_HOME:-$HOME/.local/state}/vcpe-controlplane}
+CONTROLPLANE_MANIFEST_ROOT=${VCPE_CONTROLPLANE_MANIFEST_ROOT:-$CONTROLPLANE_STATE_ROOT/manifests}
 IMAGE_NAME=${IMAGE_NAME:-ghcr.io/gdcs-dev/bng:dev}
 PODMAN_COMPOSE_BIN=${PODMAN_COMPOSE_BIN:-podman-compose}
+VCPE_BIN=${VCPE_BIN:-$REPO_ROOT/controlplane/bin/vcpe}
+VCPECTL_BIN=${VCPECTL_BIN:-$REPO_ROOT/controlplane/bin/vcpectl}
 HOST_OS=$(uname -s)
 
 RUNTIME_ROOT=${VCPE_RUNTIME_ROOT:-$STATE_ROOT/services/bng/runtime}
-MV1_RUNTIME_ROOT=${VCPE_MV1_RUNTIME_ROOT:-$STATE_ROOT/services/mv1/runtime}
+GATEWAY_RUNTIME_ROOT=${VCPE_GATEWAY_RUNTIME_ROOT:-$STATE_ROOT/services/gateway/runtime}
 ROUTERD_RUNTIME_ROOT=${VCPE_ROUTERD_RUNTIME_ROOT:-$STATE_ROOT/services/routerd/runtime}
 
 ensure_dir() {
@@ -38,6 +42,47 @@ ensure_config_dirs() {
     ensure_dir "$CONFIG_ROOT"
     ensure_dir "$CONFIG_ROOT/profiles"
     ensure_dir "$STATE_ROOT"
+    ensure_dir "$CONTROLPLANE_STATE_ROOT"
+    ensure_dir "$CONTROLPLANE_MANIFEST_ROOT"
+}
+
+controlplane_enabled() {
+    [[ ${VCPE_USE_CONTROLPLANE:-0} == 1 ]]
+}
+
+vcpe_cmd() {
+    if [[ -x "$VCPE_BIN" ]]; then
+        printf '%s\n' "$VCPE_BIN"
+        return 0
+    fi
+
+    if [[ -x "$VCPECTL_BIN" ]]; then
+        printf '%s\n' "$VCPECTL_BIN"
+        return 0
+    fi
+
+    if [[ -f "$REPO_ROOT/controlplane/cmd/vcpe/main.go" ]]; then
+        printf 'go run %q\n' "$REPO_ROOT/controlplane/cmd/vcpe/main.go"
+        return 0
+    fi
+
+    if [[ -f "$REPO_ROOT/controlplane/cmd/vcpectl/main.go" ]]; then
+        printf 'go run %q\n' "$REPO_ROOT/controlplane/cmd/vcpectl/main.go"
+        return 0
+    fi
+
+    die "vcpe binary not found. build it at $VCPE_BIN or set VCPE_BIN"
+}
+
+vcpectl_cmd() {
+    vcpe_cmd
+}
+
+run_vcpectl() {
+    local cmd
+    cmd=$(vcpectl_cmd)
+    # shellcheck disable=SC2086
+    $cmd --state-root "$CONTROLPLANE_STATE_ROOT" "$@"
 }
 
 source_env_file() {

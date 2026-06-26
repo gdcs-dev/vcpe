@@ -1,9 +1,0 @@
-#!/bin/bash
-set -euo pipefail
-
-SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
-INSTALL_ROOT=${VCPE_INSTALL_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}
-
-export VCPE_INSTALL_ROOT="$INSTALL_ROOT"
-
-exec "$INSTALL_ROOT/services/xb10/scripts/xb10" "$@"

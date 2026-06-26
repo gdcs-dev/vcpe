@@ -4,6 +4,7 @@ WEBPA_PODMAN_LIB_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 
 build_webpa_image() {
     require_cmd podman
+    "$REPO_ROOT/scripts/stage-runtime-init-binaries" webpa
     podman build -t "${WEBPA_IMAGE_NAME:-ghcr.io/gdcs-dev/webpa:dev}" "$WEBPA_ROOT"
 }
 

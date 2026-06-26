@@ -1,0 +1,90 @@
+#!/bin/bash
+set -euo pipefail
+
+SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
+REPO_ROOT=$(cd "$SCRIPT_DIR/.." && pwd)
+CONTROLPLANE_ROOT="$REPO_ROOT/controlplane"
+TARGET_GOOS=${TARGET_GOOS:-linux}
+
+# Auto-detect the target architecture from the Podman machine when TARGET_GOARCH
+# is not explicitly set. Falls back to the host Go arch if podman is unavailable.
+if [[ -z "${TARGET_GOARCH:-}" ]]; then
+    _machine_arch=$(podman machine ssh -- uname -m 2>/dev/null || true)
+    case "$_machine_arch" in
+        aarch64|arm64) TARGET_GOARCH=arm64 ;;
+        x86_64|amd64)  TARGET_GOARCH=amd64 ;;
+        *)
+            TARGET_GOARCH=$(go env GOARCH)
+            echo "warn: unknown machine arch '${_machine_arch}', falling back to host GOARCH=${TARGET_GOARCH}" >&2
+            ;;
+    esac
+fi
+ARTIFACT_BIN_DIR="$REPO_ROOT/.local/artifacts/runtime-init/${TARGET_GOOS}-${TARGET_GOARCH}/bin"
+
+usage() {
+    cat <<'EOF'
+Usage: scripts/stage-runtime-init-binaries [service ...]
+
+Builds runtime-init binaries from controlplane/cmd/runtime-init-* and stages them
+into:
+    - .local/artifacts/runtime-init/<goos>-<goarch>/bin
+  - services/<service>/container/runtime-init-<service> (when service image exists)
+
+By default builds linux/amd64 binaries. Override with:
+    TARGET_GOOS=<goos> TARGET_GOARCH=<goarch>
+
+If no services are provided, stages all known services.
+Known services: bng mv1 routerd webpa xb10 client
+EOF
+}
+
+known_services=(bng mv1 routerd webpa xb10 client)
+
+is_known_service() {
+    local name=$1
+    local service
+    for service in "${known_services[@]}"; do
+        if [[ "$service" == "$name" ]]; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+if [[ ${1:-} == "-h" || ${1:-} == "--help" ]]; then
+    usage
+    exit 0
+fi
+
+services=("$@")
+if [[ ${#services[@]} -eq 0 ]]; then
+    services=("${known_services[@]}")
+fi
+
+mkdir -p "$ARTIFACT_BIN_DIR"
+
+for service in "${services[@]}"; do
+    if ! is_known_service "$service"; then
+        echo "error: unknown service '$service'" >&2
+        usage >&2
+        exit 1
+    fi
+
+    bin_name="runtime-init-$service"
+    src_pkg="./cmd/$bin_name"
+    out_bin="$ARTIFACT_BIN_DIR/$bin_name"
+
+    (
+        cd "$CONTROLPLANE_ROOT"
+        CGO_ENABLED=0 GOOS="$TARGET_GOOS" GOARCH="$TARGET_GOARCH" go build -o "$out_bin" "$src_pkg"
+    )
+
+    service_container_dir="$REPO_ROOT/services/$service/container"
+    if [[ -d "$service_container_dir" ]]; then
+        cp "$out_bin" "$service_container_dir/$bin_name"
+        chmod +x "$service_container_dir/$bin_name"
+        echo "staged $bin_name -> services/$service/container/$bin_name"
+    else
+        echo "staged $bin_name -> .local/artifacts/runtime-init/${TARGET_GOOS}-${TARGET_GOARCH}/bin (no services/$service/container dir)"
+    fi
+done

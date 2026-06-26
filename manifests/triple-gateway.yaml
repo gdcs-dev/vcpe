@@ -1,0 +1,424 @@
+apiVersion: vcpe.dev/v1
+kind: Deployment
+metadata:
+  name: triple-gateway
+  labels:
+    scenario: triple-gateway
+spec:
+  maxReplicasPerService: 3
+  maxActiveDeployments: 10
+
+  # Network topology – three independent BNGs + gateways (docs/containers.drawio):
+  #
+  #   [internet / host]
+  #        |
+  #   mgmt (10.10.10.0/24)         ── BNG-7 eth0, BNG-8 eth0, BNG-9 eth0, WebPA eth0
+  #
+  # ── Customer 7 (BNG-7, no VLAN) ────────────────────────────────────────────
+  #   wan-7  (10.107.200.0/24)     ── BNG-7 eth1  (DHCP server, no VLAN)
+  #                                     gateway-7 erouter0 (DHCP client)
+  #   cm-7   (10.107.201.0/24)     ── BNG-7 eth2  (DHCP server)
+  #                                     gateway-7 wan0
+  #   lan-7-p1 (192.168.10.0/24)  ── gateway-7 brlan0, client-7 eth0
+  #   lan-7-p2 (192.168.20.0/24)  ── gateway-7 (unused port)
+  #   lan-7-p3 (192.168.30.0/24)  ── gateway-7 (unused port)
+  #   lan-7-p4 (192.168.40.0/24)  ── gateway-7 (unused port)
+  #
+  # ── Customer 8 (BNG-8, VLAN 100) ──────────────────────────────────────────
+  #   wan-8  (10.108.200.0/24)     ── BNG-8 eth1  (DHCP server, VLAN 100)
+  #                                     gateway-8 erouter0.100 (DHCP client)
+  #   cm-8   (10.108.201.0/24)     ── BNG-8 eth2  (DHCP server)
+  #                                     gateway-8 wan0
+  #   lan-8-p1 (192.168.50.0/24)  ── gateway-8 brlan0, client-8 eth0
+  #   lan-8-p2 (192.168.60.0/24)  ── gateway-8 (unused port)
+  #   lan-8-p3 (192.168.70.0/24)  ── gateway-8 (unused port)
+  #   lan-8-p4 (192.168.80.0/24)  ── gateway-8 (unused port)
+  #
+  # ── Customer 9 (BNG-9, VLAN 1081) ─────────────────────────────────────────
+  #   wan-9  (10.178.200.0/24)     ── BNG-9 eth1  (DHCP server, VLAN 1081)
+  #                                     gateway-9 erouter0.1081 (DHCP client)
+  #   cm-9   (10.178.201.0/24)     ── BNG-9 eth2  (DHCP server)
+  #                                     gateway-9 wan0
+  #   lan-9-p1 (192.168.110.0/24) ── gateway-9 brlan0, client-9 eth0
+  #   lan-9-p2 (192.168.120.0/24) ── gateway-9 (unused port)
+  #   lan-9-p3 (192.168.130.0/24) ── gateway-9 (unused port)
+  #   lan-9-p4 (192.168.140.0/24) ── gateway-9 (unused port)
+
+  networks:
+    # ── shared management ───────────────────────────────────────────────────
+    - role: mgmt
+      ipv4:
+        cidr: 10.10.10.0/24
+        gateway: 10.10.10.1
+        pool: { start: 10.10.10.10, end: 10.10.10.250 }
+
+    # ── BNG-7 / gateway-7: standard WAN/CM (no VLAN) ────────────────────────
+    - role: wan-7
+      nat: true
+      firewall: true
+      ipv4:
+        cidr: 10.107.200.0/24
+        gateway: 10.107.200.1
+        pool: { start: 10.107.200.10, end: 10.107.200.250 }
+
+    - role: cm-7
+      ipv4:
+        cidr: 10.107.201.0/24
+        gateway: 10.107.201.1
+        pool: { start: 10.107.201.10, end: 10.107.201.250 }
+
+    - role: lan-7-p1
+      ipv4:
+        cidr: 192.168.10.0/24
+        gateway: 192.168.10.1
+        pool: { start: 192.168.10.10, end: 192.168.10.250 }
+
+    - role: lan-7-p2
+      ipv4:
+        cidr: 192.168.20.0/24
+        gateway: 192.168.20.1
+        pool: { start: 192.168.20.10, end: 192.168.20.250 }
+
+    - role: lan-7-p3
+      ipv4:
+        cidr: 192.168.30.0/24
+        gateway: 192.168.30.1
+        pool: { start: 192.168.30.10, end: 192.168.30.250 }
+
+    - role: lan-7-p4
+      ipv4:
+        cidr: 192.168.40.0/24
+        gateway: 192.168.40.1
+        pool: { start: 192.168.40.10, end: 192.168.40.250 }
+
+    # ── BNG-8 / gateway-8: VLAN 100 ─────────────────────────────────────────
+    - role: wan-8
+      nat: true
+      firewall: true
+      ipv4:
+        cidr: 10.108.200.0/24
+        gateway: 10.108.200.1
+        pool: { start: 10.108.200.10, end: 10.108.200.250 }
+
+    - role: cm-8
+      ipv4:
+        cidr: 10.108.201.0/24
+        gateway: 10.108.201.1
+        pool: { start: 10.108.201.10, end: 10.108.201.250 }
+
+    - role: lan-8-p1
+      ipv4:
+        cidr: 192.168.50.0/24
+        gateway: 192.168.50.1
+        pool: { start: 192.168.50.10, end: 192.168.50.250 }
+
+    - role: lan-8-p2
+      ipv4:
+        cidr: 192.168.60.0/24
+        gateway: 192.168.60.1
+        pool: { start: 192.168.60.10, end: 192.168.60.250 }
+
+    - role: lan-8-p3
+      ipv4:
+        cidr: 192.168.70.0/24
+        gateway: 192.168.70.1
+        pool: { start: 192.168.70.10, end: 192.168.70.250 }
+
+    - role: lan-8-p4
+      ipv4:
+        cidr: 192.168.80.0/24
+        gateway: 192.168.80.1
+        pool: { start: 192.168.80.10, end: 192.168.80.250 }
+
+    # ── BNG-9 / gateway-9: VLAN 1081 ────────────────────────────────────────
+    - role: wan-9
+      nat: true
+      firewall: true
+      ipv4:
+        cidr: 10.178.200.0/24
+        gateway: 10.178.200.1
+        pool: { start: 10.178.200.10, end: 10.178.200.250 }
+
+    - role: cm-9
+      ipv4:
+        cidr: 10.178.201.0/24
+        gateway: 10.178.201.1
+        pool: { start: 10.178.201.10, end: 10.178.201.250 }
+
+    - role: lan-9-p1
+      ipv4:
+        cidr: 192.168.110.0/24
+        gateway: 192.168.110.1
+        pool: { start: 192.168.110.10, end: 192.168.110.250 }
+
+    - role: lan-9-p2
+      ipv4:
+        cidr: 192.168.120.0/24
+        gateway: 192.168.120.1
+        pool: { start: 192.168.120.10, end: 192.168.120.250 }
+
+    - role: lan-9-p3
+      ipv4:
+        cidr: 192.168.130.0/24
+        gateway: 192.168.130.1
+        pool: { start: 192.168.130.10, end: 192.168.130.250 }
+
+    - role: lan-9-p4
+      ipv4:
+        cidr: 192.168.140.0/24
+        gateway: 192.168.140.1
+        pool: { start: 192.168.140.10, end: 192.168.140.250 }
+
+  services:
+    # ── BNG-7 ────────────────────────────────────────────────────────────────
+    # Serves DHCP on wan-7 and cm-7; standard cable plant (no VLAN).
+    - name: bng-7
+      type: bng
+      replicas: 1
+      image:
+        repository: ghcr.io/gdcs-dev/bng
+        tag: dev
+        pullPolicy: build-if-missing
+        buildContext: services/bng
+      interfaces:
+        - { role: mgmt }
+        - { role: wan-7, defaultRoute: true }
+        - { role: cm-7 }
+      config:
+        access:
+          - role: wan-7
+            dhcp4:
+              subnet: 10.107.200.0/24
+              ranges:
+                - { start: 10.107.200.100, end: 10.107.200.200 }
+              options:
+                routers: 10.107.200.1
+              leaseSeconds: 3600
+          - role: cm-7
+            dhcp4:
+              subnet: 10.107.201.0/24
+              ranges:
+                - { start: 10.107.201.100, end: 10.107.201.200 }
+              options:
+                routers: 10.107.201.1
+              leaseSeconds: 3600
+
+    # ── BNG-8 ────────────────────────────────────────────────────────────────
+    # Serves DHCP on wan-8 and cm-8; gateway uses VLAN 100 on the WAN segment.
+    - name: bng-8
+      type: bng
+      replicas: 1
+      image:
+        repository: ghcr.io/gdcs-dev/bng
+        tag: dev
+        pullPolicy: build-if-missing
+        buildContext: services/bng
+      interfaces:
+        - { role: mgmt }
+        - { role: wan-8, defaultRoute: true }
+        - { role: cm-8 }
+      config:
+        access:
+          - role: wan-8
+            dhcp4:
+              subnet: 10.108.200.0/24
+              ranges:
+                - { start: 10.108.200.100, end: 10.108.200.200 }
+              options:
+                routers: 10.108.200.1
+              leaseSeconds: 3600
+          - role: cm-8
+            dhcp4:
+              subnet: 10.108.201.0/24
+              ranges:
+                - { start: 10.108.201.100, end: 10.108.201.200 }
+              options:
+                routers: 10.108.201.1
+              leaseSeconds: 3600
+
+    # ── BNG-9 ────────────────────────────────────────────────────────────────
+    # Serves DHCP on wan-9 and cm-9; gateway uses VLAN 1081 on the WAN segment.
+    - name: bng-9
+      type: bng
+      replicas: 1
+      image:
+        repository: ghcr.io/gdcs-dev/bng
+        tag: dev
+        pullPolicy: build-if-missing
+        buildContext: services/bng
+      interfaces:
+        - { role: mgmt }
+        - { role: wan-9, defaultRoute: true }
+        - { role: cm-9 }
+      config:
+        access:
+          - role: wan-9
+            dhcp4:
+              subnet: 10.178.200.0/24
+              ranges:
+                - { start: 10.178.200.100, end: 10.178.200.200 }
+              options:
+                routers: 10.178.200.1
+              leaseSeconds: 3600
+          - role: cm-9
+            dhcp4:
+              subnet: 10.178.201.0/24
+              ranges:
+                - { start: 10.178.201.100, end: 10.178.201.200 }
+              options:
+                routers: 10.178.201.1
+              leaseSeconds: 3600
+
+    # ── WebPA / WebConfig ────────────────────────────────────────────────────
+    # Single WebPA on mgmt; all three gateways use it for device management.
+    - name: webpa
+      type: webpa
+      replicas: 1
+      image:
+        repository: ghcr.io/gdcs-dev/webpa
+        tag: dev
+        pullPolicy: build-if-missing
+        buildContext: services/webpa
+      interfaces:
+        - { role: mgmt }
+      dependsOn:
+        - bng-7
+        - bng-8
+        - bng-9
+
+    # ── gateway-7 ────────────────────────────────────────────────────────────
+    # Customer 7: no VLAN, erouter0 gets IP via DHCP on wan-7.
+    - name: gateway-7
+      type: gateway
+      replicas: 1
+      image:
+        repository: ghcr.io/gdcs-dev/gateway
+        tag: dev
+        pullPolicy: build-if-missing
+        buildContext: services/gateway
+      interfaces:
+        - { role: wan-7 }
+        - { role: cm-7 }
+        - { role: lan-7-p1 }
+        - { role: lan-7-p2 }
+        - { role: lan-7-p3 }
+        - { role: lan-7-p4 }
+      config:
+        erouter:
+          wanRole: wan-7
+          cmRole: cm-7
+          lanPrefix: lan-7-p
+        lan:
+          ipv4: 192.168.10.1/24
+          dhcpStart: 192.168.10.100
+          dhcpEnd: 192.168.10.200
+      dependsOn:
+        - bng-7
+
+    # ── gateway-8 ────────────────────────────────────────────────────────────
+    # Customer 8: VLAN 100, erouter0.100 gets IP via DHCP on wan-8.
+    - name: gateway-8
+      type: gateway
+      replicas: 1
+      image:
+        repository: ghcr.io/gdcs-dev/gateway
+        tag: dev
+        pullPolicy: build-if-missing
+        buildContext: services/gateway
+      interfaces:
+        - { role: wan-8 }
+        - { role: cm-8 }
+        - { role: lan-8-p1 }
+        - { role: lan-8-p2 }
+        - { role: lan-8-p3 }
+        - { role: lan-8-p4 }
+      config:
+        erouter:
+          wanRole: wan-8
+          cmRole: cm-8
+          lanPrefix: lan-8-p
+          vlan: 100
+        lan:
+          ipv4: 192.168.50.1/24
+          dhcpStart: 192.168.50.100
+          dhcpEnd: 192.168.50.200
+      dependsOn:
+        - bng-8
+
+    # ── gateway-9 ────────────────────────────────────────────────────────────
+    # Customer 9: VLAN 1081, erouter0.1081 gets IP via DHCP on wan-9.
+    - name: gateway-9
+      type: gateway
+      replicas: 1
+      image:
+        repository: ghcr.io/gdcs-dev/gateway
+        tag: dev
+        pullPolicy: build-if-missing
+        buildContext: services/gateway
+      interfaces:
+        - { role: wan-9 }
+        - { role: cm-9 }
+        - { role: lan-9-p1 }
+        - { role: lan-9-p2 }
+        - { role: lan-9-p3 }
+        - { role: lan-9-p4 }
+      config:
+        erouter:
+          wanRole: wan-9
+          cmRole: cm-9
+          lanPrefix: lan-9-p
+          vlan: 1081
+        lan:
+          ipv4: 192.168.110.1/24
+          dhcpStart: 192.168.110.100
+          dhcpEnd: 192.168.110.200
+      dependsOn:
+        - bng-9
+
+    # ── client-7 ─────────────────────────────────────────────────────────────
+    # Alpine client behind gateway-7 on LAN port 1.
+    - name: client-7
+      type: generic-container
+      replicas: 1
+      image:
+        repository: docker.io/library/alpine
+        tag: "3.19"
+        pullPolicy: always-pull
+      interfaces:
+        - { role: lan-7-p1 }
+      config:
+        command: ["/bin/sh", "-c", "ip addr flush dev eth0 && udhcpc -f -i eth0"]
+      dependsOn:
+        - gateway-7
+
+    # ── client-8 ─────────────────────────────────────────────────────────────
+    # Alpine client behind gateway-8 on LAN port 1.
+    - name: client-8
+      type: generic-container
+      replicas: 1
+      image:
+        repository: docker.io/library/alpine
+        tag: "3.19"
+        pullPolicy: always-pull
+      interfaces:
+        - { role: lan-8-p1 }
+      config:
+        command: ["/bin/sh", "-c", "ip addr flush dev eth0 && udhcpc -f -i eth0"]
+      dependsOn:
+        - gateway-8
+
+    # ── client-9 ─────────────────────────────────────────────────────────────
+    # Alpine client behind gateway-9 on LAN port 1.
+    - name: client-9
+      type: generic-container
+      replicas: 1
+      image:
+        repository: docker.io/library/alpine
+        tag: "3.19"
+        pullPolicy: always-pull
+      interfaces:
+        - { role: lan-9-p1 }
+      config:
+        command: ["/bin/sh", "-c", "ip addr flush dev eth0 && udhcpc -f -i eth0"]
+      dependsOn:
+        - gateway-9

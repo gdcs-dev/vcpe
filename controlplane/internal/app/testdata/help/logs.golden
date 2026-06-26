@@ -1,0 +1,13 @@
+Usage: vcpe logs [flags]
+
+Surfaces the recent operation timeline. With --name, includes per-deployment log context from the container runtime.
+
+Optional flags:
+  --name <deployment>     Show logs scoped to the named deployment
+  --state-root <path>     Override the default state root directory
+  --json                  Emit structured JSON with timeline and runtimeInitDiagnostics keys
+
+Examples:
+  vcpe logs
+  vcpe logs --name bng-7
+  vcpe logs --name bng-7 --json

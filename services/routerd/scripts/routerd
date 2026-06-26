@@ -3,8 +3,6 @@ set -euo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 source "$SCRIPT_DIR/../../../platform/scripts/lib/common.sh"
-source "$REPO_ROOT/platform/scripts/lib/bridges.sh"
-source "$REPO_ROOT/platform/scripts/lib/firewall.sh"
 
 ROUTERD_IMAGE_NAME=${ROUTERD_IMAGE_NAME:-ghcr.io/gdcs-dev/routerd:dev}
 CUSTOMERS_DIR="$ROUTERD_ROOT/customers"
@@ -108,6 +106,7 @@ resolve_routerd_source_root() {
 
 build_image() {
     require_cmd podman
+    "$REPO_ROOT/scripts/stage-runtime-init-binaries" routerd
     podman build -t "$ROUTERD_IMAGE_NAME" "$ROUTERD_ROOT"
 }
 
@@ -187,11 +186,7 @@ case "$cmd" in
     up)
         require_routerd_customer_id "$customer_id"
         ensure_routerd_runtime_root
-        setup_bridges
-        ensure_nat_rule
         compose_up "$customer_id"
-        setup_bridges
-        ensure_nat_rule
         ;;
     down)
         require_routerd_customer_id "$customer_id"

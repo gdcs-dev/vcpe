@@ -3,7 +3,6 @@ set -euo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 source "$SCRIPT_DIR/../../../platform/scripts/lib/common.sh"
-source "$REPO_ROOT/platform/scripts/lib/bridges.sh"
 source "$SCRIPT_DIR/lib/podman.sh"
 
 usage() {
@@ -22,9 +21,7 @@ case "$cmd" in
         push_webpa_image
         ;;
     up)
-        setup_bridges
         compose_up_webpa
-        setup_bridges
         ;;
     down)
         compose_down_webpa

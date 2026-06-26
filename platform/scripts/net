@@ -1,34 +1,10 @@
 #!/bin/bash
 set -euo pipefail
 
-SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
-source "$SCRIPT_DIR/lib/common.sh"
-source "$SCRIPT_DIR/lib/bridges.sh"
-source "$SCRIPT_DIR/lib/firewall.sh"
-
-usage() {
-    cat <<'EOF'
-Usage: platform/scripts/net <setup|verify|cleanup>
+cat >&2 <<'EOF'
+error: platform/scripts/net has been retired.
+host networking is managed by the Go control plane.
+use: vcpe up (apply) and vcpe status for verification
 EOF
-}
 
-cmd=${1:-}
-
-case "$cmd" in
-    setup)
-        setup_bridges
-        ensure_nat_rule
-        ;;
-    verify)
-        verify_bridges
-        verify_nat_rule
-        ;;
-    cleanup)
-        cleanup_nat_rule
-        cleanup_bridges
-        ;;
-    *)
-        usage
-        exit 1
-        ;;
-esac
+exit 2

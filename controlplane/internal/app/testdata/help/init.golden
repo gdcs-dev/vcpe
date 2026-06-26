@@ -1,0 +1,10 @@
+Usage: vcpe init [flags]
+
+Creates or verifies the state root directory structure and stamps the schema version. Safe to re-run on an existing state root.
+
+Optional flags:
+  --state-root <path>     Override the default state root directory
+
+Examples:
+  vcpe init
+  vcpe init --state-root /var/lib/vcpe

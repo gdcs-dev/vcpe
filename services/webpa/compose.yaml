@@ -1,17 +1,23 @@
+# Curated compose for the webpa service type. The control plane renders a
+# compose.env in this directory before `up`, populating the canonical
+# IFACE_<ROLE>_* contract plus DEPLOYMENT_NAME/SERVICE_NAME/IMAGE. WebPA takes no
+# typed config; all instance data comes from the rendered env.
 services:
   webpa:
-    image: ${WEBPA_IMAGE_NAME:-ghcr.io/gdcs-dev/webpa:dev}
-    container_name: webpa
-    hostname: webpa
+    image: ${IMAGE}
+    container_name: ${DEPLOYMENT_NAME}-${SERVICE_NAME}
+    hostname: ${SERVICE_NAME}
     privileged: true
     cap_add:
       - NET_ADMIN
       - NET_RAW
+    env_file:
+      - compose.env
     networks:
       mgmt:
-        mac_address: "02:10:00:00:00:fe"
+        mac_address: ${IFACE_MGMT_MAC}
 
 networks:
   mgmt:
     external: true
-    name: mgmt
+    name: ${IFACE_MGMT_NETWORK}

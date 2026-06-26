@@ -3,7 +3,6 @@ set -euo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 source "$SCRIPT_DIR/../../../platform/scripts/lib/common.sh"
-source "$REPO_ROOT/platform/scripts/lib/bridges.sh"
 
 CLIENT_IMAGE=${CLIENT_IMAGE:-docker.io/library/alpine:3.19}
 
@@ -149,8 +148,7 @@ run_container() {
     IFS='|' read -r client_ipv4 client_ipv6 gateway4 gateway6 <<< "$(target_client_addresses "$target")"
 
     require_cmd podman
-    setup_bridges
-    podman network exists "$client_network_name" || die "missing podman network: $client_network_name"
+    podman network exists "$client_network_name" || die "missing podman network: $client_network_name (run 'vcpe up' to reconcile host network first)"
 
     remove_container_if_exists "$name"
 
