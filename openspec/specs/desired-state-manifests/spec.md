@@ -69,3 +69,24 @@ The system SHALL allow explicit `mac`, `ipv4`, or `ipv6` values on an interface 
 #### Scenario: Multiple replicas allocate per-replica identities
 - **WHEN** a service with `replicas` greater than 1 is planned
 - **THEN** each replica receives an IPAM-allocated address and a deterministic MAC that includes the replica index
+
+---
+
+### Requirement: Manifest metadata annotations field
+The manifest `Metadata` block MAY contain an optional `annotations` map. All existing manifests without `annotations` remain valid.
+
+```yaml
+metadata:
+  name: single-gateway
+  labels: {}
+  annotations:               # optional
+    description: "Single gateway with BNG and WebPA"
+```
+
+#### Scenario: Manifest with annotations parses correctly
+- **WHEN** a manifest includes `metadata.annotations.description`
+- **THEN** it parses without error and the description is accessible
+
+#### Scenario: Manifest without annotations parses correctly
+- **WHEN** a manifest omits `metadata.annotations` entirely
+- **THEN** it parses without error; `Annotations` is nil
