@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"syscall"
 
 	"github.com/gdcs-dev/vcpe/controlplane/internal/runtimeinit"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/runtimeinit/contract"
@@ -93,12 +94,17 @@ func resolveCommand(defaultExec, args []string) ([]string, error) {
 }
 
 func runCommand(ctx context.Context, argv []string) error {
-	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	cmd.Stdin = os.Stdin
-	if err := cmd.Run(); err != nil {
+	// Resolve the executable path so syscall.Exec can find it.
+	path, err := exec.LookPath(argv[0])
+	if err != nil {
+		return fmt.Errorf("exec %s: %w", argv[0], err)
+	}
+	// Replace the current process (PID 1 in a container) with the target
+	// command. This is required for init-style processes (systemd, /sbin/init)
+	// which refuse to start unless they are PID 1.
+	if err := syscall.Exec(path, argv, os.Environ()); err != nil {
 		return fmt.Errorf("exec %s: %w", strings.Join(argv, " "), err)
 	}
+	// syscall.Exec never returns on success.
 	return nil
 }

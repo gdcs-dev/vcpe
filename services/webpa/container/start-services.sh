@@ -48,7 +48,6 @@ start_service scytale
 start_service tr1d1um
 start_service argus
 start_service caduceus
-start_service petasos
 start_service themis
 
 trap stop_services TERM INT

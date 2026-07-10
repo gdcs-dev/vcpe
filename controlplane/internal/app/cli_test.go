@@ -40,13 +40,17 @@ func TestParseNameSelector(t *testing.T) {
 	}
 }
 
-func TestDownRequiresName(t *testing.T) {
-	_, err := parseArgs("vcpe", []string{"down"})
-	if err == nil || !strings.Contains(err.Error(), "requires --name") {
-		t.Fatalf("expected down to require --name, got %v", err)
+func TestDownNameOptional(t *testing.T) {
+	// --name is now optional for down; parseArgs should accept it without --name.
+	opts, err := parseArgs("vcpe", []string{"down"})
+	if err != nil {
+		t.Fatalf("parse down without --name: %v", err)
+	}
+	if opts.Name != "" {
+		t.Fatalf("expected empty name, got %q", opts.Name)
 	}
 
-	opts, err := parseArgs("vcpe", []string{"down", "--name", "edge"})
+	opts, err = parseArgs("vcpe", []string{"down", "--name", "edge"})
 	if err != nil {
 		t.Fatalf("parse down --name: %v", err)
 	}

@@ -21,7 +21,13 @@ RUN systemctl mask \
    oem-cm-verification.service \
    rng-tools.service \
    brcm-net.service \
-   ProcessResetDetect.service
+   ProcessResetDetect.service \
+   simulator-sysevent.service \
+   erouter-rename.service \
+   ethwan-static-apply.service \
+   ethwan-static-capture.service
+
+RUN mkdir -p /data_bak /data_bak /nvram/secure/oemdata
 
 RUN ln -s /bin/ifconfig /sbin/ifconfig
 RUN touch /nvram/ETHWAN_ENABLE

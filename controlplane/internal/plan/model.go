@@ -60,6 +60,8 @@ type Service struct {
 	Replicas  int
 	Image     manifest.Image
 	DependsOn []string
+	Ports     []string
+	Volumes   []string
 	Config    yaml.Node
 	Instances []Instance
 }

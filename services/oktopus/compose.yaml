@@ -1,0 +1,45 @@
+# Curated compose for the oktopus service type.
+#
+# The control plane renders a compose.env in this directory before `up`,
+# populating the canonical IFACE_<ROLE>_* contract plus DEPLOYMENT_NAME,
+# SERVICE_NAME, IMAGE, and any config values from the manifest.
+#
+# The container bundles NATS, MongoDB, nginx, the Next.js frontend, and all
+# five USP MTPs (ws, stomp, mqtt, adapter, controller, taas) under systemd.
+# It therefore requires --privileged.
+#
+# Exposed ports (on the mgmt interface IP):
+#   80    — nginx: frontend UI + /api (controller) + /api/taas
+#   8000  — Controller REST API (direct)
+#   8001  — TaaS REST API (direct)
+#   8080  — WebSocket MTP (plain)
+#   8081  — WebSocket MTP (TLS)
+#   61613 — STOMP MTP
+#   1883  — MQTT MTP (plain)
+#   8883  — MQTT MTP (TLS)
+
+services:
+  oktopus:
+    image: ${IMAGE}
+    container_name: ${DEPLOYMENT_NAME}-${SERVICE_NAME}
+    hostname: ${SERVICE_NAME}
+    # systemd requires this; vcpe already grants it for bng/webpa.
+    privileged: true
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    env_file:
+      - compose.env
+    volumes:
+      # Persist MongoDB data across restarts.
+      - ./runtime/mongo:/var/lib/mongodb
+      # Persist NATS JetStream data.
+      - ./runtime/nats:/var/lib/nats/jetstream
+    networks:
+      mgmt:
+        mac_address: ${IFACE_MGMT_MAC}
+
+networks:
+  mgmt:
+    external: true
+    name: ${IFACE_MGMT_NETWORK}

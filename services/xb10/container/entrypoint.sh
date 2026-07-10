@@ -41,33 +41,34 @@ finalize_rename() {
 
     [ -n "$temp_name" ] || return 0
     ip link set "$temp_name" name "$target"
-    ip link set "$target" up || true
+    #ip link set "$target" up || true
 }
 
 rename_interfaces_by_mac() {
     temp_eth0=$(stage_rename "$LAN1_MAC" eth0)
-    temp_eth1=$(stage_rename "$EROUTER0_MAC" eth1)
-    temp_eth2=$(stage_rename "$LAN2_MAC" eth2)
-    temp_eth3=$(stage_rename "$LAN3_MAC" eth3)
-    temp_eth4=$(stage_rename "$LAN4_MAC" eth4)
+    temp_eth1=$(stage_rename "$LAN2_MAC" eth1)
+    temp_eth2=$(stage_rename "$LAN3_MAC" eth2)
+    temp_eth3=$(stage_rename "$LAN4_MAC" eth3)
+    temp_eth4=$(stage_rename "$EROUTER0_MAC" eth4)
     temp_eth5=$(stage_rename "$WAN0_MAC" eth5)
 
     finalize_rename "$temp_eth0" eth0
     finalize_rename "$temp_eth1" eth1
     finalize_rename "$temp_eth2" eth2
     finalize_rename "$temp_eth3" eth3
-    finalize_rename "$temp_eth4" eth4
-    finalize_rename "$temp_eth5" eth5
+    finalize_rename "$temp_eth4" cm0
+    finalize_rename "$temp_eth5" wan0
 }
 
-start_eth1_dhcp_client() {
-    ip link set eth1 up || true
-    udhcpc -q -b -i eth1 -p /tmp/udhcpc.eth1.pid -s /etc/udhcpc.script -x "hostname:$(hostname)"
+start_dhcp_client() {
+    iface=$1
+    ip link set "$iface" up || true
+    # udhcpc -q -b -i "$iface" -p "/tmp/udhcpc.${iface}.pid" -s /etc/udhcpc.script -x "hostname:$(hostname)"
     cat > /etc/resolv.conf <<EOF
 nameserver ${EROUTER0_IPV4_GATEWAY}
 EOF
 }
 
 rename_interfaces_by_mac
-start_eth1_dhcp_client
+start_dhcp_client cm0
 exec "$@"

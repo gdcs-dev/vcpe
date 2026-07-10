@@ -232,9 +232,8 @@ func validateCommandShape(opts *Options) error {
 			return fmt.Errorf("%s requires --manifest <path>; run `vcpe %s --help` for usage", opts.Command, opts.Command)
 		}
 	case "down", "destroy":
-		if opts.Name == "" {
-			return fmt.Errorf("%s requires --name <deployment>; run `vcpe %s --help` for usage", opts.Command, opts.Command)
-		}
+		// --name is optional: if omitted, runDown auto-selects the single active
+		// deployment or lists names when multiple exist.
 		if opts.Command == "destroy" && !opts.Force {
 			return fmt.Errorf("destroy requires --force to confirm teardown; run `vcpe down --help` for usage")
 		}

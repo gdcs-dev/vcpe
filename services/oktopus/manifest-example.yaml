@@ -1,0 +1,32 @@
+apiVersion: vcpe.dev/v1
+kind: Deployment
+metadata:
+  name: edge
+  labels:
+    customer: demo
+spec:
+  networks:
+    - role: mgmt
+      ipv4:
+        cidr: 192.168.100.0/24
+        gateway: 192.168.100.1
+
+  services:
+    - name: usp-controller
+      type: oktopus
+      replicas: 1
+      image:
+        repository: ghcr.io/gdcs-dev/oktopus
+        tag: dev
+        pullPolicy: build-if-missing
+        buildContext: services/oktopus
+        containerfile: services/oktopus/Containerfile
+      interfaces:
+        - role: mgmt
+      ports:
+        - "8888:80"
+      config:
+        adminEmail: admin@vcpe.local
+        adminPassword: changeme
+        natsUser: oktopususer
+        natsPassword: oktopuspw

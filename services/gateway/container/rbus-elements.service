@@ -1,0 +1,13 @@
+[Unit]
+Description=rbus elements
+After=rbus.service
+Requires=rbus.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/rbus_elements /etc/rbus-elements/elements.json
+Restart=always
+RestartSec=15
+
+[Install]
+WantedBy=multi-user.target

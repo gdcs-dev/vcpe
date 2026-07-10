@@ -262,7 +262,9 @@ func renderAll(ctx context.Context, stateRoot, opID string, dep plan.Deployment,
 		if err != nil {
 			return fmt.Errorf("render service %q: %w", svc.Name, err)
 		}
+		producedKeys := map[string]bool{}
 		for _, artifact := range result.Artifacts {
+			producedKeys[artifact.Key] = true
 			for _, base := range []string{opDir, depDir} {
 				dst := filepath.Join(base, "runtime", svc.Name, artifact.Key)
 				if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
@@ -272,6 +274,14 @@ func renderAll(ctx context.Context, stateRoot, opID string, dep plan.Deployment,
 					return fmt.Errorf("write artifact %s: %w", dst, err)
 				}
 			}
+		}
+		// Remove stale compose.yaml from the deployment state when the renderer
+		// no longer produces one (e.g. a service migrated from generic-container
+		// to a curated type). Without this, teardown picks up the old file and
+		// runs the wrong compose project.
+		if !producedKeys["compose.yaml"] {
+			stale := filepath.Join(depDir, "runtime", svc.Name, "compose.yaml")
+			_ = os.Remove(stale)
 		}
 	}
 	return nil
@@ -395,7 +405,7 @@ func teardownComposeLifecycle(ctx context.Context, stateRoot, depName string, se
 				continue
 			}
 			// Infer compose file by scanning curated services dirs.
-			for _, candidate := range []string{"bng", "gateway", "webpa", "routerd", "xb10"} {
+			for _, candidate := range []string{"bng", "event-sink", "gateway", "webpa", "routerd", "xb10"} {
 				cf := filepath.Join(repoRoot, "services", candidate, "compose.yaml")
 				if _, statErr3 := os.Stat(cf); statErr3 == nil {
 					// Match service name suffix against candidate type.

@@ -105,6 +105,37 @@ func TestDownUnknownNameFails(t *testing.T) {
 	}
 }
 
+func TestDownNoNameNoDeployments(t *testing.T) {
+	stateRoot := t.TempDir()
+	_, err := executeLocal(Options{Command: "down", StateRoot: stateRoot})
+	if err == nil || !strings.Contains(err.Error(), "no active deployments") {
+		t.Fatalf("expected no active deployments error, got %v", err)
+	}
+}
+
+func TestDownNoNameMultipleDeployments(t *testing.T) {
+	stateRoot := t.TempDir()
+	ps, err := persist.Open(stateRoot)
+	if err != nil {
+		t.Fatalf("open persist: %v", err)
+	}
+	// Seed two deployment snapshots so ListKnownDeployments returns two names.
+	for _, name := range []string{"alpha", "beta"} {
+		if err := ps.ReplaceCustomerLeases(name, []persist.IPAMLease{{CustomerID: name, Role: "wan", CIDR: "10.0.0.0/24"}}); err != nil {
+			t.Fatalf("seed %s: %v", name, err)
+		}
+	}
+	ps.Close()
+
+	_, err = executeLocal(Options{Command: "down", StateRoot: stateRoot})
+	if err == nil || !strings.Contains(err.Error(), "multiple deployments active") {
+		t.Fatalf("expected multiple deployments error, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "alpha") || !strings.Contains(err.Error(), "beta") {
+		t.Fatalf("expected both deployment names in error, got %v", err)
+	}
+}
+
 func TestPreflightRejectsUnsupportedType(t *testing.T) {
 	stateRoot := t.TempDir()
 	dir := t.TempDir()

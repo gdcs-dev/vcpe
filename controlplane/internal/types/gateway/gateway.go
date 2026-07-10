@@ -173,7 +173,7 @@ func (renderer) Render(_ context.Context, input render.Input) (render.Result, er
 	}
 	env = append(env, "BNG_DNS_SERVER="+bngDNS)
 
-	composeYAML := renderGatewayCompose(input.Service.Name, inst.Interfaces)
+	composeYAML := renderGatewayCompose(input.Service.Name, inst.Interfaces, input.Service.Volumes, input.Service.Ports)
 
 	return render.Result{
 		Renderer: "gateway-renderer",
@@ -203,7 +203,7 @@ func ipWithPrefix(ip, cidr string) string {
 // to the exact interfaces from the resolved instance. This replaces the curated
 // services/gateway/compose.yaml when the gateway connects to non-standard roles
 // (e.g. lan-7-p1 instead of lan-p1).
-func renderGatewayCompose(svcName string, ifaces []plan.Interface) string {
+func renderGatewayCompose(svcName string, ifaces []plan.Interface, extraVolumes []string, ports []string) string {
 	svcNets := map[string]any{}
 	topNets := map[string]any{}
 	for _, iface := range ifaces {
@@ -216,18 +216,23 @@ func renderGatewayCompose(svcName string, ifaces []plan.Interface) string {
 			"name":     "${IFACE_" + key + "_NETWORK}",
 		}
 	}
+	svc := map[string]any{
+		"image":          "${IMAGE}",
+		"container_name": "${DEPLOYMENT_NAME}-${SERVICE_NAME}",
+		"hostname":       "${SERVICE_NAME}",
+		"privileged":     true,
+		"cap_add":        []string{"NET_ADMIN", "NET_RAW"},
+		"env_file":       []string{"compose.env"},
+		"networks":       svcNets,
+	}
+	if len(extraVolumes) > 0 {
+		svc["volumes"] = extraVolumes
+	}
+	if len(ports) > 0 {
+		svc["ports"] = ports
+	}
 	doc := map[string]any{
-		"services": map[string]any{
-			svcName: map[string]any{
-				"image":          "${IMAGE}",
-				"container_name": "${DEPLOYMENT_NAME}-${SERVICE_NAME}",
-				"hostname":       "${SERVICE_NAME}",
-				"privileged":     true,
-				"cap_add":        []string{"NET_ADMIN", "NET_RAW"},
-				"env_file":       []string{"compose.env"},
-				"networks":       svcNets,
-			},
-		},
+		"services": map[string]any{svcName: svc},
 		"networks": topNets,
 	}
 	out, _ := yaml.Marshal(doc)

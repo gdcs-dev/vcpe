@@ -160,7 +160,7 @@ func generateCompose(input render.Input, cfg Config, lanDNS []string) (string, e
 		// the explicit volume mount overrides that, and udhcpc's mv-based
 		// update will fail silently against the read-only bind mount —
 		// leaving our nameserver in place.
-		volumes := append([]string(nil), cfg.Volumes...)
+		volumes := append(append([]string(nil), input.Service.Volumes...), cfg.Volumes...)
 		if len(lanDNS) > 0 {
 			volumes = append(volumes, "./resolv.conf:/etc/resolv.conf:ro")
 		}
@@ -170,8 +170,10 @@ func generateCompose(input render.Input, cfg Config, lanDNS []string) (string, e
 		if len(cfg.Command) > 0 {
 			svc["command"] = cfg.Command
 		}
-		if len(cfg.Ports) > 0 {
-			svc["ports"] = cfg.Ports
+		// Merge top-level manifest ports with any ports declared in config.
+		allPorts := append(append([]string(nil), input.Service.Ports...), cfg.Ports...)
+		if len(allPorts) > 0 {
+			svc["ports"] = allPorts
 		}
 		if len(cfg.Env) > 0 {
 			envMap := map[string]string{}

@@ -1,0 +1,35 @@
+diff --git a/source/xconf-client/xconfclient.c b/source/xconf-client/xconfclient.c
+index 1622d9b..59f99ff 100644
+--- a/source/xconf-client/xconfclient.c
++++ b/source/xconf-client/xconfclient.c
+@@ -51,7 +51,7 @@
+ #define RFC_RETRY_TIMEOUT 60
+ #define XCONF_RETRY_TIMEOUT 180
+ #define MAX_XCONF_RETRY_COUNT 5
+-#define IFINTERFACE      "erouter0"
++#define IFINTERFACE      "eth0"
+ #define XCONF_CONFIG_FILE  "DCMresponse.txt"
+ #define PROCESS_CONFIG_COMPLETE_FLAG "/tmp/t2DcmComplete"
+ #define HTTP_RESPONSE_FILE "/tmp/httpOutput.txt"
+@@ -1024,10 +1024,10 @@ static T2ERROR fetchRemoteReportProfileConfiguration(char **configData)
+     if (NULL != requestURL)
+     {
+         //T2Debug("%s remoteUrl::%s\n", __FUNCTION__, remoteUrl);
+-        rc = curl_url_set(requestURL, CURLUPART_URL, configURL, 0);
++        rc = curl_url_set(requestURL, CURLUPART_URL, remoteUrl, 0);
+         if(rc != CURLUE_OK)
+         {
+-            T2Error("T2: Curl unable to set config url %s\n",  configURL);
++            T2Error("T2: Curl unable to set config url %s\n", remoteUrl);
+             T2_CURL_ERRROR(rc);
+             curl_url_cleanup(requestURL);
+             return ret;
+@@ -1247,7 +1247,7 @@ T2ERROR getRemoteConfigURL(char **configURL)
+         {
+             if (NULL != paramVal)
+             {
+-                if ((strlen(paramVal) > 8) && (0 == strncmp(paramVal, "https://", 8)))   // Enforcing https for new endpoints
++                if ((strlen(paramVal) > 8) && (0 == strncmp(paramVal, "https://", 8) || 0 == strncmp(paramVal, "http://", 7)))
+                 {
+                     T2Info("Setting config URL base location to : %s\n", paramVal);
+                     *configURL = paramVal;

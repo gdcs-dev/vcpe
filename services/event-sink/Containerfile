@@ -1,0 +1,46 @@
+##############################################################################
+# Stage 1: Build
+##############################################################################
+#FROM golang:1.22-alpine AS builder
+FROM golang:latest AS builder
+
+WORKDIR /src
+COPY go.mod go.sum* ./
+RUN go mod download
+
+COPY . .
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /event-sink ./cmd/event-sink
+
+##############################################################################
+# Stage 2: Runtime
+##############################################################################
+#FROM alpine:3
+FROM debian:bookworm-slim
+
+RUN apt-get update && apt-get install -y ca-certificates \
+   bash \
+   curl \
+   iproute2 \
+   iputils-ping \
+   isc-dhcp-client \
+   procps \
+   wget \
+   net-tools \
+   dnsutils \
+   && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /event-sink /usr/local/bin/event-sink
+COPY container/entrypoint.sh /usr/local/bin/entrypoint.sh
+COPY container/runtime-init-event-sink /usr/local/bin/runtime-init-event-sink
+
+RUN chmod +x /usr/local/bin/event-sink \
+            /usr/local/bin/entrypoint.sh \
+            /usr/local/bin/runtime-init-event-sink
+
+EXPOSE 8080
+
+ENTRYPOINT ["/usr/local/bin/runtime-init-event-sink"]
+CMD ["/usr/local/bin/entrypoint.sh"]
+
+LABEL org.opencontainers.image.source=https://github.com/gdcs-dev/vcpe
+LABEL org.opencontainers.image.description="XMiDT event sink for the vCPE project"

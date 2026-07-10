@@ -154,6 +154,8 @@ func resolveService(deployment string, svc manifest.Service, netByRole map[strin
 		Replicas:  replicas,
 		Image:     svc.Image,
 		DependsOn: append([]string(nil), svc.DependsOn...),
+		Ports:     append([]string(nil), svc.Ports...),
+		Volumes:   append([]string(nil), svc.Volumes...),
 		Config:    svc.Config,
 	}
 	if replicas <= 0 {

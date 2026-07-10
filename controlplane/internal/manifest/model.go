@@ -72,6 +72,8 @@ type Service struct {
 	Image      Image       `json:"image" yaml:"image"`
 	DependsOn  []string    `json:"dependsOn,omitempty" yaml:"dependsOn,omitempty"`
 	Interfaces []Interface `json:"interfaces,omitempty" yaml:"interfaces,omitempty"`
+	Ports      []string    `json:"ports,omitempty" yaml:"ports,omitempty"`
+	Volumes    []string    `json:"volumes,omitempty" yaml:"volumes,omitempty"`
 	Config     yaml.Node   `json:"-" yaml:"config,omitempty"`
 }
 

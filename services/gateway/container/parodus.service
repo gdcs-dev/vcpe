@@ -1,0 +1,18 @@
+[Unit]
+Description=parodus
+After=network.target remote-fs.target nss-lookup.target rbus.service rbus-elements.service
+
+[Service]
+Type=simple
+PIDFile=/run/parodus.pid
+ExecStartPre=/usr/bin/rm -f /run/parodus.pid
+ExecStart=/usr/local/bin/start_parodus.sh
+ExecReload=/bin/kill -s HUP $MAINPID
+TimeoutStopSec=10
+KillMode=process
+PrivateTmp=true
+Restart=always
+RestartSec=15
+
+[Install]
+WantedBy=multi-user.target

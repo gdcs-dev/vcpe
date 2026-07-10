@@ -118,14 +118,34 @@ func runList(opts Options) (daemon.CommandResponse, error) {
 	return daemon.CommandResponse{Message: strings.Join(names, "\n")}, nil
 }
 
-// runDown tears down a deployment selected by --name. Without a known
-// deployment it reports an error identifying the unknown name.
+// runDown tears down a deployment selected by --name. If --name is omitted and
+// exactly one deployment exists it is selected automatically. If multiple
+// deployments exist the names are listed and the user is asked to re-run with
+// --name.
 func runDown(opts Options) (daemon.CommandResponse, error) {
 	ps, err := persist.Open(opts.StateRoot)
 	if err != nil {
 		return daemon.CommandResponse{}, err
 	}
 	defer ps.Close()
+
+	if opts.Name == "" {
+		names, err := ps.ListKnownDeployments()
+		if err != nil {
+			return daemon.CommandResponse{}, err
+		}
+		switch len(names) {
+		case 0:
+			return daemon.CommandResponse{}, fmt.Errorf("no active deployments")
+		case 1:
+			opts.Name = names[0]
+		default:
+			return daemon.CommandResponse{}, fmt.Errorf(
+				"multiple deployments active; specify one with --name:\n  %s",
+				strings.Join(names, "\n  "),
+			)
+		}
+	}
 
 	exists, err := ps.CustomerExists(opts.Name)
 	if err != nil {

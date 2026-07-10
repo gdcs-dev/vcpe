@@ -120,7 +120,7 @@ main() {
         echo "nameserver ${BNG_DNS_SERVER}" > /etc/resolv.conf
     fi
     start_lan_dhcp
-    exec tail -f /dev/null
+    exec /sbin/init
 }
 
 main "$@"

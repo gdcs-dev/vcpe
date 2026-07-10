@@ -4,9 +4,12 @@ package types
 
 import (
 	"github.com/gdcs-dev/vcpe/controlplane/internal/types/bng"
-	"github.com/gdcs-dev/vcpe/controlplane/internal/types/genericcontainer"
+	"github.com/gdcs-dev/vcpe/controlplane/internal/types/eventsink"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/types/gateway"
+	"github.com/gdcs-dev/vcpe/controlplane/internal/types/genericcontainer"
+	"github.com/gdcs-dev/vcpe/controlplane/internal/types/oktopus"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/types/webpa"
+	"github.com/gdcs-dev/vcpe/controlplane/internal/types/xb10"
 )
 
 var registered bool
@@ -18,8 +21,11 @@ func Register() {
 		return
 	}
 	bng.Register()
+	eventsink.Register()
 	gateway.Register()
+	oktopus.Register()
 	webpa.Register()
+	xb10.Register()
 	genericcontainer.Register()
 	registered = true
 }

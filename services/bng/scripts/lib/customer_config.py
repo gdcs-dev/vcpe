@@ -72,7 +72,6 @@ def render_dnsmasq(customer_root: Path, customer: dict) -> None:
         "tr1d1um",
         "argus",
         "caduceus",
-        "petasos",
         "themis",
     ]
 

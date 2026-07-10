@@ -34,11 +34,11 @@ By default builds linux/amd64 binaries. Override with:
     TARGET_GOOS=<goos> TARGET_GOARCH=<goarch>
 
 If no services are provided, stages all known services.
-Known services: bng mv1 routerd webpa xb10 client
+Known services: bng gateway routerd webpa xb10 client
 EOF
 }
 
-known_services=(bng mv1 routerd webpa xb10 client)
+known_services=(bng event-sink gateway routerd webpa xb10 client)
 
 is_known_service() {
     local name=$1

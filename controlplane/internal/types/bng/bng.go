@@ -117,7 +117,7 @@ func (renderer) Render(_ context.Context, input render.Input) (render.Result, er
 		env = append(env, key+"="+iface.MAC)
 	}
 
-	composeYAML := renderBNGCompose(input.Service.Name, inst.Interfaces)
+	composeYAML := renderBNGCompose(input.Service.Name, inst.Interfaces, input.Service.Volumes)
 
 	return render.Result{
 		Renderer: "bng-renderer",
@@ -341,14 +341,30 @@ func renderDnsmasqConf(ipByRole map[string]string, dep plan.Deployment) string {
 		fmt.Fprintf(&b, "dhcp-option=3,%s\n", mgmt.IPv4.Gateway)
 		fmt.Fprintf(&b, "dhcp-authoritative\n")
 	}
+
+	// Emit CNAME aliases for WebPA virtual hostnames so they follow the
+	// webpa container's live IP (resolved via aardvark-dns) without needing
+	// a planned IP baked into the static hosts file.
+	for _, svc := range dep.Services {
+		if svc.Type != "webpa" {
+			continue
+		}
+		for _, alias := range webpaVirtualHosts {
+			if alias == svc.Name {
+				continue // the container name itself resolves via aardvark
+			}
+			fmt.Fprintf(&b, "cname=%s,%s\n", alias, svc.Name)
+		}
+		break
+	}
 	return b.String()
 }
 
 // renderDnsmasqHosts emits a hosts file entry for every deployment peer that
-// has a mgmt-network interface, using the IPAM-assigned IP. For the webpa
-// service type all WebPA virtual hostnames (talaria, scytale, tr1d1um, argus,
-// caduceus, petasos, themis, consul, webpa) are registered to the same IP so
-// CPE devices can reach each microservice by its canonical name.
+// has a mgmt-network interface, using the IPAM-assigned IP. The webpa service
+// type is registered by its container name only; virtual hostnames
+// (consul, talaria, etc.) are handled as dnsmasq CNAMEs in dnsmasq.conf so
+// they track the live IP without requiring a planned-IP bake-in.
 func renderDnsmasqHosts(input render.Input) string {
 	var b strings.Builder
 	for _, svc := range input.Deployment.Services {
@@ -368,16 +384,9 @@ func renderDnsmasqHosts(input render.Input) string {
 		if mgmtIP == "" {
 			continue
 		}
-		var hostnames []string
-		if svc.Type == "webpa" {
-			// Register all WebPA virtual service hostnames to the same mgmt
-			// IP so CPE devices can reach consul, talaria, etc. by name
-			// without needing separate containers or IP allocations.
-			hostnames = webpaVirtualHosts
-		} else {
-			hostnames = []string{svc.Name}
-		}
-		fmt.Fprintf(&b, "%s %s\n", mgmtIP, strings.Join(hostnames, " "))
+		// Register only the canonical service name; webpa virtual hostnames
+		// (consul, talaria, etc.) are emitted as cname= entries in dnsmasq.conf.
+		fmt.Fprintf(&b, "%s %s\n", mgmtIP, svc.Name)
 	}
 	return b.String()
 }
@@ -408,7 +417,7 @@ func renderDnsmasqSubnetsMap(dep plan.Deployment) string {
 // every interface from the resolved instance, regardless of role name. This
 // replaces the curated services/bng/compose.yaml for deployments where the BNG
 // connects to more than the standard mgmt/wan/cm trio.
-func renderBNGCompose(svcName string, ifaces []plan.Interface) string {
+func renderBNGCompose(svcName string, ifaces []plan.Interface, extraVolumes []string) string {
 	svcNets := map[string]any{}
 	topNets := map[string]any{}
 	for _, iface := range ifaces {
@@ -431,7 +440,7 @@ func renderBNGCompose(svcName string, ifaces []plan.Interface) string {
 				"privileged":     true,
 				"cap_add":        []string{"NET_ADMIN", "NET_RAW"},
 				"env_file":       []string{"compose.env"},
-				"volumes":        []string{".:/runtime-config:ro"},
+				"volumes":        append([]string{".:/runtime-config:ro"}, extraVolumes...),
 				"networks":       svcNets,
 			},
 		},
