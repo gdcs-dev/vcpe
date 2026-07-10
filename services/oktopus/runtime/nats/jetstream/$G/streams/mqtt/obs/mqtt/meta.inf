@@ -1,1 +1,0 @@
-{"Created":"2026-06-26T19:33:50.950938551Z","Name":"mqtt","durable_name":"mqtt","name":"mqtt","description":"Consumer for mqtt messages","deliver_policy":"all","ack_policy":"explicit","ack_wait":30000000000,"max_deliver":-1,"replay_policy":"instant","max_waiting":512,"max_ack_pending":1000,"num_replicas":0}

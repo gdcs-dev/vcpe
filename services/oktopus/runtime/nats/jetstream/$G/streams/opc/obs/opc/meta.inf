@@ -1,1 +1,0 @@
-{"Created":"2026-06-26T19:33:50.978470426Z","Name":"opc","durable_name":"opc","name":"opc","description":"Consumer for opc messages","deliver_policy":"all","ack_policy":"explicit","ack_wait":30000000000,"max_deliver":-1,"replay_policy":"instant","max_waiting":512,"max_ack_pending":1000,"num_replicas":0}
