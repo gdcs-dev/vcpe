@@ -11,7 +11,10 @@ package app
 import (
 	"flag"
 	"fmt"
+	"os"
 	"strings"
+
+	"github.com/gdcs-dev/vcpe/controlplane/internal/manifest"
 )
 
 // Options is the fully parsed invocation. It is the single value threaded
@@ -37,18 +40,19 @@ type Options struct {
 
 // topLevelCommands are the public operator commands.
 var topLevelCommands = map[string]struct{}{
-	"init":    {},
-	"build":   {},
-	"up":      {},
-	"apply":   {},
-	"down":    {},
-	"destroy": {},
-	"plan":    {},
-	"list":    {},
-	"status":  {},
-	"logs":    {},
-	"config":  {},
-	"state":   {},
+	"init":     {},
+	"build":    {},
+	"up":       {},
+	"apply":    {},
+	"down":     {},
+	"destroy":  {},
+	"plan":     {},
+	"list":     {},
+	"manifest": {},
+	"status":   {},
+	"logs":     {},
+	"config":   {},
+	"state":    {},
 }
 
 // retiredWrappers maps a legacy bash-wrapper command to the canonical vcpe
@@ -115,6 +119,74 @@ func extractHelpCommand(args []string) (string, bool) {
 		break
 	}
 	return "", true
+}
+
+// isManifestCommand reports whether cmd requires a manifest to operate and
+// should participate in manifest auto-discovery when --manifest is omitted.
+func isManifestCommand(cmd string) bool {
+	switch cmd {
+	case "build", "up", "apply", "plan":
+		return true
+	}
+	return false
+}
+
+// resolveManifestPath populates opts.ManifestPath when it is empty and the
+// command is manifest-consuming. The resolution algorithm is:
+//
+//  1. If the value looks like a path (contains "/" or ends in ".yaml"):
+//     os.Stat; if found use it, otherwise return file-not-found.
+//  2. If the value is a bare name (no "/" and no ".yaml" suffix):
+//     search discovery directories for <name>.yaml.
+//  3. If the value is empty:
+//     discover all manifests; auto-select on exactly one, error otherwise.
+//
+// This function is called before validateCommandShape, so validateCommandShape
+// can continue to require a non-empty ManifestPath unchanged.
+func resolveManifestPath(opts *Options) error {
+	if !isManifestCommand(opts.Command) {
+		return nil
+	}
+
+	dirs := manifest.SearchDirs(os.Executable)
+
+	switch {
+	case opts.ManifestPath == "":
+		// Auto-discover
+		entries, err := manifest.FindAll(dirs)
+		if err != nil {
+			return fmt.Errorf("manifest discovery failed: %w", err)
+		}
+		switch len(entries) {
+		case 0:
+			return fmt.Errorf("no manifests found in search path; provide --manifest or run `vcpe manifest list`")
+		case 1:
+			opts.ManifestPath = entries[0].Path
+		default:
+			names := make([]string, len(entries))
+			for i, e := range entries {
+				names[i] = e.Name
+			}
+			return fmt.Errorf("multiple manifests found: %s; specify --manifest <name> or run `vcpe manifest list`",
+				strings.Join(names, ", "))
+		}
+
+	case strings.Contains(opts.ManifestPath, "/") || strings.HasSuffix(opts.ManifestPath, ".yaml"):
+		// Looks like a path — stat it; no fallback to name search
+		if _, err := os.Stat(opts.ManifestPath); err != nil {
+			return fmt.Errorf("manifest file not found: %s", opts.ManifestPath)
+		}
+
+	default:
+		// Bare name — search discovery dirs
+		path, err := manifest.Resolve(opts.ManifestPath, dirs)
+		if err != nil {
+			return fmt.Errorf("no manifest named %q found; run `vcpe manifest list` to see available manifests", opts.ManifestPath)
+		}
+		opts.ManifestPath = path
+	}
+
+	return nil
 }
 
 // parseArgs parses a vcpe invocation into Options. It validates flag/command
@@ -216,6 +288,12 @@ func parseArgs(_ string, args []string) (Options, error) {
 
 	if opts.NoCache && command != "build" {
 		return Options{}, fmt.Errorf("--no-cache is only supported for build")
+	}
+
+	// Resolve --manifest (auto-discovery when omitted; bare-name lookup when set)
+	// before validateCommandShape so that validation always sees a populated path.
+	if err := resolveManifestPath(&opts); err != nil {
+		return Options{}, err
 	}
 
 	if err := validateCommandShape(&opts); err != nil {

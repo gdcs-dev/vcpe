@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/gdcs-dev/vcpe/controlplane/internal/daemon"
@@ -13,6 +14,9 @@ import (
 	"github.com/gdcs-dev/vcpe/controlplane/internal/planner"
 	"gopkg.in/yaml.v3"
 )
+
+// osExecutable is a package-level variable so tests can inject a fake.
+var osExecutable = os.Executable
 
 // runBuild resolves image actions for the manifest's services without applying
 // runtime changes.
@@ -80,6 +84,74 @@ func runPlan(opts Options) (daemon.CommandResponse, error) {
 		}
 	} else {
 		b.WriteString("  disruptive: no\n")
+	}
+	return daemon.CommandResponse{Message: strings.TrimRight(b.String(), "\n")}, nil
+}
+
+// runManifest dispatches vcpe manifest <subcommand>.
+func runManifest(opts Options) (daemon.CommandResponse, error) {
+	if len(opts.CommandArgs) == 0 {
+		return daemon.CommandResponse{}, fmt.Errorf("manifest requires a subcommand; try `vcpe manifest list`")
+	}
+	switch opts.CommandArgs[0] {
+	case "list":
+		return runManifestList(opts)
+	default:
+		return daemon.CommandResponse{}, fmt.Errorf("unknown manifest subcommand %q; run `vcpe manifest --help`", opts.CommandArgs[0])
+	}
+}
+
+// runManifestList discovers and prints all available manifest files.
+func runManifestList(opts Options) (daemon.CommandResponse, error) {
+	dirs := manifest.SearchDirs(osExecutable)
+	entries, err := manifest.FindAll(dirs)
+	if err != nil {
+		return daemon.CommandResponse{}, fmt.Errorf("manifest discovery: %w", err)
+	}
+
+	if opts.OutputJSON {
+		type entry struct {
+			Name        string `json:"name"`
+			Path        string `json:"path"`
+			Description string `json:"description"`
+		}
+		out := make([]entry, len(entries))
+		for i, e := range entries {
+			out[i] = entry{Name: e.Name, Path: e.Path, Description: e.Description}
+		}
+		b, err := json.Marshal(out)
+		if err != nil {
+			return daemon.CommandResponse{}, fmt.Errorf("marshal manifest list: %w", err)
+		}
+		return daemon.CommandResponse{Message: string(b)}, nil
+	}
+
+	if len(entries) == 0 {
+		return daemon.CommandResponse{Message: "no manifests found in search path"}, nil
+	}
+
+	// Build aligned table: NAME  PATH  DESCRIPTION
+	const minPad = 2
+	maxName, maxPath := len("NAME"), len("PATH")
+	for _, e := range entries {
+		if len(e.Name) > maxName {
+			maxName = len(e.Name)
+		}
+		if len(e.Path) > maxPath {
+			maxPath = len(e.Path)
+		}
+	}
+	colName := maxName + minPad
+	colPath := maxPath + minPad
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "%-*s%-*s%s\n", colName, "NAME", colPath, "PATH", "DESCRIPTION")
+	for _, e := range entries {
+		desc := e.Description
+		if desc == "" {
+			desc = "(no description)"
+		}
+		fmt.Fprintf(&b, "%-*s%-*s%s\n", colName, e.Name, colPath, e.Path, desc)
 	}
 	return daemon.CommandResponse{Message: strings.TrimRight(b.String(), "\n")}, nil
 }

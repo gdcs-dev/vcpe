@@ -24,12 +24,13 @@ Commands:
   formula             print the rendered formula to stdout
 
 Environment:
-  VCPE_HOMEBREW_TAP_DIR    override the tap directory for testing
-  VCPE_HOMEBREW_CHANNEL    main or release (default: main)
+  VCPE_HOMEBREW_TAP_DIR      override the tap directory for testing
+  VCPE_HOMEBREW_CHANNEL      main, development, or release (default: main)
   VCPE_HOMEBREW_MAIN_SHA256  override checksum for the main branch archive (computed from live tarball if unset)
-  VCPE_HOMEBREW_VERSION    required for release channel
-  VCPE_HOMEBREW_SHA256     required for release channel
-  VCPE_HOMEBREW_URL        optional source URL override
+  VCPE_HOMEBREW_DEV_SHA256   override checksum for the development branch archive (computed from live tarball if unset)
+  VCPE_HOMEBREW_VERSION      required for release channel
+  VCPE_HOMEBREW_SHA256       required for release channel
+  VCPE_HOMEBREW_URL          optional source URL override
 EOF
 }
 
@@ -80,11 +81,12 @@ render_formula() {
     local version_value
     local url_value
     local sha_value
-    local head_line='  head "https://github.com/gdcs-dev/vcpe.git", branch: "main"'
+    local head_branch
 
     case "$channel" in
         main)
             version_value='"main"'
+            head_branch="main"
             url_value=${VCPE_HOMEBREW_URL:-${repo_url}/archive/refs/heads/main.tar.gz}
             if [[ -n "${VCPE_HOMEBREW_MAIN_SHA256:-}" ]]; then
                 sha_value="$VCPE_HOMEBREW_MAIN_SHA256"
@@ -96,14 +98,28 @@ render_formula() {
                 rm -f "$tmp_archive"
             fi
             ;;
+        development)
+            version_value='"development"'
+            head_branch="development"
+            url_value=${VCPE_HOMEBREW_URL:-${repo_url}/archive/refs/heads/development.tar.gz}
+            if [[ -n "${VCPE_HOMEBREW_DEV_SHA256:-}" ]]; then
+                sha_value="$VCPE_HOMEBREW_DEV_SHA256"
+            else
+                local tmp_archive
+                tmp_archive=$(mktemp /tmp/vcpe-sha-XXXXXX.tar.gz)
+                curl -fsSL "$url_value" -o "$tmp_archive" || die "failed to download $url_value"
+                sha_value=$(shasum -a 256 "$tmp_archive" | awk '{print $1}')
+                rm -f "$tmp_archive"
+            fi
+            ;;
         release)
             version_value=${VCPE_HOMEBREW_VERSION:-}
             sha_value=${VCPE_HOMEBREW_SHA256:-}
+            head_branch="main"
             [[ -n "$version_value" ]] || die "set VCPE_HOMEBREW_VERSION for release channel"
             [[ -n "$sha_value" ]] || die "set VCPE_HOMEBREW_SHA256 for release channel"
             url_value=${VCPE_HOMEBREW_URL:-${repo_url}/archive/refs/tags/v${version_value}.tar.gz}
             version_value=$(printf '"%s"' "$version_value")
-            sha_value=$(printf '"%s"' "$sha_value")
             ;;
         *)
             die "unsupported Homebrew channel: $channel"
@@ -118,37 +134,44 @@ class Vcpe < Formula
   version $version_value
   sha256 "$sha_value"
   license "MIT"
-$head_line
+  head "$repo_url.git", branch: "$head_branch"
 
+  depends_on "go" => :build
   depends_on "podman"
   depends_on "podman-compose"
-  depends_on "python@3"
 
   def install
-    libexec.install Dir["*"]
-
-    env = { "VCPE_INSTALL_ROOT" => libexec }
-    %w[vcpe bng client mv1 routerd webpa xb10 net homebrew-tap].each do |script_name|
-      (bin/script_name).write_env_script libexec/"scripts/#{script_name}", env
+    cd "controlplane" do
+      system "go", "build",
+             "-ldflags", "-s -w",
+             "-o", bin/"vcpe",
+             "./cmd/vcpe"
     end
+    pkgshare.install "manifests"
   end
 
   def caveats
     <<~EOS
       Run \`podman machine init\` and \`podman machine start\` on macOS before using vcpe.
-      Then initialize the user config with:
 
-        vcpe init
+      Deployment manifests are installed to:
+        \#{pkgshare}/manifests/
 
-      The default deployment profile starts bng-7, webpa, and mv1-7.
-      This formula currently tracks the main branch. Replace the branch tarball
-      with a tagged release URL and fixed sha256 once release artifacts exist.
+      To see available manifests:
+        vcpe manifest list
+
+      Apply a deployment:
+        vcpe apply --manifest <name>    # by name
+        vcpe apply                      # auto-select when only one manifest exists
+
+      This formula tracks the $channel branch. The sha256 is a point-in-time
+      snapshot; run scripts/sync-homebrew-vcpe after significant pushes to update it.
+      Use \`brew install --HEAD vcpe\` to always install the latest $head_branch branch.
     EOS
   end
 
   test do
-    output = shell_output("#{bin}/vcpe init")
-    assert_match "VCPE_PROFILE=default", output
+    assert_match "vcpe", shell_output("\#{bin}/vcpe --help")
   end
 end
 EOF

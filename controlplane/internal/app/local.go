@@ -40,6 +40,8 @@ func executeLocal(opts Options) (daemon.CommandResponse, error) {
 		return runDown(opts)
 	case "list":
 		return runList(opts)
+	case "manifest":
+		return runManifest(opts)
 	case "status":
 		return runStatus(opts)
 	case "logs":

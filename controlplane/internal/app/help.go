@@ -165,6 +165,16 @@ var commandHelp = map[string]CommandHelp{
 			"vcpe list --json",
 		},
 	},
+	"manifest": {
+		Synopsis:      "Manage and discover manifest files",
+		Description:   "Subcommands for working with deployment manifest files. Use `vcpe manifest list` to see all manifests discoverable from the search path (Homebrew pkgshare, ~/.vcpe/manifests/, and ./manifests/).",
+		RequiredFlags: []FlagHelp{},
+		OptionalFlags: []FlagHelp{},
+		Examples: []string{
+			"vcpe manifest list",
+			"vcpe manifest list --json",
+		},
+	},
 }
 
 // GlobalHelp returns the top-level help string listing all public commands.
@@ -175,7 +185,7 @@ func GlobalHelp() string {
 
 	// Fixed column width for aligned synopsis column.
 	const synopsisCol = 10
-	order := []string{"init", "build", "up", "plan", "down", "list", "status", "logs", "config", "state"}
+	order := []string{"init", "build", "up", "plan", "down", "list", "manifest", "status", "logs", "config", "state"}
 	for _, cmd := range order {
 		h := commandHelp[cmd]
 		padding := synopsisCol - len(cmd)
