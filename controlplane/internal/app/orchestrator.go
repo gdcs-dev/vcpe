@@ -433,10 +433,23 @@ func teardownComposeLifecycle(ctx context.Context, stateRoot, depName string, se
 
 // resolveRepoRoot walks parent directories from the working directory looking
 // for the repository root, identified by the presence of services/bng/compose.yaml.
+// For Homebrew installs it also checks the pkgshare directory relative to the
+// binary ($(brew --prefix)/share/vcpe/) where the formula installs services/.
 func resolveRepoRoot() (string, error) {
 	if root := os.Getenv("VCPE_REPO_ROOT"); root != "" {
 		return root, nil
 	}
+
+	// Homebrew pkgshare: one level up from the binary directory.
+	// os.Executable returns the raw symlink path; symlinks are NOT resolved so
+	// that $(brew --prefix)/bin/vcpe → ../share/vcpe/ resolves correctly.
+	if exePath, err := os.Executable(); err == nil {
+		pkgshare := filepath.Join(filepath.Dir(exePath), "..", "share", "vcpe")
+		if _, err := os.Stat(filepath.Join(pkgshare, "services", "bng", "compose.yaml")); err == nil {
+			return filepath.Clean(pkgshare), nil
+		}
+	}
+
 	cwd, err := os.Getwd()
 	if err != nil {
 		return "", fmt.Errorf("resolve working dir: %w", err)
