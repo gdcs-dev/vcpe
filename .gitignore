@@ -13,13 +13,12 @@ services/routerd/.build-src/
 controlplane/bin/
 
 # Generated compose.env files staged by the orchestrator into services/<type>/
-services/bng/compose.env
-services/webpa/compose.env
+compose.env
 
 # Generated runtime config trees staged by the orchestrator into services/<type>/runtime/
 # (new layout uses etc/ and var/ subdirs; old per-customer dirs were tracked separately)
-services/bng/runtime/etc/
-services/bng/runtime/var/
+runtime/
 
 # Generic-container compose.yaml staged by the orchestrator for the client service
 services/client/compose.yaml
+
