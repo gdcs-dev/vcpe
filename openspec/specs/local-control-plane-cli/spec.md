@@ -30,18 +30,11 @@ The system SHALL require explicit user confirmation or force flag semantics befo
 - **THEN** the system refuses to mutate runtime resources and returns a plan summary identifying the disruptive change
 
 ### Requirement: Primary Go operator binary
-The system SHALL package `vcpe` as the primary user-facing Go operator command and SHALL keep `vcpectl` available as an alias or debug path during the compatibility window.
+The system SHALL package `vcpe` as the sole user-facing Go operator command. No separate `vcpectl` alias or debug binary is provided.
 
 #### Scenario: User invokes primary operator
 - **WHEN** a user runs `vcpe status`
-- **THEN** the command executes the same Go operator implementation used by the control-plane command path
-
-### Requirement: Script compatibility shims
-The system SHALL preserve existing documented script paths as compatibility shims for one release window after Go parity, and those shims MUST translate arguments to Go commands without owning deployment behavior.
-
-#### Scenario: Script shim delegates to Go
-- **WHEN** a user runs a documented `./scripts/vcpe` or service script command during the compatibility window
-- **THEN** the script invokes the Go operator command, propagates its exit code, and does not source profiles or mutate runtime resources directly
+- **THEN** the command executes the Go operator implementation
 
 ### Requirement: Human and JSON output contracts
 The system SHALL provide human-readable output by default for operator commands that report state, and SHALL provide stable JSON output when `--json` is requested.

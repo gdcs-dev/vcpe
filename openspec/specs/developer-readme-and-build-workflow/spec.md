@@ -14,19 +14,16 @@ The project SHALL provide a top-level README that documents project overview, pr
 - **WHEN** a developer reads build and run examples
 - **THEN** the examples identify `vcpe` as the primary command and use manifest-driven deployment selected by `--name` rather than profile or `--customer` selection
 
-### Requirement: README must document both supported local run modes
-The project SHALL document both legacy script orchestration and control-plane compatibility mode, including how to switch modes.
+### Requirement: Optional Makefile wrappers must be convenience helpers over vcpe
+If a top-level Makefile is provided, it SHALL provide optional convenience wrappers over `vcpe` commands. It SHALL NOT embed divergent orchestration behavior. Targets that accept a deployment name SHALL use a `NAME` variable (defaulting to the quick-start example deployment name) mapped to the `--name` flag.
 
-#### Scenario: Developer switches run mode
-- WHEN a developer needs to run in control-plane compatibility mode
-- THEN README includes mode toggle guidance and command examples that use the same script entrypoints
+#### Scenario: Make target invokes vcpe with correct flags
+- **WHEN** a developer runs `make status NAME=bng-7`
+- **THEN** the Makefile executes `vcpe status --name bng-7` and returns its exit code
 
-### Requirement: Optional Makefile wrappers must mirror script workflows
-If a top-level Makefile is provided, it MUST wrap existing scripts and SHALL NOT replace script semantics or embed divergent orchestration behavior.
-
-#### Scenario: Make target and script parity
-- WHEN a developer runs a Make target for a common workflow step
-- THEN the resulting behavior maps directly to the corresponding script command path
+#### Scenario: Make target uses default name when NAME is unset
+- **WHEN** a developer runs `make status` without setting NAME
+- **THEN** the Makefile executes `vcpe status --name bng-7` using the built-in default
 
 ### Requirement: README examples must reference stable deeper documentation
 The top-level README SHALL link to runbook or detailed docs for advanced operational procedures.
