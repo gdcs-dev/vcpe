@@ -13,7 +13,7 @@ import (
 	"github.com/gdcs-dev/vcpe/controlplane/internal/types"
 )
 
-// ExecuteCLI is the process entrypoint shared by the vcpe and vcpectl binaries.
+// ExecuteCLI is the process entrypoint for the vcpe binary.
 // It parses the invocation, resolves the state root, and runs the command
 // locally. The daemon path is opt-in via VCPE_DAEMON_SOCKET for environments
 // that front the control plane with a long-running server.

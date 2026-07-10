@@ -34,7 +34,7 @@ func ResolveSocketPath(stateRoot, override string) string {
 	if override != "" {
 		return override
 	}
-	return filepath.Join(stateRoot, "vcpectl.sock")
+	return filepath.Join(stateRoot, "vcpe.sock")
 }
 
 func VersionedArtifactsRoot(stateRoot string) string {

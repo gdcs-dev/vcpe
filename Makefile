@@ -3,9 +3,9 @@ SHELL := /bin/bash
 VCPE_BIN ?= controlplane/bin/vcpe
 VCPE_BIN_REL := $(patsubst controlplane/%,%,$(VCPE_BIN))
 MANIFEST ?=
-CUSTOMER ?= 7
+NAME ?= bng-7
 
-.PHONY: help init build up down status logs-bng logs-webpa profile-list smoke-go smoke-services smoke-controlplane release-gate clean
+.PHONY: help init build up down status logs-bng logs-webpa smoke-go smoke-services smoke-controlplane release-gate clean
 
 help:
 	@echo "vCPE developer helpers (direct vcpe command wrappers)"
@@ -14,15 +14,12 @@ help:
 	@echo "  make init            # $(VCPE_BIN) init"
 	@echo "  make build           # build controlplane Go binary"
 	@echo "  make up MANIFEST=path/to/manifest.yaml"
-	@echo "  make status [CUSTOMER=7]"
-	@echo "  make down CUSTOMER=7"
+	@echo "  make status [NAME=bng-7]"
+	@echo "  make down [NAME=bng-7]"
 	@echo ""
 	@echo "Logs"
-	@echo "  make logs-bng        # $(VCPE_BIN) service bng logs --customer $(CUSTOMER)"
+	@echo "  make logs-bng        # $(VCPE_BIN) service bng logs --name $(NAME)"
 	@echo "  make logs-webpa      # $(VCPE_BIN) service webpa logs"
-	@echo ""
-	@echo "Profiles"
-	@echo "  make profile-list    # $(VCPE_BIN) profile list"
 	@echo ""
 	@echo "Smoke"
 	@echo "  make smoke-go        # primary vcpe command smoke"
@@ -42,19 +39,16 @@ up:
 	$(VCPE_BIN) up --manifest "$(MANIFEST)"
 
 status:
-	$(VCPE_BIN) status --customer "$(CUSTOMER)"
+	$(VCPE_BIN) status --name "$(NAME)"
 
 down:
-	$(VCPE_BIN) down --customer "$(CUSTOMER)" --force
+	$(VCPE_BIN) down --name "$(NAME)" --force
 
 logs-bng:
-	$(VCPE_BIN) service bng logs --customer "$(CUSTOMER)"
+	$(VCPE_BIN) service bng logs --name "$(NAME)"
 
 logs-webpa:
 	$(VCPE_BIN) service webpa logs
-
-profile-list:
-	$(VCPE_BIN) profile list
 
 smoke-go:
 	./tests/smoke/vcpe-primary-status.sh

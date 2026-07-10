@@ -27,7 +27,6 @@ CONTROLPLANE_MANIFEST_ROOT=${VCPE_CONTROLPLANE_MANIFEST_ROOT:-$CONTROLPLANE_STAT
 IMAGE_NAME=${IMAGE_NAME:-ghcr.io/gdcs-dev/bng:dev}
 PODMAN_COMPOSE_BIN=${PODMAN_COMPOSE_BIN:-podman-compose}
 VCPE_BIN=${VCPE_BIN:-$REPO_ROOT/controlplane/bin/vcpe}
-VCPECTL_BIN=${VCPECTL_BIN:-$REPO_ROOT/controlplane/bin/vcpectl}
 HOST_OS=$(uname -s)
 
 RUNTIME_ROOT=${VCPE_RUNTIME_ROOT:-$STATE_ROOT/services/bng/runtime}
@@ -40,7 +39,6 @@ ensure_dir() {
 
 ensure_config_dirs() {
     ensure_dir "$CONFIG_ROOT"
-    ensure_dir "$CONFIG_ROOT/profiles"
     ensure_dir "$STATE_ROOT"
     ensure_dir "$CONTROLPLANE_STATE_ROOT"
     ensure_dir "$CONTROLPLANE_MANIFEST_ROOT"
@@ -56,33 +54,12 @@ vcpe_cmd() {
         return 0
     fi
 
-    if [[ -x "$VCPECTL_BIN" ]]; then
-        printf '%s\n' "$VCPECTL_BIN"
-        return 0
-    fi
-
     if [[ -f "$REPO_ROOT/controlplane/cmd/vcpe/main.go" ]]; then
         printf 'go run %q\n' "$REPO_ROOT/controlplane/cmd/vcpe/main.go"
         return 0
     fi
 
-    if [[ -f "$REPO_ROOT/controlplane/cmd/vcpectl/main.go" ]]; then
-        printf 'go run %q\n' "$REPO_ROOT/controlplane/cmd/vcpectl/main.go"
-        return 0
-    fi
-
     die "vcpe binary not found. build it at $VCPE_BIN or set VCPE_BIN"
-}
-
-vcpectl_cmd() {
-    vcpe_cmd
-}
-
-run_vcpectl() {
-    local cmd
-    cmd=$(vcpectl_cmd)
-    # shellcheck disable=SC2086
-    $cmd --state-root "$CONTROLPLANE_STATE_ROOT" "$@"
 }
 
 source_env_file() {
@@ -205,17 +182,6 @@ run_linux_host_shell() {
     else
         /bin/sh -lc "$command"
     fi
-}
-
-require_customer_id() {
-    [[ -n "${1:-}" ]] || die "customer id is required"
-    case "$1" in
-        7|9|20)
-            ;;
-        *)
-            die "phase-1 supports only customer ids 7, 9, and 20"
-            ;;
-    esac
 }
 
 ensure_runtime_root() {
