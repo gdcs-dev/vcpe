@@ -66,4 +66,4 @@ make release-gate
 
 This repository is synced from the source repository at `gdcs-dev/vcpe` using
 the `scripts/sync-homebrew-vcpe` helper so the tap stays aligned with the
-development branch.
+main branch.
