@@ -28,15 +28,41 @@ func runBuild(opts Options) (daemon.CommandResponse, error) {
 	if err := Preflight(doc); err != nil {
 		return daemon.CommandResponse{}, err
 	}
+	platforms := opts.Platforms
+	if len(platforms) == 0 {
+		platforms = []string{"linux/amd64", "linux/arm64"}
+	}
 	mgr := image.New(newImageBackend())
-	summary, err := mgr.BuildWithOptions(context.Background(), doc, image.BuildOptions{NoCache: opts.NoCache})
+	summary, err := mgr.BuildWithOptions(context.Background(), doc, image.BuildOptions{NoCache: opts.NoCache, Platforms: platforms})
 	if err != nil {
 		return daemon.CommandResponse{}, err
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "build complete for deployment %q\n", doc.Metadata.Name)
+	fmt.Fprintf(&b, "build complete for deployment %q (platforms: %s)\n", doc.Metadata.Name, strings.Join(platforms, ","))
 	for _, action := range summary.Actions {
 		fmt.Fprintf(&b, "  %s (%s): %s\n", action.Service, action.Type, action.Action)
+	}
+	return daemon.CommandResponse{Message: strings.TrimRight(b.String(), "\n")}, nil
+}
+
+// runPush pushes all service images from the manifest to their registries.
+func runPush(opts Options) (daemon.CommandResponse, error) {
+	doc, err := manifest.Load(opts.ManifestPath)
+	if err != nil {
+		return daemon.CommandResponse{}, err
+	}
+	if err := Preflight(doc); err != nil {
+		return daemon.CommandResponse{}, err
+	}
+	backend := newImageBackend()
+	var b strings.Builder
+	fmt.Fprintf(&b, "push complete for deployment %q\n", doc.Metadata.Name)
+	for _, svc := range doc.Spec.Services {
+		ref := image.ImageReference(svc.Image)
+		if err := backend.PushImage(context.Background(), image.PushRequest{Reference: ref}); err != nil {
+			return daemon.CommandResponse{}, fmt.Errorf("push %s (%s): %w", svc.Name, ref, err)
+		}
+		fmt.Fprintf(&b, "  %s (%s): pushed\n", svc.Name, ref)
 	}
 	return daemon.CommandResponse{Message: strings.TrimRight(b.String(), "\n")}, nil
 }

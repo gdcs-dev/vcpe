@@ -14,10 +14,11 @@ import (
 type Adapter struct{}
 
 type ImageBuildRequest struct {
-	Tag     string
-	Context string
-	File    string
-	NoCache bool
+	Tag       string
+	Context   string
+	File      string
+	NoCache   bool
+	Platforms []string
 }
 
 type ImagePullRequest struct {
@@ -235,6 +236,13 @@ func (a *Adapter) ImageExists(ctx context.Context, reference string) (bool, erro
 }
 
 func (a *Adapter) BuildImage(ctx context.Context, req ImageBuildRequest) error {
+	// When building a multi-arch manifest list, remove any existing image or
+	// manifest with the same tag first. podman build --manifest fails if the
+	// name already exists as a regular (single-arch) image.
+	if len(req.Platforms) > 0 {
+		exec.CommandContext(ctx, "podman", "manifest", "rm", req.Tag).Run() //nolint:errcheck
+		exec.CommandContext(ctx, "podman", "rmi", "--force", req.Tag).Run() //nolint:errcheck
+	}
 	args, err := buildImageArgs(req)
 	if err != nil {
 		return err
@@ -289,7 +297,12 @@ func buildImageArgs(req ImageBuildRequest) ([]string, error) {
 	if req.Context == "" {
 		return nil, fmt.Errorf("build context is required")
 	}
-	args := []string{"build", "-t", req.Tag}
+	var args []string
+	if len(req.Platforms) > 0 {
+		args = []string{"build", "--platform", strings.Join(req.Platforms, ","), "--manifest", req.Tag}
+	} else {
+		args = []string{"build", "-t", req.Tag}
+	}
 	if req.NoCache {
 		args = append(args, "--no-cache")
 	}

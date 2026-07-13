@@ -79,7 +79,7 @@ spec:
       image:
         repository: ghcr.io/gdcs-dev/bng
         tag: dev
-        pullPolicy: build-if-missing
+        pullPolicy: always-pull
         buildContext: services/bng
       interfaces:
         - { role: mgmt }
@@ -112,7 +112,7 @@ spec:
       image:
         repository: ghcr.io/gdcs-dev/webpa
         tag: dev
-        pullPolicy: build-if-missing
+        pullPolicy: always-pull
         buildContext: services/webpa
       interfaces:
         - { role: mgmt }
@@ -129,7 +129,7 @@ spec:
       image:
         repository: ghcr.io/gdcs-dev/gateway
         tag: dev
-        pullPolicy: build-if-missing
+        pullPolicy: always-pull
         buildContext: services/gateway
       interfaces:
         - { role: wan }
@@ -157,7 +157,7 @@ spec:
       image:
         repository: ghcr.io/gdcs-dev/event-sink
         tag: dev
-        pullPolicy: build-if-missing
+        pullPolicy: always-pull
         buildContext: services/event-sink
         containerfile: services/event-sink/Containerfile
       interfaces:

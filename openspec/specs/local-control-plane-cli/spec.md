@@ -72,6 +72,27 @@ The system SHALL support a `VCPE_SKIP_IMAGE=1` environment variable that substit
 - **WHEN** `VCPE_SKIP_IMAGE=1` is set and an operator runs `vcpe build --manifest <path>`
 - **THEN** the system resolves image actions against the no-op backend (all images report as existing, no builds or pulls are executed) and reports a summary with `action: noop` for each service
 
+### Requirement: vcpe build defaults to multi-arch manifest list
+The `vcpe build` command SHALL default to building an OCI manifest list for `linux/amd64` and `linux/arm64` via `podman build --platform linux/amd64,linux/arm64 --manifest <tag>`. An optional `--platform <csv>` flag SHALL override the target platform list. QEMU emulation is required on the Podman machine for cross-arch targets.
+
+#### Scenario: Default build produces multi-arch manifest list
+- **WHEN** an operator runs `vcpe build --manifest deploy.yaml` without `--platform`
+- **THEN** the system invokes `podman build --platform linux/amd64,linux/arm64 --manifest <image-tag> ...` for each buildable service
+
+#### Scenario: Platform override restricts to specified arches
+- **WHEN** an operator runs `vcpe build --manifest deploy.yaml --platform linux/amd64`
+- **THEN** the system invokes `podman build --platform linux/amd64 --manifest <image-tag> ...` for each buildable service
+
+### Requirement: vcpe push command
+The system SHALL provide a `vcpe push --manifest <path>` command that pushes all service images referenced in the manifest to their registries. Each service's image reference (repository and tag) identifies the registry target.
+
+#### Scenario: Push sends all service images
+- **WHEN** an operator runs `vcpe push --manifest deploy.yaml`
+- **THEN** the system calls `podman push <image-ref>` for each service in the manifest and reports the pushed images
+
+#### Scenario: Push requires manifest flag
+- **WHEN** an operator runs `vcpe push` without `--manifest`
+- **THEN** the command fails with an error indicating that `--manifest` is required
 
 ---
 

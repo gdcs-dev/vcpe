@@ -39,18 +39,33 @@ var commandHelp = map[string]CommandHelp{
 	},
 	"build": {
 		Synopsis:    "Build or pull service images from a manifest",
-		Description: "Resolves image actions (build, pull, or noop) for all services in the manifest without starting any containers. Respects the image pull policy declared in the manifest.",
+		Description: "Resolves image actions (build, pull, or noop) for all services in the manifest without starting any containers. Respects the image pull policy declared in the manifest. Defaults to building a multi-arch OCI manifest list for linux/amd64 and linux/arm64; requires QEMU emulation on the Podman machine for cross-arch targets.",
 		RequiredFlags: []FlagHelp{
 			{Name: "--manifest", Arg: "<path>", Description: "Path to deployment manifest YAML"},
 		},
 		OptionalFlags: []FlagHelp{
+			{Name: "--platform", Arg: "<csv>", Description: "Comma-separated OS/arch targets (default: linux/amd64,linux/arm64)"},
 			{Name: "--no-cache", Description: "Disable layer cache when building images"},
 			{Name: "--state-root", Arg: "<path>", Description: "Override the default state root directory"},
 			{Name: "--json", Description: "Emit structured JSON output"},
 		},
 		Examples: []string{
 			"vcpe build --manifest ./manifest-bng-7.yaml",
+			"vcpe build --manifest ./manifest.yaml --platform linux/amd64",
 			"vcpe build --manifest ./manifest.yaml --no-cache",
+		},
+	},
+	"push": {
+		Synopsis:    "Push service images from a manifest to their registries",
+		Description: "Pushes all service images referenced in the manifest to their registries. The registry is derived from each service's image repository. Run `podman login <registry>` before pushing to authenticated registries.",
+		RequiredFlags: []FlagHelp{
+			{Name: "--manifest", Arg: "<path>", Description: "Path to deployment manifest YAML"},
+		},
+		OptionalFlags: []FlagHelp{
+			{Name: "--state-root", Arg: "<path>", Description: "Override the default state root directory"},
+		},
+		Examples: []string{
+			"vcpe push --manifest ./manifest-bng-7.yaml",
 		},
 	},
 	"up": {
@@ -185,7 +200,7 @@ func GlobalHelp() string {
 
 	// Fixed column width for aligned synopsis column.
 	const synopsisCol = 10
-	order := []string{"init", "build", "up", "plan", "down", "list", "manifest", "status", "logs", "config", "state"}
+	order := []string{"init", "build", "push", "up", "plan", "down", "list", "manifest", "status", "logs", "config", "state"}
 	for _, cmd := range order {
 		h := commandHelp[cmd]
 		padding := synopsisCol - len(cmd)

@@ -72,6 +72,11 @@ func TestHelpForBuild(t *testing.T) {
 	checkGolden(t, "build", got)
 }
 
+func TestHelpForPush(t *testing.T) {
+	got := HelpFor("push")
+	checkGolden(t, "push", got)
+}
+
 func TestHelpForUp(t *testing.T) {
 	got := HelpFor("up")
 	checkGolden(t, "up", got)

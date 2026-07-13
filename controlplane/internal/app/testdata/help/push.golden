@@ -1,0 +1,12 @@
+Usage: vcpe push --manifest <path> [flags]
+
+Pushes all service images referenced in the manifest to their registries. The registry is derived from each service's image repository. Run `podman login <registry>` before pushing to authenticated registries.
+
+Required flags:
+  --manifest <path>       Path to deployment manifest YAML
+
+Optional flags:
+  --state-root <path>     Override the default state root directory
+
+Examples:
+  vcpe push --manifest ./manifest-bng-7.yaml

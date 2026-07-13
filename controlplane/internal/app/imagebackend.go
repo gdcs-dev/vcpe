@@ -41,10 +41,11 @@ func (b podmanImageBackend) ImageExists(ctx context.Context, reference string) (
 
 func (b podmanImageBackend) BuildImage(ctx context.Context, req image.BuildRequest) error {
 	return b.adapter.BuildImage(ctx, podman.ImageBuildRequest{
-		Tag:     req.Tag,
-		Context: req.Context,
-		File:    req.File,
-		NoCache: req.NoCache,
+		Tag:       req.Tag,
+		Context:   req.Context,
+		File:      req.File,
+		NoCache:   req.NoCache,
+		Platforms: req.Platforms,
 	})
 }
 

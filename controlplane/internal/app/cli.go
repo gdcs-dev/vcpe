@@ -36,12 +36,14 @@ type Options struct {
 	NoCache         bool
 	Force           bool
 	OutputJSON      bool
+	Platforms       []string
 }
 
 // topLevelCommands are the public operator commands.
 var topLevelCommands = map[string]struct{}{
 	"init":     {},
 	"build":    {},
+	"push":     {},
 	"up":       {},
 	"apply":    {},
 	"down":     {},
@@ -125,7 +127,7 @@ func extractHelpCommand(args []string) (string, bool) {
 // should participate in manifest auto-discovery when --manifest is omitted.
 func isManifestCommand(cmd string) bool {
 	switch cmd {
-	case "build", "up", "apply", "plan":
+	case "build", "push", "up", "apply", "plan":
 		return true
 	}
 	return false
@@ -273,6 +275,13 @@ func parseArgs(_ string, args []string) (Options, error) {
 			opts.AllowDisruptive = true
 		case arg == "--no-cache":
 			opts.NoCache = true
+		case arg == "--platform":
+			val, next, err := takeValue(rest, i, "--platform")
+			if err != nil {
+				return Options{}, err
+			}
+			opts.Platforms = strings.Split(val, ",")
+			i = next
 		case arg == "--force":
 			opts.Force = true
 		case arg == "--json":
@@ -288,6 +297,9 @@ func parseArgs(_ string, args []string) (Options, error) {
 
 	if opts.NoCache && command != "build" {
 		return Options{}, fmt.Errorf("--no-cache is only supported for build")
+	}
+	if len(opts.Platforms) > 0 && command != "build" {
+		return Options{}, fmt.Errorf("--platform is only supported for build")
 	}
 
 	// Resolve --manifest (auto-discovery when omitted; bare-name lookup when set)
@@ -305,7 +317,7 @@ func parseArgs(_ string, args []string) (Options, error) {
 // validateCommandShape enforces per-command positional/flag grammar.
 func validateCommandShape(opts *Options) error {
 	switch opts.Command {
-	case "up", "apply", "build", "plan":
+	case "up", "apply", "build", "plan", "push":
 		if opts.ManifestPath == "" {
 			return fmt.Errorf("%s requires --manifest <path>; run `vcpe %s --help` for usage", opts.Command, opts.Command)
 		}

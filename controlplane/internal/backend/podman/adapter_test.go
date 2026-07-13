@@ -22,6 +22,24 @@ func TestImageCommandArgs(t *testing.T) {
 		t.Fatalf("unexpected no-cache build args: %#v", noCacheArgs)
 	}
 
+	// Single platform: --manifest mode
+	singlePlatform, err := buildImageArgs(ImageBuildRequest{Tag: "ghcr.io/gdcs-dev/bng:dev", Context: "services/bng", Platforms: []string{"linux/amd64"}})
+	if err != nil {
+		t.Fatalf("build args single platform: %v", err)
+	}
+	if !reflect.DeepEqual(singlePlatform, []string{"build", "--platform", "linux/amd64", "--manifest", "ghcr.io/gdcs-dev/bng:dev", "services/bng"}) {
+		t.Fatalf("unexpected single-platform build args: %#v", singlePlatform)
+	}
+
+	// Multi-platform: --manifest mode with comma-joined platforms
+	multiPlatform, err := buildImageArgs(ImageBuildRequest{Tag: "ghcr.io/gdcs-dev/bng:dev", Context: "services/bng", Platforms: []string{"linux/amd64", "linux/arm64"}})
+	if err != nil {
+		t.Fatalf("build args multi platform: %v", err)
+	}
+	if !reflect.DeepEqual(multiPlatform, []string{"build", "--platform", "linux/amd64,linux/arm64", "--manifest", "ghcr.io/gdcs-dev/bng:dev", "services/bng"}) {
+		t.Fatalf("unexpected multi-platform build args: %#v", multiPlatform)
+	}
+
 	pull, err := pullImageArgs(ImagePullRequest{Reference: "ghcr.io/gdcs-dev/bng:dev"})
 	if err != nil {
 		t.Fatalf("pull args: %v", err)

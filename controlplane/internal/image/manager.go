@@ -25,14 +25,16 @@ type Backend interface {
 }
 
 type BuildRequest struct {
-	Tag     string
-	Context string
-	File    string
-	NoCache bool
+	Tag       string
+	Context   string
+	File      string
+	NoCache   bool
+	Platforms []string
 }
 
 type BuildOptions struct {
-	NoCache bool
+	NoCache   bool
+	Platforms []string
 }
 
 type PullRequest struct {
@@ -120,7 +122,7 @@ func (m *Manager) BuildWithOptions(ctx context.Context, doc manifest.Document, o
 			}
 		default:
 			action.Action = "build"
-			if err := m.backend.BuildImage(ctx, BuildRequest{Tag: imageRef, Context: service.Image.BuildContext, File: service.Image.Containerfile, NoCache: opts.NoCache}); err != nil {
+			if err := m.backend.BuildImage(ctx, BuildRequest{Tag: imageRef, Context: service.Image.BuildContext, File: service.Image.Containerfile, NoCache: opts.NoCache, Platforms: opts.Platforms}); err != nil {
 				return summary, &LifecycleError{Service: action.Service, Image: action.Image, Action: action.Action, Reason: "build command failed", Err: err}
 			}
 		}
@@ -178,15 +180,21 @@ func selectedServices(doc manifest.Document) []manifest.Service {
 	return services
 }
 
-func imageReference(image manifest.Image) string {
-	if image.Repository == "" {
+func imageReference(img manifest.Image) string {
+	return ImageReference(img)
+}
+
+// ImageReference returns the fully-qualified image reference (repository:tag)
+// for a manifest image spec. Tag defaults to "latest" when unset.
+func ImageReference(img manifest.Image) string {
+	if img.Repository == "" {
 		return ""
 	}
-	tag := image.Tag
+	tag := img.Tag
 	if tag == "" {
 		tag = "latest"
 	}
-	return fmt.Sprintf("%s:%s", image.Repository, tag)
+	return fmt.Sprintf("%s:%s", img.Repository, tag)
 }
 
 func resolvePolicy(service manifest.Service) string {
