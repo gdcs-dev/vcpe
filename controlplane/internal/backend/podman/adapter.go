@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"os"
 	"os/exec"
 	"runtime"
 	"strings"
@@ -248,8 +249,10 @@ func (a *Adapter) BuildImage(ctx context.Context, req ImageBuildRequest) error {
 		return err
 	}
 	cmd := exec.CommandContext(ctx, "podman", args...)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("build podman image %s: %w (%s)", req.Tag, err, strings.TrimSpace(string(out)))
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("build podman image %s: %w", req.Tag, err)
 	}
 	return nil
 }
@@ -260,8 +263,10 @@ func (a *Adapter) PullImage(ctx context.Context, req ImagePullRequest) error {
 		return err
 	}
 	cmd := exec.CommandContext(ctx, "podman", args...)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("pull podman image %s: %w (%s)", req.Reference, err, strings.TrimSpace(string(out)))
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("pull podman image %s: %w", req.Reference, err)
 	}
 	return nil
 }

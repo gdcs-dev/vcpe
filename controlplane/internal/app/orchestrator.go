@@ -127,7 +127,7 @@ func runApply(opts Options) (daemon.CommandResponse, error) {
 	if failPhase("images") {
 		return fail("images", fmt.Errorf("VCPE_FAIL_PHASE=images"))
 	}
-	imgMgr := image.New(newImageBackend())
+	imgMgr := image.New(newImageBackend(""))
 	if _, err := imgMgr.EnsureForApply(ctx, doc); err != nil && !skipRuntime() {
 		return fail("images", err)
 	}

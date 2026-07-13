@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 
+	"github.com/gdcs-dev/vcpe/controlplane/internal/backend/docker"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/backend/podman"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/image"
 )
@@ -15,9 +16,19 @@ type podmanImageBackend struct {
 	adapter *podman.Adapter
 }
 
-func newImageBackend() image.Backend {
+// dockerImageBackend adapts the docker backend's request types to image.Backend.
+type dockerImageBackend struct {
+	adapter *docker.Adapter
+}
+
+// newImageBackend returns the image.Backend for the given backend name.
+// backend must be "podman" (default) or "docker".
+func newImageBackend(backend string) image.Backend {
 	if os.Getenv("VCPE_SKIP_IMAGE") == "1" {
 		return noopImageBackend{}
+	}
+	if backend == "docker" {
+		return dockerImageBackend{adapter: docker.New()}
 	}
 	return podmanImageBackend{adapter: podman.New()}
 }
@@ -59,4 +70,30 @@ func (b podmanImageBackend) PushImage(ctx context.Context, req image.PushRequest
 
 func (b podmanImageBackend) TagImage(ctx context.Context, req image.TagRequest) error {
 	return b.adapter.TagImage(ctx, podman.ImageTagRequest{Source: req.Source, Target: req.Target})
+}
+
+func (b dockerImageBackend) ImageExists(ctx context.Context, reference string) (bool, error) {
+	return b.adapter.ImageExists(ctx, reference)
+}
+
+func (b dockerImageBackend) BuildImage(ctx context.Context, req image.BuildRequest) error {
+	return b.adapter.BuildImage(ctx, docker.ImageBuildRequest{
+		Tag:       req.Tag,
+		Context:   req.Context,
+		File:      req.File,
+		NoCache:   req.NoCache,
+		Platforms: req.Platforms,
+	})
+}
+
+func (b dockerImageBackend) PullImage(ctx context.Context, req image.PullRequest) error {
+	return b.adapter.PullImage(ctx, docker.ImagePullRequest{Reference: req.Reference})
+}
+
+func (b dockerImageBackend) PushImage(ctx context.Context, req image.PushRequest) error {
+	return b.adapter.PushImage(ctx, docker.ImagePushRequest{Reference: req.Reference})
+}
+
+func (b dockerImageBackend) TagImage(ctx context.Context, req image.TagRequest) error {
+	return b.adapter.TagImage(ctx, docker.ImageTagRequest{Source: req.Source, Target: req.Target})
 }

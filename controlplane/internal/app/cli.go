@@ -37,6 +37,7 @@ type Options struct {
 	Force           bool
 	OutputJSON      bool
 	Platforms       []string
+	Backend         string
 }
 
 // topLevelCommands are the public operator commands.
@@ -282,6 +283,13 @@ func parseArgs(_ string, args []string) (Options, error) {
 			}
 			opts.Platforms = strings.Split(val, ",")
 			i = next
+		case arg == "--backend":
+			val, next, err := takeValue(rest, i, "--backend")
+			if err != nil {
+				return Options{}, err
+			}
+			opts.Backend = val
+			i = next
 		case arg == "--force":
 			opts.Force = true
 		case arg == "--json":
@@ -300,6 +308,12 @@ func parseArgs(_ string, args []string) (Options, error) {
 	}
 	if len(opts.Platforms) > 0 && command != "build" {
 		return Options{}, fmt.Errorf("--platform is only supported for build")
+	}
+	if opts.Backend != "" && command != "build" && command != "push" {
+		return Options{}, fmt.Errorf("--backend is only supported for build and push")
+	}
+	if opts.Backend != "" && opts.Backend != "podman" && opts.Backend != "docker" {
+		return Options{}, fmt.Errorf("unknown backend %q: must be podman or docker", opts.Backend)
 	}
 
 	// Resolve --manifest (auto-discovery when omitted; bare-name lookup when set)

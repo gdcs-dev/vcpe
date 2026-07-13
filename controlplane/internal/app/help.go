@@ -44,6 +44,7 @@ var commandHelp = map[string]CommandHelp{
 			{Name: "--manifest", Arg: "<path>", Description: "Path to deployment manifest YAML"},
 		},
 		OptionalFlags: []FlagHelp{
+			{Name: "--backend", Arg: "<podman|docker>", Description: "Container runtime for image operations (default: podman). With --backend docker, multi-arch builds use `docker buildx build --push` and push to the registry during build. Note: use pullPolicy: always-pull or missing in the manifest when running `vcpe up` after a Docker build."},
 			{Name: "--platform", Arg: "<csv>", Description: "Comma-separated OS/arch targets (default: linux/amd64,linux/arm64)"},
 			{Name: "--no-cache", Description: "Disable layer cache when building images"},
 			{Name: "--state-root", Arg: "<path>", Description: "Override the default state root directory"},
@@ -51,6 +52,7 @@ var commandHelp = map[string]CommandHelp{
 		},
 		Examples: []string{
 			"vcpe build --manifest ./manifest-bng-7.yaml",
+			"vcpe build --manifest ./manifest.yaml --backend docker",
 			"vcpe build --manifest ./manifest.yaml --platform linux/amd64",
 			"vcpe build --manifest ./manifest.yaml --no-cache",
 		},
@@ -62,10 +64,12 @@ var commandHelp = map[string]CommandHelp{
 			{Name: "--manifest", Arg: "<path>", Description: "Path to deployment manifest YAML"},
 		},
 		OptionalFlags: []FlagHelp{
+			{Name: "--backend", Arg: "<podman|docker>", Description: "Container runtime for push operations (default: podman). With --backend docker, this is a re-push; multi-arch images are already pushed during `vcpe build --backend docker`."},
 			{Name: "--state-root", Arg: "<path>", Description: "Override the default state root directory"},
 		},
 		Examples: []string{
 			"vcpe push --manifest ./manifest-bng-7.yaml",
+			"vcpe push --manifest ./manifest-bng-7.yaml --backend docker",
 		},
 	},
 	"up": {

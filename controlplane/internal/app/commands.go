@@ -32,8 +32,8 @@ func runBuild(opts Options) (daemon.CommandResponse, error) {
 	if len(platforms) == 0 {
 		platforms = []string{"linux/amd64", "linux/arm64"}
 	}
-	mgr := image.New(newImageBackend())
-	summary, err := mgr.BuildWithOptions(context.Background(), doc, image.BuildOptions{NoCache: opts.NoCache, Platforms: platforms})
+	mgr := image.New(newImageBackend(opts.Backend))
+	summary, err := mgr.BuildWithOptions(context.Background(), doc, image.BuildOptions{NoCache: opts.NoCache, Platforms: platforms, ForceBuild: true})
 	if err != nil {
 		return daemon.CommandResponse{}, err
 	}
@@ -54,7 +54,7 @@ func runPush(opts Options) (daemon.CommandResponse, error) {
 	if err := Preflight(doc); err != nil {
 		return daemon.CommandResponse{}, err
 	}
-	backend := newImageBackend()
+	backend := newImageBackend(opts.Backend)
 	var b strings.Builder
 	fmt.Fprintf(&b, "push complete for deployment %q\n", doc.Metadata.Name)
 	for _, svc := range doc.Spec.Services {

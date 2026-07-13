@@ -37,8 +37,6 @@ RUN chmod +x /usr/local/bin/event-sink \
             /usr/local/bin/entrypoint.sh \
             /usr/local/bin/runtime-init-event-sink
 
-EXPOSE 8080
-
 ENTRYPOINT ["/usr/local/bin/runtime-init-event-sink"]
 CMD ["/usr/local/bin/entrypoint.sh"]
 

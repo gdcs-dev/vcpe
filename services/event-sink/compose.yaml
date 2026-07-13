@@ -16,7 +16,7 @@ services:
       # DNS: use BNG dnsmasq so container hostnames resolve correctly.
       # IFACE_MGMT_GATEWAY4 is populated in compose.env by vcpe apply.
       BNG_DNS_SERVER: "${IFACE_MGMT_GATEWAY4}"
-      ARGUS_URL: "http://webpa:6600"
+      ARGUS_URL: "http://argus:6600"
       # Base64-encoded "user:pass" — matches dev Argus config in argus.yaml
       ARGUS_BASIC_AUTH: "dXNlcjpwYXNz"
       WEBHOOK_URL: "http://${SERVICE_NAME}:8080/webhook"

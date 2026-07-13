@@ -6,6 +6,7 @@ Required flags:
   --manifest <path>       Path to deployment manifest YAML
 
 Optional flags:
+  --backend <podman|docker>  Container runtime for image operations (default: podman). With --backend docker, multi-arch builds use `docker buildx build --push` and push to the registry during build. Note: use pullPolicy: always-pull or missing in the manifest when running `vcpe up` after a Docker build.
   --platform <csv>        Comma-separated OS/arch targets (default: linux/amd64,linux/arm64)
   --no-cache              Disable layer cache when building images
   --state-root <path>     Override the default state root directory
@@ -13,5 +14,6 @@ Optional flags:
 
 Examples:
   vcpe build --manifest ./manifest-bng-7.yaml
+  vcpe build --manifest ./manifest.yaml --backend docker
   vcpe build --manifest ./manifest.yaml --platform linux/amd64
   vcpe build --manifest ./manifest.yaml --no-cache

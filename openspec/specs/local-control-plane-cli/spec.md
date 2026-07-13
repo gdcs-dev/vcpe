@@ -94,6 +94,32 @@ The system SHALL provide a `vcpe push --manifest <path>` command that pushes all
 - **WHEN** an operator runs `vcpe push` without `--manifest`
 - **THEN** the command fails with an error indicating that `--manifest` is required
 
+### Requirement: vcpe build and push support a --backend flag
+The `vcpe build` and `vcpe push` commands SHALL accept an optional `--backend <podman|docker>` flag that selects the container runtime for image operations. The default SHALL be `podman`. Passing `--backend` to any other command SHALL be an error. Passing an unrecognized value SHALL produce a clear error.
+
+#### Scenario: Default backend is podman
+- **WHEN** an operator runs `vcpe build --manifest deploy.yaml` without `--backend`
+- **THEN** the system uses Podman for all image operations, identical to existing behavior
+
+#### Scenario: Docker backend selected for build
+- **WHEN** an operator runs `vcpe build --manifest deploy.yaml --backend docker`
+- **THEN** the system uses Docker CLI commands; with multiple platforms, invokes `docker buildx build --platform <csv> --tag <image> --push ...`
+
+#### Scenario: --backend on unsupported command is rejected
+- **WHEN** an operator runs `vcpe up --backend docker --manifest deploy.yaml`
+- **THEN** the command fails with an error stating `--backend` is only supported for `build` and `push`
+
+#### Scenario: Unknown backend value is rejected
+- **WHEN** an operator runs `vcpe build --backend invalid --manifest deploy.yaml`
+- **THEN** the command fails with an error identifying the unknown backend and listing valid values
+
+### Requirement: pullPolicy compatibility with Docker backend
+The help text for `vcpe build --backend docker` SHALL document that manifests using `pullPolicy: build-if-missing` are incompatible with the Docker backend workflow, and that `always-pull` or `missing` must be used so that `vcpe up` pulls the Docker-built images from the registry.
+
+#### Scenario: Help text warns about pullPolicy
+- **WHEN** an operator runs `vcpe build --help`
+- **THEN** the `--backend` flag description mentions the `pullPolicy` compatibility constraint
+
 ---
 
 ### Requirement: Optional manifest path for apply, build, and plan

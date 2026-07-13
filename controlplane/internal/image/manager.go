@@ -35,6 +35,10 @@ type BuildRequest struct {
 type BuildOptions struct {
 	NoCache   bool
 	Platforms []string
+	// ForceBuild ignores pullPolicy: services with a buildContext are built
+	// unconditionally; services without one are pulled if they have a
+	// repository. Used by the explicit `vcpe build` command.
+	ForceBuild bool
 }
 
 type PullRequest struct {
@@ -106,6 +110,23 @@ func (m *Manager) BuildWithOptions(ctx context.Context, doc manifest.Document, o
 		imageRef := imageReference(service.Image)
 		policy := resolvePolicy(service)
 		action := Action{Service: service.Name, Type: service.Type, Image: imageRef, Policy: policy, Action: "noop"}
+		// When ForceBuild is set, bypass pullPolicy: build anything that has a
+		// buildContext, pull anything that doesn't.
+		if opts.ForceBuild {
+			if service.Image.BuildContext != "" {
+				action.Action = "build"
+				if err := m.backend.BuildImage(ctx, BuildRequest{Tag: imageRef, Context: service.Image.BuildContext, File: service.Image.Containerfile, NoCache: opts.NoCache, Platforms: opts.Platforms}); err != nil {
+					return summary, &LifecycleError{Service: action.Service, Image: action.Image, Action: action.Action, Reason: "build command failed", Err: err}
+				}
+			} else if imageRef != "" {
+				action.Action = "pull"
+				if err := m.backend.PullImage(ctx, PullRequest{Reference: imageRef}); err != nil {
+					return summary, &LifecycleError{Service: action.Service, Image: action.Image, Action: action.Action, Reason: "build command pull failed", Err: err}
+				}
+			}
+			summary.Actions = append(summary.Actions, action)
+			continue
+		}
 		switch policy {
 		case PolicyAlwaysPull:
 			action.Action = "pull"
