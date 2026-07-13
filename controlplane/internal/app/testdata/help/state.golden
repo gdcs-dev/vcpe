@@ -1,0 +1,9 @@
+Usage: vcpe state <subcommand> [flags]
+
+Provides subcommands for inspecting or resetting the persisted state. Use `state reset` to clear all IPAM leases and deployment snapshots when recovering from schema migrations.
+
+Optional flags:
+  --state-root <path>     Override the default state root directory
+
+Examples:
+  vcpe state reset

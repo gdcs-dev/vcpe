@@ -1,0 +1,13 @@
+Usage: vcpe status [flags]
+
+Reports reconcile metrics, active IPAM leases, and recent operation history. With --name, shows the desired state snapshot for that deployment.
+
+Optional flags:
+  --name <deployment>     Filter output to a specific deployment
+  --state-root <path>     Override the default state root directory
+  --json                  Emit structured JSON with metrics, timeline, desired, planned, observed, and runtimeInitDiagnostics keys
+
+Examples:
+  vcpe status
+  vcpe status --name bng-7
+  vcpe status --json

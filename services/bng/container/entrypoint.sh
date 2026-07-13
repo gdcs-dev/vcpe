@@ -102,6 +102,24 @@ apply_runtime_config() {
     chmod +x /usr/local/libexec/network-startup.sh
     /usr/local/libexec/network-startup.sh
     wait_for_ipv6_ready
+
+    # Before dnsmasq overwrites resolv.conf, resolve each peer hostname from
+    # dnsmasq.hosts via Podman's aardvark-dns (which knows each container's
+    # actual runtime IP). Write the resolved entries to dnsmasq.dynamic.hosts
+    # and clear the static file so dnsmasq never serves stale planned IPs.
+    : > /etc/dnsmasq.dynamic.hosts
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        [[ -z "$line" || "$line" == '#'* ]] && continue
+        first_hostname=$(printf '%s' "$line" | awk '{print $2}')
+        [[ -z "$first_hostname" ]] && continue
+        actual_ip=$(getent hosts "$first_hostname" 2>/dev/null | awk '{print $1}' | head -1 || true)
+        if [[ -n "$actual_ip" ]]; then
+            rest=$(printf '%s' "$line" | cut -d' ' -f2-)
+            printf '%s %s\n' "$actual_ip" "$rest" >> /etc/dnsmasq.dynamic.hosts
+        fi
+    done < /etc/dnsmasq.hosts
+    : > /etc/dnsmasq.hosts
+
     cat >/etc/resolv.conf <<'EOF'
 nameserver 127.0.0.1
 options timeout:1 attempts:2

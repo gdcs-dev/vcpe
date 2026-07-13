@@ -1,0 +1,16 @@
+[Unit]
+Description=AppArmor Event Simulator
+Documentation=https://github.com/gdcs-dev/vcpe
+After=rbus.service parodus.service
+
+[Service]
+Type=simple
+# Default interval; override via /etc/default/apparmor-simulator
+Environment=APPARMOR_SIM_INTERVAL_SEC=30
+EnvironmentFile=-/etc/default/apparmor-simulator
+ExecStart=/usr/bin/apparmor-simulator
+Restart=always
+RestartSec=15
+
+[Install]
+WantedBy=multi-user.target

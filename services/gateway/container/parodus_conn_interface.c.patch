@@ -1,0 +1,14 @@
+diff --git a/src/conn_interface.c b/src/conn_interface.c
+index 14ac963..81bc6c3 100644
+--- a/src/conn_interface.c
++++ b/src/conn_interface.c
+@@ -232,7 +232,7 @@ void createSocketConnection(void (* initKeypress)())
+     curl_global_cleanup();
+     clear_metadata();
+     //enabled for yocto buid, disabling for local pc due to build failure
+-#ifdef BUILD_YOCTO
++#if 0 //def BUILD_YOCTO
+     rdk_logger_deinit();
+ #endif	
+     free_server_list(&server_list);
+

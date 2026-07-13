@@ -1,34 +1,39 @@
+# Curated compose for the bng service type. The control plane renders a
+# compose.env in this directory before `up`, populating the canonical
+# IFACE_<ROLE>_* contract plus DEPLOYMENT_NAME/SERVICE_NAME/IMAGE. All instance
+# data (image, container name, MACs, networks) comes from that env file; this
+# file contains no customer- or deployment-specific literals.
 services:
   bng:
-    image: ${IMAGE_NAME:-ghcr.io/gdcs-dev/bng:dev}
-    container_name: bng-${CUSTOMER_ID}
-    hostname: bng-${CUSTOMER_ID}
+    image: ${IMAGE}
+    container_name: ${DEPLOYMENT_NAME}-${SERVICE_NAME}
+    hostname: ${SERVICE_NAME}
     privileged: true
     cap_add:
       - NET_ADMIN
       - NET_RAW
-    environment:
-      CUSTOMER_ID: ${CUSTOMER_ID}
-      MGMT_MAC: ${MGMT_MAC}
-      WAN_MAC: ${WAN_MAC}
-      CM_MAC: ${CM_MAC}
+    env_file:
+      - compose.env
     volumes:
-      - ${RUNTIME_ROOT}/${CUSTOMER_ID}:/runtime-config:ro
+      - ./runtime:/runtime-config:ro
     networks:
       mgmt:
-        mac_address: ${MGMT_MAC}
+        mac_address: ${IFACE_MGMT_MAC}
+        ipv4_address: ${IFACE_MGMT_IPV4}
       wan:
-        mac_address: ${WAN_MAC}
+        mac_address: ${IFACE_WAN_MAC}
+        ipv4_address: ${IFACE_WAN_IPV4}
       cm:
-        mac_address: ${CM_MAC}
+        mac_address: ${IFACE_CM_MAC}
+        ipv4_address: ${IFACE_CM_IPV4}
 
 networks:
   mgmt:
     external: true
-    name: mgmt
+    name: ${IFACE_MGMT_NETWORK}
   wan:
     external: true
-    name: ${WAN_NETWORK}
+    name: ${IFACE_WAN_NETWORK}
   cm:
     external: true
-    name: ${CM_NETWORK}
+    name: ${IFACE_CM_NETWORK}

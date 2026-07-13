@@ -1,0 +1,221 @@
+# syntax=docker/dockerfile:1
+#
+# Oktopus USP Controller — single-container build.
+#
+# Builds all Go services (ws, ws-adapter, stomp, stomp-adapter, mqtt,
+# mqtt-adapter, adapter, controller, taas) and the Next.js frontend from
+# the stepherg/oktopus fork, then packages everything into a systemd-managed
+# Ubuntu 22.04 runtime image.
+#
+# Build args:
+#   OKTOPUS_REPO  — git remote (default: https://github.com/stepherg/oktopus)
+#   OKTOPUS_REF   — branch or tag to clone (default: webpa)
+#
+# Build (from the vcpe repo root):
+#   podman build \
+#     -f services/oktopus/Containerfile \
+#     -t localhost/oktopus:latest \
+#     services/oktopus
+#
+# The container requires systemd as PID 1; run with --privileged or the
+# compose.yaml in this directory.
+
+ARG OKTOPUS_REPO=https://github.com/stepherg/oktopus
+ARG OKTOPUS_REF=webpa
+
+# ---------------------------------------------------------------------------
+# Stage 0 – clone source (kept separate so it can be cache-busted by ARG)
+# ---------------------------------------------------------------------------
+FROM alpine:3.20 AS source
+
+ARG OKTOPUS_REPO
+ARG OKTOPUS_REF
+
+RUN apk add --no-cache git
+RUN git clone --depth 1 --branch "${OKTOPUS_REF}" "${OKTOPUS_REPO}" /src
+
+# ---------------------------------------------------------------------------
+# Stage 1 – build all Go services
+# ---------------------------------------------------------------------------
+FROM docker.io/library/golang:1.24 AS builder
+
+WORKDIR /build
+
+COPY --from=source /src/backend/services/mtp/ws            ./mtp/ws
+COPY --from=source /src/backend/services/mtp/ws-adapter    ./mtp/ws-adapter
+COPY --from=source /src/backend/services/mtp/adapter       ./mtp/adapter
+COPY --from=source /src/backend/services/controller        ./controller
+COPY --from=source /src/backend/services/mtp/stomp         ./mtp/stomp
+COPY --from=source /src/backend/services/mtp/stomp-adapter ./mtp/stomp-adapter
+COPY --from=source /src/backend/services/mtp/mqtt          ./mtp/mqtt
+COPY --from=source /src/backend/services/mtp/mqtt-adapter  ./mtp/mqtt-adapter
+COPY --from=source /src/backend/services/taas              ./taas
+
+RUN CGO_ENABLED=0 GOOS=linux go build -C mtp/ws            -o /out/ws            ./cmd/ws/main.go
+RUN CGO_ENABLED=0 GOOS=linux go build -C mtp/ws-adapter    -o /out/ws-adapter    ./cmd/ws-adapter/main.go
+RUN CGO_ENABLED=0 GOOS=linux go build -C mtp/adapter       -o /out/adapter       ./cmd/adapter/main.go
+RUN CGO_ENABLED=0 GOOS=linux go build -C controller        -o /out/controller    ./cmd/controller/main.go
+RUN CGO_ENABLED=0 GOOS=linux go build -C mtp/stomp         -o /out/stomp         ./cmd/stomp/main.go
+RUN CGO_ENABLED=0 GOOS=linux go build -C mtp/stomp-adapter -o /out/stomp-adapter ./cmd/stomp-adapter/main.go
+RUN CGO_ENABLED=0 GOOS=linux go build -C mtp/mqtt          -o /out/mqtt          ./cmd/mqtt/main.go
+RUN CGO_ENABLED=0 GOOS=linux go build -C mtp/mqtt-adapter  -o /out/mqtt-adapter  ./cmd/mqtt-adapter/main.go
+RUN CGO_ENABLED=0 GOOS=linux go build -C taas              -o /out/taas          ./cmd/taas/main.go
+
+# ---------------------------------------------------------------------------
+# Stage 2 – build Next.js frontend
+# ---------------------------------------------------------------------------
+FROM node:18-slim AS frontend-builder
+
+WORKDIR /app
+COPY --from=source /src/frontend/ ./
+RUN rm -f .env .env.local
+RUN npm install
+# Controller URL is proxied through nginx on the same host.
+ENV NEXT_PUBLIC_CONTROLLER_URL=http://localhost:8000
+RUN npm run build
+
+# ---------------------------------------------------------------------------
+# Stage 3 – runtime image with systemd
+#
+# Ubuntu 22.04 (Jammy): MongoDB publishes arm64 packages for it.
+# ---------------------------------------------------------------------------
+FROM ubuntu:22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install systemd, nginx, Node.js, NATS server, and MongoDB.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+   systemd \
+   systemd-sysv \
+   curl \
+   ca-certificates \
+   gnupg \
+   net-tools \
+   nginx \
+   && \
+   # Node.js 18 LTS
+   curl -fsSL https://deb.nodesource.com/setup_18.x | bash - && \
+   apt-get install -y --no-install-recommends nodejs && \
+   # NATS server — arch-native binary
+   NATS_VER=2.10.18 && \
+   NATS_ARCH=$(dpkg --print-architecture) && \
+   curl -fsSL \
+   "https://github.com/nats-io/nats-server/releases/download/v${NATS_VER}/nats-server-v${NATS_VER}-linux-${NATS_ARCH}.tar.gz" \
+   | tar -xz --strip-components=1 -C /usr/local/bin \
+   "nats-server-v${NATS_VER}-linux-${NATS_ARCH}/nats-server" && \
+   # MongoDB 7.0 — Ubuntu Jammy repo has both amd64 and arm64
+   curl -fsSL https://www.mongodb.org/static/pgp/server-7.0.asc \
+   | gpg --dearmor -o /usr/share/keyrings/mongodb.gpg && \
+   echo "deb [ arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/mongodb.gpg ] \
+   https://repo.mongodb.org/apt/ubuntu jammy/mongodb-org/7.0 multiverse" \
+   > /etc/apt/sources.list.d/mongodb-org-7.0.list && \
+   apt-get update && apt-get install -y --no-install-recommends \
+   mongodb-org-server \
+   mongodb-mongosh && \
+   # Clean up
+   apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Mask units that conflict with running systemd inside a container.
+RUN systemctl mask \
+   systemd-logind.service \
+   getty.target \
+   console-getty.service \
+   sys-fs-fuse-connections.mount \
+   systemd-remount-fs.service \
+   dev-hugepages.mount \
+   tmp.mount
+
+# ---------------------------------------------------------------------------
+# Copy built Go binaries
+# ---------------------------------------------------------------------------
+COPY --from=builder /out/ws            /usr/local/bin/ws
+COPY --from=builder /out/ws-adapter    /usr/local/bin/ws-adapter
+COPY --from=builder /out/stomp         /usr/local/bin/stomp
+COPY --from=builder /out/stomp-adapter /usr/local/bin/stomp-adapter
+COPY --from=builder /out/mqtt          /usr/local/bin/mqtt
+COPY --from=builder /out/mqtt-adapter  /usr/local/bin/mqtt-adapter
+COPY --from=builder /out/adapter       /usr/local/bin/adapter
+COPY --from=builder /out/controller    /usr/local/bin/controller
+COPY --from=builder /out/taas          /usr/local/bin/taas
+
+# ---------------------------------------------------------------------------
+# Copy Next.js frontend
+# ---------------------------------------------------------------------------
+COPY --from=frontend-builder /app/.next          /opt/frontend/.next
+COPY --from=frontend-builder /app/public         /opt/frontend/public
+COPY --from=frontend-builder /app/package.json   /opt/frontend/package.json
+COPY --from=frontend-builder /app/package-lock.json /opt/frontend/package-lock.json
+RUN cd /opt/frontend && npm install --omit=dev
+
+# ---------------------------------------------------------------------------
+# nginx config
+# ---------------------------------------------------------------------------
+COPY nginx-main.conf /etc/nginx/nginx.conf
+COPY nginx.conf      /etc/nginx/sites-available/oktopus
+RUN rm -f /etc/nginx/sites-enabled/default && \
+   ln -s /etc/nginx/sites-available/oktopus /etc/nginx/sites-enabled/oktopus
+
+# ---------------------------------------------------------------------------
+# NATS config (no TLS by default; mount your own /etc/nats/ to enable TLS)
+# ---------------------------------------------------------------------------
+RUN mkdir -p /etc/nats
+COPY nats.cfg /etc/nats/nats.cfg
+
+# ---------------------------------------------------------------------------
+# systemd unit files (copied from the cloned source)
+# ---------------------------------------------------------------------------
+COPY --from=source /src/deploy/standalone/systemd/nats.service          /lib/systemd/system/nats.service
+COPY --from=source /src/deploy/standalone/systemd/mongod.service        /lib/systemd/system/mongod.service
+COPY --from=source /src/deploy/standalone/systemd/ws.service            /lib/systemd/system/ws.service
+COPY --from=source /src/deploy/standalone/systemd/ws-adapter.service    /lib/systemd/system/ws-adapter.service
+COPY --from=source /src/deploy/standalone/systemd/stomp.service         /lib/systemd/system/stomp.service
+COPY --from=source /src/deploy/standalone/systemd/stomp-adapter.service /lib/systemd/system/stomp-adapter.service
+COPY --from=source /src/deploy/standalone/systemd/mqtt.service          /lib/systemd/system/mqtt.service
+COPY --from=source /src/deploy/standalone/systemd/mqtt-adapter.service  /lib/systemd/system/mqtt-adapter.service
+COPY --from=source /src/deploy/standalone/systemd/adapter.service       /lib/systemd/system/adapter.service
+COPY --from=source /src/deploy/standalone/systemd/controller.service    /lib/systemd/system/controller.service
+COPY --from=source /src/deploy/standalone/systemd/taas.service          /lib/systemd/system/taas.service
+COPY --from=source /src/deploy/standalone/systemd/frontend.service      /lib/systemd/system/frontend.service
+COPY --from=source /src/deploy/standalone/systemd/admin-seed.service    /lib/systemd/system/admin-seed.service
+
+# ---------------------------------------------------------------------------
+# Environment file — rendered by vcpe at deploy time; defaults baked in.
+# ---------------------------------------------------------------------------
+RUN mkdir -p /etc/oktopus
+COPY oktopus.env /etc/oktopus/oktopus.env
+
+# Systemd drop-in: load /etc/oktopus/oktopus.env for every service.
+RUN mkdir -p /etc/systemd/system/oktopus-env.conf.d
+RUN printf '[Service]\nEnvironmentFile=-/etc/oktopus/oktopus.env\n' \
+   > /etc/systemd/system/oktopus-env.conf
+
+# Enable all services.
+RUN systemctl enable \
+   mongod.service \
+   nats.service \
+   ws.service \
+   ws-adapter.service \
+   stomp.service \
+   stomp-adapter.service \
+   mqtt.service \
+   mqtt-adapter.service \
+   adapter.service \
+   controller.service \
+   taas.service \
+   frontend.service \
+   nginx.service \
+   admin-seed.service
+
+# Ports:
+#   80    — nginx (frontend + API reverse proxy)
+#   8080  — WebSocket MTP (plain)
+#   8081  — WebSocket MTP (TLS)
+#   8000  — Controller REST API (also via nginx /api)
+#   8001  — TaaS REST API (also via nginx /api/taas)
+#   61613 — STOMP MTP
+#   1883  — MQTT MTP (plain)
+#   8883  — MQTT MTP (TLS)
+#   4222  — NATS client (internal; expose only if external NATS clients needed)
+EXPOSE 80 8080 8081 8000 8001 61613 1883 8883
+
+CMD ["/sbin/init"]

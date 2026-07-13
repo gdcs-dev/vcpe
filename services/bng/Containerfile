@@ -31,15 +31,18 @@ RUN apt-get update \
 RUN mkdir -p /runtime-config /var/log/bng /run/mosquitto \
    && chown mosquitto:mosquitto /run/mosquitto
 
-COPY container/entrypoint.sh /usr/local/bin/entrypoint.sh
+COPY container/runtime-init-bng /usr/local/bin/runtime-init-bng
+COPY container/entrypoint.sh /usr/local/bin/bng-legacy-entrypoint.sh
 COPY container/start-services.sh /usr/local/bin/start-services.sh
 COPY container/healthcheck.sh /usr/local/bin/healthcheck.sh
 COPY assets/dhcpd-notify.sh /etc/dhcpd-notify.sh
 
-RUN chmod +x /usr/local/bin/entrypoint.sh \
+RUN chmod +x /usr/local/bin/runtime-init-bng \
+   /usr/local/bin/bng-legacy-entrypoint.sh \
    /usr/local/bin/start-services.sh \
    /usr/local/bin/healthcheck.sh \
    /etc/dhcpd-notify.sh
 
-ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/entrypoint.sh"]
+ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/runtime-init-bng"]
+CMD ["/usr/local/bin/bng-legacy-entrypoint.sh"]
 HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 CMD ["/usr/local/bin/healthcheck.sh"]

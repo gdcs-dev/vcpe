@@ -1,0 +1,26 @@
+Usage: vcpe <command> [flags]
+
+Commands:
+  init      Initialize the vCPE state root
+  build     Build or pull service images from a manifest
+  push      Push service images from a manifest to their registries
+  up        Bring up a deployment from a manifest
+  plan      Show planned changes without applying
+  down      Tear down a named deployment
+  list      List known deployments
+  manifest  Manage and discover manifest files
+  status    Show control-plane status
+  logs      Show operation timeline and deployment logs
+  config    Show effective configuration
+  state     Manage persisted control-plane state
+
+Aliases:
+  apply    alias for up
+  destroy  alias for down (also requires --force)
+
+Global flags:
+  --state-root <path>  Override state root directory
+  --config <path>      Config file path
+  --socket <path>      Daemon socket path
+
+Run `vcpe <command> --help` for command-specific help.

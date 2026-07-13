@@ -21,7 +21,13 @@ RUN systemctl mask \
    oem-cm-verification.service \
    rng-tools.service \
    brcm-net.service \
-   ProcessResetDetect.service
+   ProcessResetDetect.service \
+   simulator-sysevent.service \
+   erouter-rename.service \
+   ethwan-static-apply.service \
+   ethwan-static-capture.service
+
+RUN mkdir -p /data_bak /data_bak /nvram/secure/oemdata
 
 RUN ln -s /bin/ifconfig /sbin/ifconfig
 RUN touch /nvram/ETHWAN_ENABLE
@@ -29,8 +35,9 @@ ENV SDKTARGETSYSROOT=/
 ENV TARGET_ARCH=${TARGET_ARCH}
 RUN echo 'PS1="[\u@xb10-dev \W]\\$ "' >> /home/root/.bashrc
 
-COPY container/entrypoint.sh /usr/local/bin/xb10-entrypoint.sh
-RUN chmod 0755 /usr/local/bin/xb10-entrypoint.sh
+COPY container/runtime-init-xb10 /usr/local/bin/runtime-init-xb10
+COPY container/entrypoint.sh /usr/local/bin/xb10-legacy-entrypoint.sh
+RUN chmod 0755 /usr/local/bin/runtime-init-xb10 /usr/local/bin/xb10-legacy-entrypoint.sh
 
-ENTRYPOINT ["/usr/local/bin/xb10-entrypoint.sh"]
-CMD ["/sbin/init"]
+ENTRYPOINT ["/usr/local/bin/runtime-init-xb10"]
+CMD ["/usr/local/bin/xb10-legacy-entrypoint.sh", "/sbin/init"]

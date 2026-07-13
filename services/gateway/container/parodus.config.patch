@@ -1,0 +1,27 @@
+diff --git a/src/config.c b/src/config.c
+index b710b8a..8fdae87 100644
+--- a/src/config.c
++++ b/src/config.c
+@@ -87,12 +87,19 @@ unsigned int get_algo_mask (const char *algo_str)
+   unsigned int mask_val;
+ #define BUFLEN 16
+   char tok[BUFLEN];
+-	int alg_val;
++	cjwt_code_t ret_val;
++  cjwt_alg_t alg_val;
+ 
+ 	while(NULL != algo_str)
+ 	{
+ 		algo_str = get_tok (algo_str, ':', tok, BUFLEN);
+-		alg_val = cjwt_alg_str_to_enum (tok);
++		ret_val = cjwt_alg_string_to_enum (tok, strlen(tok), &alg_val);
++    if (ret_val != CJWTE_OK) {
++      ParodusError("cjwt_alg_string_to_enum returned error: %d\n", ret_val);
++      return (unsigned int) (-1);
++
++    }
++
+ 		if ((alg_val < 0)  || (alg_val >= num_algorithms)) {
+        ParodusError("Invalid jwt algorithm %s\n", tok);
+        return (unsigned int) (-1);
+

@@ -1,123 +1,158 @@
 # Podman vCPE
 
-Phase-1 Podman replacement for the LXD-based BNG workflow in
-`meta-lxd-master`. This project currently covers BNG image build, config
-render, host networking, lifecycle management for `bng-7`, `bng-9`, and
-`bng-20`, plus first-pass `mv1-r21-{7,9,20}` containers that connect to the
-BNG using the customer-specific link model currently available in Podman, plus
-`xb10-{7,9,20}` gateway simulator containers built locally from a thin wrapper
-image on top of `localhost/xb10-dev`, tagged for publish as `ghcr.io/gdcs-dev/xb10:dev`.
+vCPE is a local development and testing environment for containerized broadband
+components (BNG, GATEWAY, routerd, WebPA, XB10, and client peers) on Podman.
 
-The repo is split into a shared platform layer and a BNG service layer:
+The only operator command is `vcpe` (the Go control plane). It reconciles a
+declarative desired-state manifest into Podman projects. Top-level scripts in
+`scripts/` are retired stubs and are not a working operator path.
 
-- `platform/`: host bridge, NAT, and Podman runtime integration
-- `services/bng/`: BNG image, compose stack, customer metadata, and smoke tests
-- `services/mv1/`: first-pass mv1 image, per-customer config, compose stack,
-  and smoke tests
-- `services/xb10/`: XB10 gateway simulator compose stack with a local wrapper
-    image that normalizes interface names onto the mv1 customer network contract
-- top-level `scripts/` and `tests/smoke/`: compatibility shims that preserve the current operator commands
+## Project Layout
 
-## Homebrew
+- `controlplane/`: Go control-plane binaries and packages (the `vcpe` operator)
+- `services/`: curated compose files and service assets per service type
+- `platform/`: host networking helpers and shared shell libs
+- `tests/smoke/`: control-plane smoke scenarios
+- `docs/`: architecture, networking, and runbook documentation
 
-The repo now includes a Homebrew formula at `Formula/vcpe.rb`
-and a top-level `vcpe` orchestrator. The intended packaged install model
-is:
+## Prerequisites
 
-```bash
-brew install podman
-brew install ./Formula/vcpe.rb
-vcpe init
-vcpe up
-```
+- macOS or Linux with Podman available
+- `podman-compose`
+- Go toolchain for local binary builds or `go run`
 
-`podman` is an explicit Homebrew dependency of the formula. On macOS you still
-need a running Podman machine before starting the deployment:
+On macOS, initialize and start a Podman machine once:
 
 ```bash
 podman machine init
 podman machine start
 ```
 
-The default deployment profile is `bng-7`, `webpa`, and `mv1-7`. User config is
-created under `~/.config/vcpe/` on first `vcpe init`.
-The current formula tracks the `main` branch until tagged release artifacts are
-published.
-
-To bootstrap a tap from this repo and sync the formula into it:
+For host-network reconciliation on macOS, `vcpe` auto-detects and delegates Linux
+network commands to the Podman machine host. You can still force delegation
+explicitly if needed:
 
 ```bash
-./scripts/homebrew-tap init gdcs-dev/vcpe
-./scripts/homebrew-tap sync gdcs-dev/vcpe
-brew trust gdcs-dev/vcpe
-brew install gdcs-dev/vcpe/vcpe
+export VCPE_HOSTNET_DELEGATED=1
 ```
 
-To sync a checked-out `homebrew-vcpe` repository next to this repo:
+## Build vcpe
 
 ```bash
-./scripts/sync-homebrew-vcpe
+cd controlplane
+go build -o bin/vcpe ./cmd/vcpe
 ```
 
-## Scope
-
-- Included: host bridge setup, Podman image build, customer render, BNG startup,
-    smoke verification, first-pass `mv1-r21-{7,9,20}` direct BNG peers,
-    `xb10-{7,9,20}` gateway simulator peers built from a local wrapper image,
-    and Alpine test clients on current LAN access ports.
-- Excluded: full MV feature parity, scene orchestration,
-  graphing, and full topology migration.
-
-## Prerequisites
-
-- macOS host with rootful Podman installed
-- `podman-compose`
-- `python3`
-- `sudo` access for bridge and firewall setup
+You can run `vcpe` as a built binary (`controlplane/bin/vcpe`) or via
+`go run ./controlplane/cmd/vcpe/main.go`.
 
 ## Quick Start
 
-For the new orchestrated path:
+Author a `vcpe.dev/v1` `Deployment` manifest. The deployment identity is
+`metadata.name`; `customer` is at most an opaque label under `metadata.labels`.
+A manifest is required by `build`, `plan`, `apply`, and `up`:
 
 ```bash
-./scripts/vcpe init
-./scripts/vcpe up
-./scripts/vcpe status
+cat > ./manifest-bng-7.yaml <<'EOF'
+apiVersion: vcpe.dev/v1
+kind: Deployment
+metadata:
+  name: bng-7
+  labels:
+    customer: "7"
+spec:
+  maxReplicasPerService: 3
+  maxActiveDeployments: 10
+  networks:
+    - role: mgmt
+      ipv4: { cidr: 10.10.10.0/24, gateway: 10.10.10.1, pool: { start: 10.10.10.10, end: 10.10.10.250 } }
+    - role: wan
+      nat: true
+      firewall: true
+      ipv4: { cidr: 10.7.200.0/24, gateway: 10.7.200.1, pool: { start: 10.7.200.10, end: 10.7.200.250 } }
+    - role: cm
+      ipv4: { cidr: 10.7.201.0/24, gateway: 10.7.201.1, pool: { start: 10.7.201.10, end: 10.7.201.250 } }
+  services:
+    - name: bng
+      type: bng
+      replicas: 1
+      image: { repository: ghcr.io/gdcs-dev/bng, tag: dev, pullPolicy: build-if-missing }
+      interfaces:
+        - { role: mgmt }
+        - { role: wan, defaultRoute: true }
+        - { role: cm }
+      config:
+        access:
+          - role: wan
+            dhcp4:
+              subnet: 10.7.200.0/24
+              ranges:
+                - { start: 10.7.200.100, end: 10.7.200.200 }
+              options: { routers: 10.7.200.1 }
+              leaseSeconds: 3600
+EOF
 ```
-
-The lower-level per-service commands remain available:
 
 ```bash
-./scripts/net setup
-./scripts/bng build
-./scripts/bng render 7
-./scripts/bng up 7
-./scripts/mv1 build
-./scripts/mv1 up 7
-./scripts/xb10 build
-./scripts/xb10 up 7
-./scripts/client up mv1-r21-7-p1
-./scripts/bng status 7
+controlplane/bin/vcpe init
+controlplane/bin/vcpe up --manifest ./manifest-bng-7.yaml
+controlplane/bin/vcpe status --name bng-7
+controlplane/bin/vcpe logs --name bng-7
+controlplane/bin/vcpe down --name bng-7
 ```
 
-To push the repo-built images to GHCR, export `GHCR_USERNAME` and `GHCR_TOKEN`
-or `GITHUB_USERNAME` and `GITHUB_TOKEN`, then run `./scripts/bng push`,
-`./scripts/mv1 push`, `./scripts/webpa push`, or `./scripts/xb10 push`.
+Deployment-targeting commands (`status`, `logs`, `down`, `destroy`, `service`)
+select a deployment by `--name <metadata.name>`.
 
-To inspect or change the packaged config:
+If you change a deployment in a disruptive way (for example a network CIDR
+change), acknowledge it explicitly:
 
 ```bash
-./scripts/vcpe config show
-./scripts/vcpe config set VCPE_PULL_POLICY always
-./scripts/vcpe profile list
-./scripts/vcpe profile show
-./scripts/vcpe profile create bng-9 default
-./scripts/vcpe profile set bng-9 DEPLOY_BNG_CUSTOMER_ID 9
-./scripts/vcpe profile set bng-9 DEPLOY_MV1_CUSTOMER_ID 9
-./scripts/vcpe profile use bng-9
+controlplane/bin/vcpe up --manifest ./manifest-bng-7.yaml --allow-disruptive
 ```
 
-Built-in deployment profiles currently include `default`, `bng-9`, `bng-20`,
-and `xb10-7`.
+## Service Types
 
-See `docs/runbook.md` for the full operator workflow.
+Each service declares a `type` that selects a registered behavior: `bng`, `gateway`,
+`webpa`, or `generic-container`. A type's `config` block is decoded strictly
+against that type's schema; unknown fields are rejected before apply. New
+workloads are added by registering a new service type in the control plane, not
+by editing the planner or renderer.
+
+## State Schema Cutover
+
+Persisted state is stamped with `schemaVersion: vcpe.dev/v1`. If you run against
+a state root written by an incompatible schema, `vcpe` refuses to operate and
+directs you to reset it:
+
+```bash
+controlplane/bin/vcpe state reset
+```
+
+## Optional Makefile Wrappers
+
+The top-level Makefile provides optional convenience wrappers. It does not own
+or redefine orchestration behavior.
+
+```bash
+make help
+make build
+make release-gate
+```
+
+## Smoke Checks
+
+```bash
+./tests/smoke/vcpe-primary-status.sh
+./tests/smoke/vcpe-service-coverage.sh
+./tests/smoke/controlplane-bng-7.sh
+./tests/smoke/controlplane-bng-20.sh
+```
+
+## Troubleshooting
+
+- Inspect resolved control-plane config: `controlplane/bin/vcpe config show`
+- View desired/planned/observed state: `controlplane/bin/vcpe status --name bng-7 --json`
+- View operation context + container logs: `controlplane/bin/vcpe logs --name bng-7`
+
+For deeper procedures, see `docs/runbook.md`.

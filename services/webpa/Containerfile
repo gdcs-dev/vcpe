@@ -9,7 +9,6 @@ RUN CGO_ENABLED=0 GOOS=linux \
    && go install github.com/xmidt-org/tr1d1um@v0.12.5 \
    && go install github.com/xmidt-org/argus@v0.11.58 \
    && go install github.com/xmidt-org/caduceus@v0.11.13 \
-   && go install github.com/xmidt-org/petasos@v0.4.6 \
    && go install github.com/xmidt-org/themis@latest
 
 FROM docker.io/hashicorp/consul:1.20.3 AS consul_builder
@@ -25,11 +24,14 @@ RUN apt-get update \
    curl \
    iproute2 \
    iputils-ping \
+   isc-dhcp-client \
    procps \
    tcpdump \
    wget \
    net-tools \
    dnsutils \
+   httpie \
+   jq \
    && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /go/bin/talaria  /usr/bin/talaria
@@ -37,29 +39,30 @@ COPY --from=builder /go/bin/scytale  /usr/bin/scytale
 COPY --from=builder /go/bin/tr1d1um  /usr/bin/tr1d1um
 COPY --from=builder /go/bin/argus    /usr/bin/argus
 COPY --from=builder /go/bin/caduceus /usr/bin/caduceus
-COPY --from=builder /go/bin/petasos  /usr/bin/petasos
 COPY --from=builder /go/bin/themis   /usr/bin/themis
 COPY --from=consul_builder /bin/consul /usr/bin/consul
 
-RUN mkdir -p /etc/talaria /etc/scytale /etc/tr1d1um /etc/argus /etc/caduceus /etc/petasos /etc/themis /etc/consul.d
+RUN mkdir -p /etc/talaria /etc/scytale /etc/tr1d1um /etc/argus /etc/caduceus /etc/themis /etc/consul.d
 
 COPY assets/talaria.yaml  /etc/talaria/talaria.yaml
 COPY assets/scytale.yaml  /etc/scytale/scytale.yaml
 COPY assets/tr1d1um.yaml  /etc/tr1d1um/tr1d1um.yaml
 COPY assets/argus.yaml    /etc/argus/argus.yaml
 COPY assets/caduceus.yaml /etc/caduceus/caduceus.yaml
-COPY assets/petasos.yaml  /etc/petasos/petasos.yaml
 COPY assets/themis.yaml   /etc/themis/themis.yaml
 COPY assets/consul.json   /etc/consul.d/consul.json
-COPY container/entrypoint.sh     /usr/local/bin/entrypoint.sh
+COPY container/runtime-init-webpa /usr/local/bin/runtime-init-webpa
+COPY container/entrypoint.sh     /usr/local/bin/webpa-legacy-entrypoint.sh
 COPY container/start-services.sh /usr/local/bin/start-services.sh
 COPY container/healthcheck.sh    /usr/local/bin/healthcheck.sh
 
 RUN chmod +x \
-   /usr/local/bin/entrypoint.sh \
+   /usr/local/bin/runtime-init-webpa \
+   /usr/local/bin/webpa-legacy-entrypoint.sh \
    /usr/local/bin/start-services.sh \
    /usr/local/bin/healthcheck.sh
 
-ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+ENTRYPOINT ["/usr/local/bin/runtime-init-webpa"]
+CMD ["/usr/local/bin/webpa-legacy-entrypoint.sh"]
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
    CMD ["/usr/local/bin/healthcheck.sh"]

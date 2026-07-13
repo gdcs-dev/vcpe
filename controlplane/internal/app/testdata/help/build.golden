@@ -1,0 +1,17 @@
+Usage: vcpe build --manifest <path> [flags]
+
+Resolves image actions (build, pull, or noop) for all services in the manifest without starting any containers. Respects the image pull policy declared in the manifest. Defaults to building a multi-arch OCI manifest list for linux/amd64 and linux/arm64; requires QEMU emulation on the Podman machine for cross-arch targets.
+
+Required flags:
+  --manifest <path>       Path to deployment manifest YAML
+
+Optional flags:
+  --platform <csv>        Comma-separated OS/arch targets (default: linux/amd64,linux/arm64)
+  --no-cache              Disable layer cache when building images
+  --state-root <path>     Override the default state root directory
+  --json                  Emit structured JSON output
+
+Examples:
+  vcpe build --manifest ./manifest-bng-7.yaml
+  vcpe build --manifest ./manifest.yaml --platform linux/amd64
+  vcpe build --manifest ./manifest.yaml --no-cache

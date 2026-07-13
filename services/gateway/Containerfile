@@ -1,0 +1,209 @@
+##############################################################################
+# Stage 1: Build all C/C++ dependencies from source
+##############################################################################
+FROM docker.io/library/ubuntu:24.04 AS builder
+
+RUN apt-get update && apt-get upgrade -y && \
+   DEBIAN_FRONTEND=noninteractive apt-get -y install \
+   git build-essential gcc g++ \
+   cmake meson ninja-build \
+   autoconf automake libtool pkg-config \
+   libssl-dev libcjson-dev libmsgpack-dev libspdlog-dev \
+   libcurl4-openssl-dev libsqlite3-dev libz-dev \
+   libcunit1-dev liburiparser-dev libarchive-dev \
+   libmnl-dev libnl-3-dev libnl-route-3-dev libsystemd-dev \
+   libjansson-dev libglib2.0-dev libc-ares-dev uuid-dev \
+   liblog4c-dev && \
+   rm -rf /var/lib/apt/lists/*
+
+ARG VERSION
+ENV BUILD_DIR=/opt/git
+ENV PATCH_DIR=/opt/patches
+ENV INSTALL_DIR=/opt/install
+ENV INSTALL_PREFIX=/opt/install/usr
+
+RUN mkdir -p /opt/git && chown -R root:root /opt/git
+RUN mkdir -p /opt/install \
+   && mkdir -p /opt/install/usr/lib/systemd/system \
+   && mkdir -p /opt/install/etc
+RUN mkdir -p /opt/patches
+COPY container/*.patch /opt/patches/
+RUN git clone -b v1.0.3 https://github.com/Comcast/cimplog.git $BUILD_DIR/cimplog \
+   && cd $BUILD_DIR/cimplog \
+   && cmake CMakeLists.txt -DBUILD_TESTING=OFF -DCMAKE_INSTALL_PREFIX=$INSTALL_PREFIX \
+   && make && make install
+RUN git clone --single-branch -b v1.2.7 https://github.com/Comcast/trower-base64.git $BUILD_DIR/trower-base64 \
+   && cd $BUILD_DIR/trower-base64 \
+   && patch -i $PATCH_DIR/trower-base64.patch \
+   && meson setup --prefix=$INSTALL_PREFIX --libdir=$INSTALL_PREFIX/lib build \
+   && cd build && ninja all && ninja install
+RUN git clone --single-branch -b v2.3.0 https://github.com/Comcast/cjwt.git $BUILD_DIR/cjwt \
+   && cd $BUILD_DIR/cjwt \
+   && patch -i $PATCH_DIR/cjwt.patch \
+   && meson setup --prefix=$INSTALL_PREFIX --libdir=$INSTALL_PREFIX/lib build \
+   && cd build && ninja all && ninja install
+RUN git clone --single-branch -b 1.2.1 https://github.com/nanomsg/nanomsg.git $BUILD_DIR/nanomsg \
+   && cd $BUILD_DIR/nanomsg \
+   && cmake CMakeLists.txt -DCMAKE_INSTALL_PREFIX=$INSTALL_PREFIX \
+   && make && make install
+RUN git clone --single-branch -b 1.0.4 https://github.com/Comcast/nopoll.git $BUILD_DIR/nopoll \
+   && cd $BUILD_DIR/nopoll \
+   && ./autogen.sh \
+   && ./configure --prefix=$INSTALL_PREFIX \
+   && make && make install
+RUN git clone -b master https://github.com/Comcast/wrp-c.git $BUILD_DIR/wrp-c \
+   && cd $BUILD_DIR/wrp-c \
+   && git checkout 9587e8db33dbbfcd9b78ef66cc2eaf16dfb9afcf \
+   && cmake CMakeLists.txt \
+   -DBUILD_TESTING=OFF \
+   -DBUILD_YOCTO=true \
+   -DCMAKE_INSTALL_PREFIX=$INSTALL_PREFIX \
+   -DCMAKE_C_FLAGS="-I/usr/include \
+   -I$INSTALL_PREFIX/include" \
+   && make && make install
+RUN git clone --single-branch -b master https://github.com/xmidt-org/libparodus.git $BUILD_DIR/libparodus \
+   && cd $BUILD_DIR/libparodus \
+   && cmake CMakeLists.txt \
+   -DCMAKE_INSTALL_PREFIX=$INSTALL_PREFIX \
+   -DBUILD_YOCTO=ON \
+   -DCMAKE_INSTALL_PREFIX=$INSTALL_PREFIX \
+   -DCMAKE_C_FLAGS="-I/usr/include/cjson \
+   -I$INSTALL_PREFIX/include/nopoll \
+   -I$INSTALL_PREFIX/include/wrp-c \
+   -I$INSTALL_PREFIX/include \
+   -I$INSTALL_PREFIX/include/rbus \
+   -L$INSTALL_PREFIX/lib" \
+   && make \
+   && make install \
+   && cp -af $INSTALL_DIR/* /
+RUN git clone https://github.com/antirez/linenoise.git $BUILD_DIR/linenoise \
+   && cd $BUILD_DIR/linenoise \
+   && cc -fPIC -shared -rdynamic -o liblinenoise.so linenoise.c \
+   && cp liblinenoise.so /usr/lib/ \
+   && cp linenoise.h /usr/include/ \
+   && cp liblinenoise.so $INSTALL_PREFIX/lib/
+RUN git clone --single-branch -b v2.7.0 https://github.com/rdkcentral/rbus.git $BUILD_DIR/rbus \
+   && cd $BUILD_DIR/rbus && mkdir build && cd build \
+   && cmake CMakeLists.txt -DCMAKE_INSTALL_PREFIX=$INSTALL_PREFIX \
+   -DCMAKE_BUILD_TYPE=Debug \
+   -DMSG_ROUNDTRIP_TIME=ON .. \
+   && make && make install \
+   && cp -af $INSTALL_DIR/* / \
+   && mkdir -p $INSTALL_PREFIX/lib/systemd/system \
+   && cp $BUILD_DIR/rbus/conf/rbus.service $INSTALL_PREFIX/lib/systemd/system/ \
+   && chmod 644 $INSTALL_PREFIX/lib/systemd/system/rbus.service
+RUN git clone --single-branch -b v2.0.0 https://github.com/rdkcentral/rdk_logger.git $BUILD_DIR/rdk_logger \
+   && cd $BUILD_DIR/rdk_logger \
+   && autoreconf --install \
+   && ./configure --prefix=$INSTALL_PREFIX \
+   && make && make install \
+   && cp ./debug.ini $INSTALL_DIR/etc/
+RUN git clone https://github.com/rdkcentral/WebconfigFramework.git $BUILD_DIR/WebconfigFramework \
+   && cd $BUILD_DIR/WebconfigFramework \
+   && autoreconf --install \
+   && export CFLAGS="-I $INSTALL_PREFIX/include -I $INSTALL_PREFIX/include/rbus -I $INSTALL_PREFIX/include/rtmessage" \
+   && export LDFLAGS="-L$INSTALL_PREFIX/lib" \
+   && ./configure --prefix=$INSTALL_PREFIX \
+   && make && make install \
+   && cp ./include/* $INSTALL_PREFIX/include/
+RUN git clone --single-branch -b 1.6.0 https://github.com/rdkcentral/telemetry.git $BUILD_DIR/telemetry \
+   && cd $BUILD_DIR/telemetry \
+   && patch -p1 < $PATCH_DIR/telemetry_xconfclient.patch \
+   && autoreconf --install \
+   && export CFLAGS="-DENABLE_REMOTE_PROFILE_DOWNLOAD -I$INSTALL_PREFIX/include -I$INSTALL_PREFIX/include/rbus -I$INSTALL_PREFIX/include/rtmessage" \
+   && export LDFLAGS="-L$INSTALL_PREFIX/lib" \
+   && ./configure --prefix=$INSTALL_PREFIX \
+   && make && make install
+RUN git clone -b master https://github.com/Comcast/parodus.git $BUILD_DIR/parodus \
+   && cd $BUILD_DIR/parodus \
+   && git checkout 169e0c8a1f6d59987f5ab7ac48570d04b3efa61e \
+   && patch -p1 < $PATCH_DIR/parodus.config.patch \
+   && patch -p1 < $PATCH_DIR/parodus_conn_interface.c.patch \
+   && cmake CMakeLists.txt -DBUILD_YOCTO=true \
+   -DBUILD_TESTING=OFF -DENABLE_WEBCFGBIN=ON \
+   -DCMAKE_INSTALL_PREFIX=$INSTALL_PREFIX \
+   -DCMAKE_C_FLAGS="-I/usr/include/cjson \
+   -I$INSTALL_PREFIX/include/nopoll \
+   -I$INSTALL_PREFIX/include/wrp-c \
+   -I$INSTALL_PREFIX/include \
+   -I$INSTALL_PREFIX/include/rbus \
+   -L$INSTALL_PREFIX/lib" \
+   && make && make install
+RUN git clone -b main https://github.com/stepherg/parodus2rbus.git $BUILD_DIR/parodus2rbus \
+   && cd $BUILD_DIR/parodus2rbus \
+   && cmake CMakeLists.txt \
+   -DCMAKE_INSTALL_PREFIX=$INSTALL_PREFIX \
+   -DCMAKE_C_FLAGS="-I/usr/include/cjson \
+   -I$INSTALL_PREFIX/include/rbus \
+   -L$INSTALL_PREFIX/lib" \
+   && make && make install
+RUN git clone https://github.com/stepherg/rbus-elements.git $BUILD_DIR/rbus-elements \
+   && cd $BUILD_DIR/rbus-elements && mkdir build && cd build \
+   && cmake -DCMAKE_INSTALL_PREFIX=$INSTALL_PREFIX .. \
+   && make && make install \
+   && mkdir -p $INSTALL_DIR/etc/rbus-elements \
+   && cp elements.json $INSTALL_DIR/etc/rbus-elements/
+RUN git clone https://github.com/stepherg/syscfg.git $BUILD_DIR/syscfg \
+   && cd $BUILD_DIR/syscfg && mkdir build && cd build \
+   && cmake -DCMAKE_INSTALL_PREFIX=$INSTALL_PREFIX .. \
+   && make && make install
+COPY src/apparmor-simulator /opt/git/apparmor-simulator
+RUN cd /opt/git/apparmor-simulator && mkdir build && cd build \
+   && cmake CMakeLists.txt \
+   -DCMAKE_INSTALL_PREFIX=$INSTALL_PREFIX \
+   -DCMAKE_C_FLAGS="-I/usr/include/cjson \
+   -I$INSTALL_PREFIX/include/nopoll \
+   -I$INSTALL_PREFIX/include/wrp-c \
+   -I$INSTALL_PREFIX/include \
+   -I$INSTALL_PREFIX/include/rbus \
+   -L$INSTALL_PREFIX/lib" \
+   .. \
+   && make && make install
+
+##############################################################################
+# Stage 2: Runtime image
+##############################################################################
+FROM docker.io/library/ubuntu:24.04
+
+RUN apt-get update && apt-get upgrade -y && \
+   DEBIAN_FRONTEND=noninteractive apt-get -y install \
+   net-tools dnsutils dnsmasq systemd-sysv iputils-ping syslog-ng jq netplan.io \
+   libcjson1 libmsgpackc2 curl liblog4c3t64 libjansson4 libspdlog-dev && \
+   rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /opt/install/ /
+
+COPY --chmod=600 container/50-cloud-init.yaml /etc/netplan/
+COPY --chmod=644 container/device.properties /etc/
+COPY --chmod=644 container/output.json /opt/
+COPY --chmod=644 container/parodus.service /usr/lib/systemd/system/
+COPY --chmod=755 container/start_parodus.sh /usr/local/bin/
+RUN systemctl enable parodus
+COPY --chmod=644 container/parodus2rbus.service /usr/lib/systemd/system/
+RUN systemctl enable parodus2rbus
+RUN systemctl enable rbus
+COPY --chmod=644 container/rbus-elements.service /usr/lib/systemd/system/
+RUN systemctl enable rbus-elements
+COPY --chmod=644 container/syscfg.service /usr/lib/systemd/system/
+COPY --chmod=755 container/syscfg_init.sh /usr/local/bin/
+RUN systemctl enable syscfg
+COPY --chmod=644 container/telemetry2_0.service /usr/lib/systemd/system/
+RUN mkdir -p /nvram
+RUN systemctl enable telemetry2_0
+
+COPY --chmod=644 container/apparmor-simulator.service /usr/lib/systemd/system/
+RUN systemctl enable apparmor-simulator
+
+COPY container/runtime-init-gateway /usr/local/bin/runtime-init-gateway
+COPY container/entrypoint.sh /usr/local/bin/gateway-entrypoint.sh
+COPY container/healthcheck.sh /usr/local/bin/healthcheck.sh
+RUN chmod +x /usr/local/bin/runtime-init-gateway /usr/local/bin/gateway-entrypoint.sh /usr/local/bin/healthcheck.sh
+RUN systemctl disable dnsmasq
+RUN systemctl mask systemd-networkd-wait-online
+
+ENTRYPOINT ["/usr/local/bin/runtime-init-gateway"]
+CMD ["/usr/local/bin/gateway-entrypoint.sh"]
+HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 CMD ["/usr/local/bin/healthcheck.sh"]
+
+LABEL org.opencontainers.image.source=https://github.com/gdcs-dev/vcpe
+LABEL org.opencontainers.image.description="Gateway Container from the vCPE project"

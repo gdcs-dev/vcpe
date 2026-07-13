@@ -1,0 +1,9 @@
+Usage: vcpe config <subcommand> [flags]
+
+Displays the resolved configuration values that vcpe will use, including the effective state root, socket path, and any environment overrides.
+
+Optional flags:
+  --state-root <path>     Override the default state root directory
+
+Examples:
+  vcpe config show
