@@ -50,20 +50,24 @@ func resolveNetworks(doc manifest.Document) []plan.Network {
 			bridge, _ = plan.DeriveBridgeName(doc.Metadata.Name, n.Role)
 		}
 		out = append(out, plan.Network{
-			Role:     n.Role,
-			Bridge:   bridge,
-			NAT:      n.NAT,
-			Firewall: n.Firewall,
-			IPv4:     resolveFamily(n.IPv4),
-			IPv6:     resolveFamily(n.IPv6),
+			Role:          n.Role,
+			Bridge:        bridge,
+			NAT:           n.NAT,
+			Firewall:      n.Firewall,
+			IPv4:          resolveFamily(n.IPv4),
+			IPv6:          resolveFamily(n.IPv6),
+			Driver:        n.Driver,
+			DriverOptions: n.DriverOptions,
+			IPAMDriver:    n.IPAMDriver,
 		})
 	}
-	// For networks that a gateway service uses as LAN ports the container's
-	// brlan0 will claim the network gateway IP (.1). The Podman host bridge
-	// must not also claim it or ARP conflicts arise. Use the last usable IP
-	// (.254 for /24) for the Podman bridge on those networks instead.
+	// HostBridgeGateway/PodmanDNS are bridge-specific. Skip derivation for
+	// non-bridge drivers (macvlan/ipvlan have no host bridge to configure).
 	lanRoles := gatewayLANRoles(doc)
 	for i, n := range out {
+		if n.Driver != "" && n.Driver != "bridge" {
+			continue // non-bridge driver — no host bridge to configure
+		}
 		if lanRoles[n.Role] && n.IPv4 != nil {
 			if gw, err := lastUsableIP(n.IPv4.CIDR); err == nil {
 				out[i].HostBridgeGateway = gw

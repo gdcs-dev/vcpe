@@ -171,3 +171,59 @@ func TestValidateAcceptsIPv6OnlyNetwork(t *testing.T) {
 		t.Fatalf("expected IPv6-only network to validate, got %v", err)
 	}
 }
+
+func TestValidateAcceptsMacvlanWithParent(t *testing.T) {
+	doc := validDoc()
+	doc.Spec.Networks[0] = Network{
+		Role:          "wan",
+		Driver:        "macvlan",
+		DriverOptions: map[string]string{"parent": "eth0"},
+		IPv4:          &AddressFamily{CIDR: "10.7.200.0/24", Gateway: "10.7.200.1"},
+	}
+	if err := Validate(doc); err != nil {
+		t.Fatalf("expected macvlan with parent to validate, got %v", err)
+	}
+}
+
+func TestValidateRejectsMacvlanWithoutParent(t *testing.T) {
+	doc := validDoc()
+	doc.Spec.Networks[0] = Network{
+		Role:   "wan",
+		Driver: "macvlan",
+		IPv4:   &AddressFamily{CIDR: "10.7.200.0/24", Gateway: "10.7.200.1"},
+	}
+	err := Validate(doc)
+	if err == nil || !strings.Contains(err.Error(), "parent") {
+		t.Fatalf("expected missing parent error, got %v", err)
+	}
+}
+
+func TestValidateRejectsNATOnMacvlan(t *testing.T) {
+	doc := validDoc()
+	doc.Spec.Networks[0] = Network{
+		Role:          "wan",
+		Driver:        "macvlan",
+		NAT:           true,
+		DriverOptions: map[string]string{"parent": "eth0"},
+		IPv4:          &AddressFamily{CIDR: "10.7.200.0/24", Gateway: "10.7.200.1"},
+	}
+	err := Validate(doc)
+	if err == nil || !strings.Contains(err.Error(), "nat") {
+		t.Fatalf("expected nat-on-macvlan error, got %v", err)
+	}
+}
+
+func TestValidateRejectsFirewallOnIPVlan(t *testing.T) {
+	doc := validDoc()
+	doc.Spec.Networks[0] = Network{
+		Role:          "wan",
+		Driver:        "ipvlan",
+		Firewall:      true,
+		DriverOptions: map[string]string{"parent": "eth0"},
+		IPv4:          &AddressFamily{CIDR: "10.7.200.0/24", Gateway: "10.7.200.1"},
+	}
+	err := Validate(doc)
+	if err == nil || !strings.Contains(err.Error(), "firewall") {
+		t.Fatalf("expected firewall-on-ipvlan error, got %v", err)
+	}
+}

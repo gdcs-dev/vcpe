@@ -4,7 +4,7 @@ Define the local declarative CLI contract and safety guarantees for planning and
 ## Requirements
 
 ### Requirement: Declarative local control-plane commands
-The system SHALL provide a local CLI contract with `plan`, `apply`, `status`, and `destroy` commands for deployments, and SHALL expose `init`, `build`, `up`, `down`, `logs`, `config`, and `state` commands as Go-owned operator commands rather than bash-owned behavior. Every command SHALL support `-h`/`--help` to display structured help text and exit 0.
+The system SHALL provide a local CLI contract with `plan`, `apply`, `status`, and `destroy` commands for deployments, and SHALL expose `init`, `build`, `up`, `down`, `logs`, `config`, and `state` commands as Go-owned operator commands rather than bash-owned behavior. Every command SHALL support `-h`/`--help` to display structured help text and exit 0. The `down` command SHALL remove the Podman networks created for the deployment after stopping all compose services. Network removal failures SHALL be treated as warnings and SHALL NOT prevent state cleanup.
 
 #### Scenario: Plan reports intended changes
 - **WHEN** an operator runs `plan` for a valid deployment manifest
@@ -17,6 +17,14 @@ The system SHALL provide a local CLI contract with `plan`, `apply`, `status`, an
 #### Scenario: Help flag exits zero on any command
 - **WHEN** an operator runs `vcpe <command> --help` or `vcpe --help`
 - **THEN** the system prints structured help text and exits with code 0 without executing the command
+
+#### Scenario: down removes networks
+- **WHEN** an operator runs `vcpe down --name <deployment>`
+- **THEN** after stopping all compose services the system removes the Podman networks that were created for the deployment
+
+#### Scenario: down completes even if network removal fails
+- **WHEN** an operator runs `vcpe down --name <deployment>` and a network cannot be removed
+- **THEN** the system logs a warning for the failed network but continues, clears IPAM leases, and removes the deployment snapshot
 
 ### Requirement: Safe destructive operation guard
 The system SHALL require explicit user confirmation or force flag semantics before destroying an active deployment, and SHALL require explicit disruptive-change approval before applying changes that alter CIDRs, reset identities, remap volumes, or scale active services to zero.

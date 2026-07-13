@@ -26,6 +26,12 @@ type Network struct {
 	Firewall bool
 	IPv4     *Family
 	IPv6     *Family
+	// Driver is the Podman network driver. Empty means bridge (Podman default).
+	Driver string
+	// DriverOptions are driver-specific options (e.g., parent for macvlan).
+	DriverOptions map[string]string
+	// IPAMDriver is an optional custom IPAM driver (passthrough).
+	IPAMDriver string
 	// HostBridgeGateway, when non-empty, is passed as --gateway to
 	// podman network create so the Podman host bridge uses this IP
 	// instead of the default (first usable IP). Set by the planner for

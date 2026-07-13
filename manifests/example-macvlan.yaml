@@ -1,0 +1,169 @@
+apiVersion: vcpe.dev/v1
+kind: Deployment
+metadata:
+  name: example-macvlan
+  labels:
+    scenario: example-macvlan
+
+spec:
+  maxReplicasPerService: 3
+  maxActiveDeployments: 10
+
+  # Network topology — WAN uses macvlan so the BNG container appears directly
+  # on the physical LAN (eth0). External physical devices send DHCP requests
+  # to eth0 and receive leases from the BNG's DHCP server.
+  #
+  # Change driverOptions.parent to match your physical NIC (e.g. eth0, ens3).
+  # On macOS with Podman machine, use the VM's NIC name (e.g. enp0s1).
+  #
+  #   [physical devices]
+  #        |
+  #   eth0 (macvlan parent) ─── BNG wan interface (DHCP server)
+  #        |
+  #   mgmt-bridge (10.10.10.0/24) ── BNG eth0, WebPA eth0
+  #        |
+  #   cm-bridge   (10.7.201.0/24) ── BNG eth2 (DHCP server for CM segment)
+  #        |                              GATEWAY cm
+  #   lan-p1-bridge (192.168.10.0/24) ── GATEWAY brlan0, client eth0
+  #   lan-p2-bridge (192.168.20.0/24) ── GATEWAY (unused port)
+  #   lan-p3-bridge (192.168.30.0/24) ── GATEWAY (unused port)
+  #   lan-p4-bridge (192.168.40.0/24) ── GATEWAY (unused port)
+
+  networks:
+    - role: mgmt
+      ipv4:
+        cidr: 10.10.10.0/24
+        gateway: 10.10.10.1
+        pool: { start: 10.10.10.10, end: 10.10.10.250 }
+
+    # WAN — macvlan network so BNG appears directly on the physical LAN.
+    # nat and firewall are not applicable to macvlan networks.
+    - role: wan
+      driver: macvlan
+      ipamDriver: host-local
+      driverOptions:
+        parent: eth0      # ← change to your physical NIC name
+      ipv4:
+        cidr: 10.7.200.0/24
+        gateway: 10.7.200.1
+        pool: { start: 10.7.200.10, end: 10.7.200.20 }
+
+    - role: cm
+      ipv4:
+        cidr: 10.7.201.0/24
+        gateway: 10.7.201.1
+        pool: { start: 10.7.201.10, end: 10.7.201.250 }
+
+    # GATEWAY LAN ports
+    - role: lan-p1
+      ipv4:
+        cidr: 192.168.10.0/24
+        gateway: 192.168.10.1
+        pool: { start: 192.168.10.10, end: 192.168.10.250 }
+
+    - role: lan-p2
+      ipv4:
+        cidr: 192.168.20.0/24
+        gateway: 192.168.20.1
+        pool: { start: 192.168.20.10, end: 192.168.20.250 }
+
+    - role: lan-p3
+      ipv4:
+        cidr: 192.168.30.0/24
+        gateway: 192.168.30.1
+        pool: { start: 192.168.30.10, end: 192.168.30.250 }
+
+    - role: lan-p4
+      ipv4:
+        cidr: 192.168.40.0/24
+        gateway: 192.168.40.1
+        pool: { start: 192.168.40.10, end: 192.168.40.250 }
+
+  services:
+    # ── BNG ─────────────────────────────────────────────────────────────────
+    # Broadband Network Gateway: DHCP4/RADVD/DNS on WAN and CM segments.
+    # The BNG's wan interface appears on the physical LAN via macvlan.
+    # Physical devices on that LAN receive DHCP leases from the BNG.
+    - name: bng
+      type: bng
+      replicas: 1
+      image:
+        repository: ghcr.io/gdcs-dev/bng
+        tag: dev
+        pullPolicy: always-pull
+        buildContext: services/bng
+      interfaces:
+        - { role: mgmt }
+        - { role: wan, defaultRoute: true }
+        - { role: cm }
+      config:
+        access:
+          - role: wan
+            dhcp4:
+              subnet: 10.7.200.0/24
+              ranges:
+                - { start: 10.7.200.100, end: 10.7.200.200 }
+              options:
+                routers: 10.7.200.1
+              leaseSeconds: 3600
+          - role: cm
+            dhcp4:
+              subnet: 10.7.201.0/24
+              ranges:
+                - { start: 10.7.201.100, end: 10.7.201.200 }
+              options:
+                routers: 10.7.201.1
+              leaseSeconds: 3600
+
+    # ── WebPA / WebConfig ────────────────────────────────────────────────────
+    - name: webpa
+      type: webpa
+      replicas: 1
+      image:
+        repository: ghcr.io/gdcs-dev/webpa
+        tag: dev
+        pullPolicy: always-pull
+        buildContext: services/webpa
+      interfaces:
+        - { role: mgmt }
+      dependsOn:
+        - bng
+
+    # ── GATEWAY ──────────────────────────────────────────────────────────────
+    - name: gateway
+      type: gateway
+      replicas: 1
+      image:
+        repository: ghcr.io/gdcs-dev/gateway
+        tag: dev
+        pullPolicy: always-pull
+        buildContext: services/gateway
+      interfaces:
+        - { role: wan }
+        - { role: cm }
+        - { role: lan-p1 }
+        - { role: lan-p2 }
+        - { role: lan-p3 }
+        - { role: lan-p4 }
+      config:
+        lan:
+          ipv4: 192.168.10.1/24
+          dhcpStart: 192.168.10.100
+          dhcpEnd: 192.168.10.200
+      dependsOn:
+        - bng
+
+    # ── Event Sink ────────────────────────────────────────────────────────────
+    - name: event-sink
+      type: event-sink
+      replicas: 1
+      image:
+        repository: ghcr.io/gdcs-dev/event-sink
+        tag: dev
+        pullPolicy: always-pull
+        buildContext: services/event-sink
+        containerfile: services/event-sink/Containerfile
+      interfaces:
+        - { role: mgmt }
+      dependsOn:
+        - webpa

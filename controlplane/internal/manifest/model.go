@@ -50,6 +50,15 @@ type Network struct {
 	Firewall bool           `json:"firewall,omitempty" yaml:"firewall,omitempty"`
 	IPv4     *AddressFamily `json:"ipv4,omitempty" yaml:"ipv4,omitempty"`
 	IPv6     *AddressFamily `json:"ipv6,omitempty" yaml:"ipv6,omitempty"`
+	// Driver selects the Podman network driver. Empty means the Podman default
+	// (bridge). Supported values include "macvlan" and "ipvlan".
+	Driver string `json:"driver,omitempty" yaml:"driver,omitempty"`
+	// DriverOptions are driver-specific options passed as -o key=val to
+	// podman network create. macvlan and ipvlan require "parent".
+	DriverOptions map[string]string `json:"driverOptions,omitempty" yaml:"driverOptions,omitempty"`
+	// IPAMDriver selects an alternative IPAM driver. Passed through to
+	// podman network create --ipam-driver. Not integrated with vcpe's pool IPAM.
+	IPAMDriver string `json:"ipamDriver,omitempty" yaml:"ipamDriver,omitempty"`
 }
 
 type AddressFamily struct {

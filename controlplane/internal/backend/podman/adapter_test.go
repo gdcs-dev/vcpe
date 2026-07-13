@@ -79,3 +79,40 @@ func TestImageCommandArgsValidation(t *testing.T) {
 		t.Fatalf("expected tag validation failure")
 	}
 }
+
+func TestNetworkArgs(t *testing.T) {
+	// No driver (bridge default) — unchanged legacy behavior
+	args := buildNetworkArgs(NetworkSpec{Name: "example-wan", Subnet: "10.7.200.0/24", HostGateway: "10.7.200.254"})
+	if !reflect.DeepEqual(args, []string{"network", "create", "--subnet", "10.7.200.0/24", "--gateway", "10.7.200.254", "example-wan"}) {
+		t.Fatalf("unexpected bridge args: %#v", args)
+	}
+
+	// macvlan with parent option
+	macvlan := buildNetworkArgs(NetworkSpec{
+		Name:          "example-wan",
+		Driver:        "macvlan",
+		DriverOptions: map[string]string{"parent": "eth0"},
+		Subnet:        "192.168.1.0/24",
+		HostGateway:   "192.168.1.1",
+	})
+	if !reflect.DeepEqual(macvlan, []string{"network", "create", "--driver", "macvlan", "-o", "parent=eth0", "--subnet", "192.168.1.0/24", "--gateway", "192.168.1.1", "example-wan"}) {
+		t.Fatalf("unexpected macvlan args: %#v", macvlan)
+	}
+
+	// ipvlan with multiple sorted options
+	ipvlan := buildNetworkArgs(NetworkSpec{
+		Name:          "example-up",
+		Driver:        "ipvlan",
+		DriverOptions: map[string]string{"parent": "eth1", "mode": "l2"},
+		Subnet:        "10.0.0.0/24",
+	})
+	if !reflect.DeepEqual(ipvlan, []string{"network", "create", "--driver", "ipvlan", "-o", "mode=l2", "-o", "parent=eth1", "--subnet", "10.0.0.0/24", "example-up"}) {
+		t.Fatalf("unexpected ipvlan args: %#v", ipvlan)
+	}
+
+	// Custom ipam-driver
+	withIPAM := buildNetworkArgs(NetworkSpec{Name: "custom", IPAMDriver: "host-local", Subnet: "10.1.0.0/24"})
+	if !reflect.DeepEqual(withIPAM, []string{"network", "create", "--ipam-driver", "host-local", "--subnet", "10.1.0.0/24", "custom"}) {
+		t.Fatalf("unexpected ipam-driver args: %#v", withIPAM)
+	}
+}

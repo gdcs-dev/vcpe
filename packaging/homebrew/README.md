@@ -4,15 +4,19 @@ Homebrew tap for `vcpe` — the Go control-plane binary for the vCPE lab harness
 
 ## Install
 
+Homebrew works on macOS and Linux. If you don't have it yet:
+
+```bash
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+```
+
+See [brew.sh](https://brew.sh) for full installation instructions.
+
+Once Homebrew is available:
+
 ```bash
 brew tap gdcs-dev/vcpe
 brew install vcpe
-```
-
-For always-latest from the development branch:
-
-```bash
-brew install --HEAD vcpe
 ```
 
 ## Usage

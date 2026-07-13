@@ -265,12 +265,16 @@ func runDown(opts Options) (daemon.CommandResponse, error) {
 		return daemon.CommandResponse{}, err
 	}
 
-	// Tear down containers first, then clear leases so state reflects reality.
+	// Tear down containers first, then networks, then clear leases so state
+	// reflects reality in dependency order.
 	if !skipRuntime() {
 		if err := teardownComposeLifecycle(context.Background(), opts.StateRoot, opts.Name, serviceNames); err != nil {
 			_ = ps.FinishOperation(opID, "failed", err.Error())
 			return daemon.CommandResponse{}, err
 		}
+		// Remove Podman networks after all containers are stopped. Failures are
+		// best-effort — a warning is logged and teardown continues.
+		teardownNetworks(context.Background(), ps, opts.Name, newNetworkProvisioner())
 	}
 
 	if err := ps.ReplaceCustomerLeases(opts.Name, nil); err != nil {

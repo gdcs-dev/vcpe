@@ -8,11 +8,23 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"sort"
 	"strings"
 	"time"
 )
 
 type Adapter struct{}
+
+// NetworkSpec holds all parameters for creating a Podman network.
+type NetworkSpec struct {
+	Name          string
+	Subnet        string
+	HostGateway   string
+	DNS           string
+	Driver        string            // empty = Podman default (bridge)
+	DriverOptions map[string]string // passed as -o key=val; keys sorted
+	IPAMDriver    string            // optional custom IPAM driver
+}
 
 type ImageBuildRequest struct {
 	Tag       string
@@ -39,27 +51,12 @@ func New() *Adapter {
 	return &Adapter{}
 }
 
-func (a *Adapter) EnsureNetwork(ctx context.Context, name, subnet, hostGateway, podmanDNS string) error {
-	inspect := exec.CommandContext(ctx, "podman", "network", "exists", name)
+func (a *Adapter) EnsureNetwork(ctx context.Context, spec NetworkSpec) error {
+	inspect := exec.CommandContext(ctx, "podman", "network", "exists", spec.Name)
 	if err := inspect.Run(); err == nil {
 		return nil
 	}
-	args := []string{"network", "create"}
-	if strings.TrimSpace(subnet) != "" {
-		args = append(args, "--subnet", subnet)
-		// hostGateway overrides the Podman host-bridge IP (use .254 for LAN
-		// networks so brlan0 can claim .1 without an ARP conflict).
-		if strings.TrimSpace(hostGateway) != "" {
-			args = append(args, "--gateway", hostGateway)
-		}
-		// podmanDNS overrides the DNS server written into container
-		// resolv.conf. For LAN networks this is the gateway brlan0 IP (.1)
-		// so dnsmasq on the gateway handles DNS for its LAN clients.
-		if strings.TrimSpace(podmanDNS) != "" {
-			args = append(args, "--dns", podmanDNS)
-		}
-	}
-	args = append(args, name)
+	args := buildNetworkArgs(spec)
 	cmd := exec.CommandContext(ctx, "podman", args...)
 	out, err := cmd.CombinedOutput()
 	if err == nil {
@@ -72,13 +69,13 @@ func (a *Adapter) EnsureNetwork(ctx context.Context, name, subnet, hostGateway, 
 	isConflict := strings.Contains(msg, "already used") ||
 		strings.Contains(msg, "already exists")
 	if isConflict {
-		if recheck := exec.CommandContext(ctx, "podman", "network", "exists", name); recheck.Run() == nil {
+		if recheck := exec.CommandContext(ctx, "podman", "network", "exists", spec.Name); recheck.Run() == nil {
 			return nil
 		}
 		// Subnet is owned by a different network — find and force-remove it
 		// (--force disconnects any attached containers), then retry.
-		if subnet != "" {
-			stale, bridge, _ := findNetworkBySubnet(ctx, subnet)
+		if spec.Subnet != "" {
+			stale, bridge, _ := findNetworkBySubnet(ctx, spec.Subnet)
 			if stale != "" {
 				exec.CommandContext(ctx, "podman", "network", "rm", "--force", stale).CombinedOutput() //nolint:errcheck
 			}
@@ -88,7 +85,7 @@ func (a *Adapter) EnsureNetwork(ctx context.Context, name, subnet, hostGateway, 
 				deleteKernelLink(ctx, bridge)
 			} else {
 				// Orphaned bridge with no Podman record: find by subnet.
-				deleteOrphanedBridge(ctx, subnet)
+				deleteOrphanedBridge(ctx, spec.Subnet)
 			}
 			// Retry with back-off.
 			var retryErr error
@@ -104,19 +101,61 @@ func (a *Adapter) EnsureNetwork(ctx context.Context, name, subnet, hostGateway, 
 				}
 				retryMsg := strings.TrimSpace(string(retryOut))
 				if !strings.Contains(retryMsg, "already used") && !strings.Contains(retryMsg, "already exists") {
-					return fmt.Errorf("create podman network %s: %w (%s)", name, retryErr, retryMsg)
+					return fmt.Errorf("create podman network %s: %w (%s)", spec.Name, retryErr, retryMsg)
 				}
 			}
-			return fmt.Errorf("create podman network %s: subnet %s still in use after retries", name, subnet)
+			return fmt.Errorf("create podman network %s: subnet %s still in use after retries", spec.Name, spec.Subnet)
 		}
-		return fmt.Errorf("create podman network %s: subnet %s is already in use by another network", name, subnet)
+		return fmt.Errorf("create podman network %s: subnet %s is already in use by another network", spec.Name, spec.Subnet)
 	}
-	return fmt.Errorf("create podman network %s: %w (%s)", name, err, msg)
+	return fmt.Errorf("create podman network %s: %w (%s)", spec.Name, err, msg)
+}
+
+// buildNetworkArgs constructs the podman network create argument list from a NetworkSpec.
+func buildNetworkArgs(spec NetworkSpec) []string {
+	args := []string{"network", "create"}
+	if spec.Driver != "" {
+		args = append(args, "--driver", spec.Driver)
+	}
+	// Driver options: sort keys for deterministic args.
+	if len(spec.DriverOptions) > 0 {
+		keys := make([]string, 0, len(spec.DriverOptions))
+		for k := range spec.DriverOptions {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			args = append(args, "-o", k+"="+spec.DriverOptions[k])
+		}
+	}
+	if spec.IPAMDriver != "" {
+		args = append(args, "--ipam-driver", spec.IPAMDriver)
+	}
+	if strings.TrimSpace(spec.Subnet) != "" {
+		args = append(args, "--subnet", spec.Subnet)
+		if strings.TrimSpace(spec.HostGateway) != "" {
+			args = append(args, "--gateway", spec.HostGateway)
+		}
+		if strings.TrimSpace(spec.DNS) != "" {
+			args = append(args, "--dns", spec.DNS)
+		}
+	}
+	args = append(args, spec.Name)
+	return args
+}
+
+// RemoveNetwork removes a Podman network by name. Returns an error if the
+// network cannot be removed (e.g., containers still connected). Callers should
+// treat errors as warnings and continue teardown.
+func (a *Adapter) RemoveNetwork(ctx context.Context, name string) error {
+	cmd := exec.CommandContext(ctx, "podman", "network", "rm", name)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("remove podman network %s: %w (%s)", name, err, strings.TrimSpace(string(out)))
+	}
+	return nil
 }
 
 // findNetworkBySubnet returns the name of the Podman network whose subnet
-// matches cidr (exact prefix match). Returns ("", nil) if none is found.
-// findNetworkBySubnet returns the Podman network name and its kernel bridge
 // interface name for the network whose subnet matches cidr.
 // Returns ("", "", nil) if none is found.
 func findNetworkBySubnet(ctx context.Context, cidr string) (name, bridge string, err error) {

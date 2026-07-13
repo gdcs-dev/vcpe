@@ -49,6 +49,20 @@ func validateNetworks(doc Document) (map[string][]netip.Prefix, error) {
 		if _, dup := roles[n.Role]; dup {
 			return nil, fmt.Errorf("duplicate network role %q", n.Role)
 		}
+		// Driver-specific validation.
+		if n.Driver != "" && n.Driver != "bridge" {
+			if n.NAT {
+				return nil, fmt.Errorf("network role %q: nat is not supported for driver %q", n.Role, n.Driver)
+			}
+			if n.Firewall {
+				return nil, fmt.Errorf("network role %q: firewall is not supported for driver %q", n.Role, n.Driver)
+			}
+		}
+		if n.Driver == "macvlan" || n.Driver == "ipvlan" {
+			if n.DriverOptions["parent"] == "" {
+				return nil, fmt.Errorf("network role %q: driver %q requires driverOptions.parent", n.Role, n.Driver)
+			}
+		}
 		prefixes := []netip.Prefix{}
 		for family, fam := range map[string]*AddressFamily{"ipv4": n.IPv4, "ipv6": n.IPv6} {
 			if fam == nil {

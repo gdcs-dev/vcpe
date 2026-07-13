@@ -28,6 +28,7 @@ import (
 	"github.com/gdcs-dev/vcpe/controlplane/internal/secrets"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/state"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/typeregistry"
+	"gopkg.in/yaml.v3"
 )
 
 // failPhase reports whether the named phase is configured to fail via
@@ -234,11 +235,19 @@ func enforceActiveDeploymentCap(ps *persist.Store, doc manifest.Document) error 
 func hostIntents(dep plan.Deployment) []hostnet.Intent {
 	intents := make([]hostnet.Intent, 0, len(dep.Networks))
 	for _, n := range dep.Networks {
+		// macvlan/ipvlan bypass the host network stack; NAT/firewall rules
+		// on the host do not apply to traffic on non-bridge networks.
+		requiresNAT := n.NAT
+		requiresFirewall := n.Firewall
+		if n.Driver != "" && n.Driver != "bridge" {
+			requiresNAT = false
+			requiresFirewall = false
+		}
 		intents = append(intents, hostnet.Intent{
 			Role:             n.Role,
 			Bridge:           n.Bridge,
-			RequiresNAT:      n.NAT,
-			RequiresFirewall: n.Firewall,
+			RequiresNAT:      requiresNAT,
+			RequiresFirewall: requiresFirewall,
 		})
 	}
 	return intents
@@ -306,7 +315,16 @@ func applyComposeLifecycle(ctx context.Context, stateRoot, opID string, dep plan
 		if net.IPv4 != nil {
 			cidr = net.IPv4.CIDR
 		}
-		if err := podmanAdapter.EnsureNetwork(ctx, net.Bridge, cidr, net.HostBridgeGateway, net.PodmanDNS); err != nil {
+		spec := podman.NetworkSpec{
+			Name:          net.Bridge,
+			Subnet:        cidr,
+			HostGateway:   net.HostBridgeGateway,
+			DNS:           net.PodmanDNS,
+			Driver:        net.Driver,
+			DriverOptions: net.DriverOptions,
+			IPAMDriver:    net.IPAMDriver,
+		}
+		if err := podmanAdapter.EnsureNetwork(ctx, spec); err != nil {
 			return fmt.Errorf("ensure podman network %s: %w", net.Bridge, err)
 		}
 	}
@@ -381,6 +399,31 @@ func stageRuntimeTree(src, dst string) error {
 		}
 		return os.WriteFile(dstPath, data, 0o644)
 	})
+}
+
+// teardownNetworks removes the Podman networks created for a deployment. Bridge
+// names are derived from the deployment's last saved manifest snapshot. Failures
+// are treated as warnings — teardown always proceeds to state cleanup.
+func teardownNetworks(ctx context.Context, ps *persist.Store, depName string, provisioner networkProvisioner) {
+	raw, ok, err := ps.LatestDesiredSnapshot(depName)
+	if err != nil || !ok {
+		return // no snapshot — nothing to remove
+	}
+	var doc manifest.Document
+	if err := yaml.Unmarshal(raw, &doc); err != nil {
+		fmt.Fprintf(os.Stderr, "warn: parse snapshot for network teardown of %q: %v\n", depName, err)
+		return
+	}
+	dep, err := planner.Build(doc)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warn: plan networks for teardown of %q: %v\n", depName, err)
+		return
+	}
+	for _, net := range dep.Networks {
+		if err := provisioner.RemoveNetwork(ctx, net.Bridge); err != nil {
+			fmt.Fprintf(os.Stderr, "warn: remove network %s: %v\n", net.Bridge, err)
+		}
+	}
 }
 
 // teardownComposeLifecycle stops all Compose projects for a deployment in
@@ -502,7 +545,8 @@ func sortedKeys(m map[string]contract.Document) []string {
 
 // networkProvisioner provisions Podman networks before compose lifecycle.
 type networkProvisioner interface {
-	EnsureNetwork(ctx context.Context, name, subnet, hostGateway, podmanDNS string) error
+	EnsureNetwork(ctx context.Context, spec podman.NetworkSpec) error
+	RemoveNetwork(ctx context.Context, name string) error
 }
 
 // composeLifecycleRunner runs podman-compose up/down for a service.

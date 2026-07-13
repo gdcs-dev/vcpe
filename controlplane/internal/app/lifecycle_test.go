@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gdcs-dev/vcpe/controlplane/internal/backend/podman"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/compose"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/persist"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/plan"
@@ -15,11 +16,17 @@ import (
 // --- stubs ---
 
 type recordingNetworkProvisioner struct {
-	calls []string
+	calls       []string
+	removeCalls []string
 }
 
-func (r *recordingNetworkProvisioner) EnsureNetwork(_ context.Context, name, subnet, _, _ string) error {
-	r.calls = append(r.calls, name+"/"+subnet)
+func (r *recordingNetworkProvisioner) EnsureNetwork(_ context.Context, spec podman.NetworkSpec) error {
+	r.calls = append(r.calls, spec.Name+"/"+spec.Subnet)
+	return nil
+}
+
+func (r *recordingNetworkProvisioner) RemoveNetwork(_ context.Context, name string) error {
+	r.removeCalls = append(r.removeCalls, name)
 	return nil
 }
 
