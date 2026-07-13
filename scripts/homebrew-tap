@@ -113,12 +113,26 @@ render_formula() {
             fi
             ;;
         release)
+            # Auto-detect version from latest git tag if not explicitly set.
             version_value=${VCPE_HOMEBREW_VERSION:-}
-            sha_value=${VCPE_HOMEBREW_SHA256:-}
+            if [[ -z "$version_value" ]]; then
+                local latest_tag
+                latest_tag=$(git -C "$REPO_ROOT" describe --tags --abbrev=0 2>/dev/null || true)
+                [[ -n "$latest_tag" ]] || die "no git tags found; create a tag or set VCPE_HOMEBREW_VERSION"
+                version_value=${latest_tag#v}
+            fi
             head_branch="main"
-            [[ -n "$version_value" ]] || die "set VCPE_HOMEBREW_VERSION for release channel"
-            [[ -n "$sha_value" ]] || die "set VCPE_HOMEBREW_SHA256 for release channel"
             url_value=${VCPE_HOMEBREW_URL:-${repo_url}/archive/refs/tags/v${version_value}.tar.gz}
+            # Auto-compute sha256 if not set (same pattern as main/development).
+            if [[ -n "${VCPE_HOMEBREW_SHA256:-}" ]]; then
+                sha_value="$VCPE_HOMEBREW_SHA256"
+            else
+                local tmp_archive
+                tmp_archive=$(mktemp /tmp/vcpe-sha-XXXXXX.tar.gz)
+                curl -fsSL "$url_value" -o "$tmp_archive" || die "failed to download $url_value (is the tag pushed to GitHub?)"
+                sha_value=$(shasum -a 256 "$tmp_archive" | awk '{print $1}')
+                rm -f "$tmp_archive"
+            fi
             version_value=$(printf '"%s"' "$version_value")
             ;;
         *)
@@ -143,7 +157,7 @@ class Vcpe < Formula
   def install
     cd "controlplane" do
       system "go", "build",
-             "-ldflags", "-s -w",
+             "-ldflags", "-s -w -X 'main.version=#{version}'",
              "-o", bin/"vcpe",
              "./cmd/vcpe"
     end

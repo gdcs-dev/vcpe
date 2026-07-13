@@ -194,6 +194,15 @@ var commandHelp = map[string]CommandHelp{
 			"vcpe manifest list --json",
 		},
 	},
+	"version": {
+		Synopsis:      "Print the vcpe version",
+		Description:   "Prints the embedded version string and exits. Builds without -ldflags override report \"dev\".",
+		RequiredFlags: []FlagHelp{},
+		OptionalFlags: []FlagHelp{},
+		Examples: []string{
+			"vcpe version",
+		},
+	},
 }
 
 // GlobalHelp returns the top-level help string listing all public commands.
@@ -204,7 +213,7 @@ func GlobalHelp() string {
 
 	// Fixed column width for aligned synopsis column.
 	const synopsisCol = 10
-	order := []string{"init", "build", "push", "up", "plan", "down", "list", "manifest", "status", "logs", "config", "state"}
+	order := []string{"init", "build", "push", "up", "plan", "down", "list", "manifest", "status", "logs", "config", "state", "version"}
 	for _, cmd := range order {
 		h := commandHelp[cmd]
 		padding := synopsisCol - len(cmd)

@@ -56,6 +56,7 @@ var topLevelCommands = map[string]struct{}{
 	"logs":     {},
 	"config":   {},
 	"state":    {},
+	"version":  {},
 }
 
 // retiredWrappers maps a legacy bash-wrapper command to the canonical vcpe

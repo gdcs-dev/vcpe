@@ -38,7 +38,7 @@ func TestBuildImageArgs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build args multi platform: %v", err)
 	}
-	if !reflect.DeepEqual(multi, []string{"buildx", "build", "--platform", "linux/amd64,linux/arm64", "--tag", "ghcr.io/gdcs-dev/bng:dev", "--push", "services/bng"}) {
+	if !reflect.DeepEqual(multi, []string{"buildx", "build", "--platform", "linux/amd64,linux/arm64", "--builder", "multiarch", "--tag", "ghcr.io/gdcs-dev/bng:dev", "--push", "services/bng"}) {
 		t.Fatalf("unexpected multi-platform args: %#v", multi)
 	}
 

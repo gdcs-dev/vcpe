@@ -112,6 +112,11 @@ func TestHelpForState(t *testing.T) {
 	checkGolden(t, "state", got)
 }
 
+func TestHelpForVersion(t *testing.T) {
+	got := HelpFor("version")
+	checkGolden(t, "version", got)
+}
+
 // TestHelpAliasRedirects asserts aliases produce redirect messages.
 func TestHelpAliasRedirects(t *testing.T) {
 	apply := HelpFor("apply")
@@ -127,7 +132,7 @@ func TestHelpAliasRedirects(t *testing.T) {
 // TestHelpFlagExitsZero asserts that passing --help returns nil (exit 0).
 // Content correctness is covered by the golden-file tests above.
 func TestHelpFlagExitsZero(t *testing.T) {
-	if err := ExecuteCLI("vcpe", []string{"--help"}); err != nil {
+	if err := ExecuteCLI("vcpe", []string{"--help"}, "dev"); err != nil {
 		t.Errorf("vcpe --help: expected nil, got %v", err)
 	}
 }

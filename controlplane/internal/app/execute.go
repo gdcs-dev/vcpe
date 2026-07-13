@@ -17,7 +17,7 @@ import (
 // It parses the invocation, resolves the state root, and runs the command
 // locally. The daemon path is opt-in via VCPE_DAEMON_SOCKET for environments
 // that front the control plane with a long-running server.
-func ExecuteCLI(prog string, args []string) error {
+func ExecuteCLI(prog string, args []string, version string) error {
 	types.Register()
 
 	opts, err := parseArgs(prog, args)
@@ -31,6 +31,12 @@ func ExecuteCLI(prog string, args []string) error {
 	}
 	if err != nil {
 		return err
+	}
+
+	// Handle version before config/state/daemon resolution — it needs none of them.
+	if opts.Command == "version" {
+		fmt.Println(version)
+		return nil
 	}
 
 	fileCfg, err := config.Load(opts.ConfigPath)

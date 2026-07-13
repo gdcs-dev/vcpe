@@ -20,7 +20,7 @@ homebrew-vcpe repository.
 
 Environment:
   VCPE_HOMEBREW_REPO_DIR   default checkout path for the tap repository
-  VCPE_HOMEBREW_CHANNEL    formula channel: main (default), development, or release
+  VCPE_HOMEBREW_CHANNEL    formula channel: release (default), main, or development
   VCPE_HOMEBREW_DEV_SHA256 skip live download for the development branch archive
 EOF
 }
@@ -32,8 +32,8 @@ sync_checkout() {
     [[ -d "$tap_repo_dir/.git" ]] || die "tap repository is not a git checkout: $tap_repo_dir"
     [[ -f "$TAP_README_TEMPLATE" ]] || die "missing tap README template: $TAP_README_TEMPLATE"
 
-    # Default to the main channel so the formula tracks the active branch.
-    export VCPE_HOMEBREW_CHANNEL=${VCPE_HOMEBREW_CHANNEL:-main}
+    # Default to the release channel so the formula uses the latest git tag.
+    export VCPE_HOMEBREW_CHANNEL=${VCPE_HOMEBREW_CHANNEL:-release}
 
     VCPE_HOMEBREW_TAP_DIR="$tap_repo_dir" "$REPO_ROOT/scripts/homebrew-tap" sync gdcs-dev/vcpe
     cp "$TAP_README_TEMPLATE" "$tap_repo_dir/README.md"

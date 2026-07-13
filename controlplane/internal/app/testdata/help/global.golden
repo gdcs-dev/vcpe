@@ -13,6 +13,7 @@ Commands:
   logs      Show operation timeline and deployment logs
   config    Show effective configuration
   state     Manage persisted control-plane state
+  version   Print the vcpe version
 
 Aliases:
   apply    alias for up

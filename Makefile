@@ -4,6 +4,10 @@ VCPE_BIN ?= controlplane/bin/vcpe
 VCPE_BIN_REL := $(patsubst controlplane/%,%,$(VCPE_BIN))
 MANIFEST ?=
 NAME ?= example
+GIT_VERSION := $(shell git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//')
+ifeq ($(GIT_VERSION),)
+  GIT_VERSION := dev
+endif
 
 .PHONY: help init build up down status logs-bng logs-webpa smoke-go smoke-services smoke-controlplane release-gate clean
 
@@ -29,7 +33,7 @@ init:
 
 build:
 	@mkdir -p "$(dir $(VCPE_BIN))"
-	cd controlplane && mkdir -p "$(dir $(VCPE_BIN_REL))" && go build -o "$(VCPE_BIN_REL)" ./cmd/vcpe
+	cd controlplane && mkdir -p "$(dir $(VCPE_BIN_REL))" && go build -ldflags "-s -w -X main.version=$(GIT_VERSION)" -o "$(VCPE_BIN_REL)" ./cmd/vcpe
 
 up:
 	@test -n "$(MANIFEST)" || (echo "MANIFEST is required" >&2; exit 1)

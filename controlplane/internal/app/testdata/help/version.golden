@@ -1,0 +1,6 @@
+Usage: vcpe version [flags]
+
+Prints the embedded version string and exits. Builds without -ldflags override report "dev".
+
+Examples:
+  vcpe version
