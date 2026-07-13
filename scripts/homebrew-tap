@@ -156,7 +156,7 @@ class Vcpe < Formula
       Run \`podman machine init\` and \`podman machine start\` on macOS before using vcpe.
 
       Deployment manifests are installed to:
-        \#{pkgshare}/manifests/
+        #{pkgshare}/manifests/
 
       To see available manifests:
         vcpe manifest list
@@ -172,7 +172,7 @@ class Vcpe < Formula
   end
 
   test do
-    assert_match "vcpe", shell_output("\#{bin}/vcpe --help")
+    assert_match "vcpe", shell_output("#{bin}/vcpe --help")
   end
 end
 EOF
