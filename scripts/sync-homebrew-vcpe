@@ -32,7 +32,7 @@ sync_checkout() {
     [[ -d "$tap_repo_dir/.git" ]] || die "tap repository is not a git checkout: $tap_repo_dir"
     [[ -f "$TAP_README_TEMPLATE" ]] || die "missing tap README template: $TAP_README_TEMPLATE"
 
-    # Default to the development channel so the formula tracks the active branch.
+    # Default to the main channel so the formula tracks the active branch.
     export VCPE_HOMEBREW_CHANNEL=${VCPE_HOMEBREW_CHANNEL:-main}
 
     VCPE_HOMEBREW_TAP_DIR="$tap_repo_dir" "$REPO_ROOT/scripts/homebrew-tap" sync gdcs-dev/vcpe
