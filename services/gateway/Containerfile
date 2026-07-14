@@ -167,7 +167,7 @@ FROM docker.io/library/ubuntu:24.04
 
 RUN apt-get update && apt-get upgrade -y && \
    DEBIAN_FRONTEND=noninteractive apt-get -y install \
-   net-tools dnsutils dnsmasq systemd-sysv iputils-ping syslog-ng jq netplan.io \
+   iptables net-tools dnsutils dnsmasq systemd-sysv iputils-ping syslog-ng jq netplan.io \
    libcjson1 libmsgpackc2 curl liblog4c3t64 libjansson4 libspdlog-dev && \
    rm -rf /var/lib/apt/lists/*
 

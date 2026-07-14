@@ -93,3 +93,7 @@ The `networkProvisioner` interface and `podman.EnsureNetwork` implementation SHA
 #### Scenario: network removed on down
 - **WHEN** `vcpe down` tears down a deployment
 - **THEN** `podman network rm <bridge>` is invoked for each network bridge after compose services are stopped
+
+#### Scenario: ipv4_address omitted for ipamDriver none networks
+- **WHEN** a service has an interface on a network with `ipamDriver: none`
+- **THEN** the generated `compose.yaml` service network entry contains `mac_address` but NOT `ipv4_address`

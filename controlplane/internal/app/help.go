@@ -186,12 +186,15 @@ var commandHelp = map[string]CommandHelp{
 	},
 	"manifest": {
 		Synopsis:      "Manage and discover manifest files",
-		Description:   "Subcommands for working with deployment manifest files. Use `vcpe manifest list` to see all manifests discoverable from the search path (Homebrew pkgshare, ~/.vcpe/manifests/, and ./manifests/).",
+		Description:   "Subcommands for working with deployment manifest files: `list` discovers available manifests; `build` runs an interactive wizard to create or update a manifest.",
 		RequiredFlags: []FlagHelp{},
 		OptionalFlags: []FlagHelp{},
 		Examples: []string{
 			"vcpe manifest list",
 			"vcpe manifest list --json",
+			"vcpe manifest build",
+			"vcpe manifest build --manifest existing.yaml",
+			"vcpe manifest build --manifest existing.yaml --output new.yaml",
 		},
 	},
 	"version": {

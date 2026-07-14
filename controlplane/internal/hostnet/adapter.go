@@ -2,6 +2,7 @@ package hostnet
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -190,4 +191,76 @@ func delegatedHostnetMode(hasPodman bool) bool {
 func defaultPodmanMachineInfoCheck() error {
 	cmd := exec.Command("podman", "machine", "info")
 	return cmd.Run()
+}
+
+// InterfaceInfo describes a network interface on the Podman host.
+type InterfaceInfo struct {
+	Name      string
+	LinkType  string // "ether", "loopback", "bridge", "macvlan", etc.
+	OperState string // "UP", "DOWN", "UNKNOWN"
+	Addresses []string
+}
+
+// ListInterfaces returns physical network interfaces suitable for use as a
+// macvlan/ipvlan parent. Loopback, virtual bridges, and macvlan sub-interfaces
+// are filtered out. On macOS, the query is delegated to the Podman machine.
+// Returns an empty slice (never an error) so callers can fall back gracefully.
+func (a Adapter) ListInterfaces(ctx context.Context) []InterfaceInfo {
+	var out []byte
+	var err error
+	if runtimeGOOS == "darwin" {
+		cmd := exec.CommandContext(ctx, "podman", "machine", "ssh", "--", "ip", "-j", "link")
+		out, err = cmd.Output()
+	} else {
+		cmd := exec.CommandContext(ctx, "ip", "-j", "link")
+		out, err = cmd.Output()
+	}
+	if err != nil {
+		return nil
+	}
+
+	var raw []struct {
+		IfName    string `json:"ifname"`
+		LinkType  string `json:"link_type"`
+		OperState string `json:"operstate"`
+		AddrInfo  []struct {
+			Family string `json:"family"`
+			Local  string `json:"local"`
+			Prefix int    `json:"prefixlen"`
+		} `json:"addr_info"`
+	}
+	if err := json.Unmarshal(out, &raw); err != nil {
+		return nil
+	}
+
+	skip := func(name, linkType string) bool {
+		if linkType == "loopback" || linkType == "macvlan" || linkType == "bridge" {
+			return true
+		}
+		for _, prefix := range []string{"podman", "cni-", "veth", "br-", "docker", "virbr"} {
+			if strings.HasPrefix(name, prefix) {
+				return true
+			}
+		}
+		return false
+	}
+
+	result := make([]InterfaceInfo, 0, len(raw))
+	for _, iface := range raw {
+		if skip(iface.IfName, iface.LinkType) {
+			continue
+		}
+		info := InterfaceInfo{
+			Name:      iface.IfName,
+			LinkType:  iface.LinkType,
+			OperState: iface.OperState,
+		}
+		for _, a := range iface.AddrInfo {
+			if a.Family == "inet" || a.Family == "inet6" {
+				info.Addresses = append(info.Addresses, fmt.Sprintf("%s/%d", a.Local, a.Prefix))
+			}
+		}
+		result = append(result, info)
+	}
+	return result
 }

@@ -109,3 +109,7 @@ The manifest `networks[]` schema SHALL accept three optional fields: `driver` (s
 #### Scenario: default driver is unchanged
 - **WHEN** a manifest declares a network with no `driver` field
 - **THEN** Podman creates the network using the default bridge driver, identical to existing behavior
+
+#### Scenario: ipamDriver none skips pool allocation
+- **WHEN** a manifest declares a network with `ipamDriver: none` and a service interface is attached to it without an explicit `ipv4` address
+- **THEN** vcpe IPAM does not allocate a pool address for that interface; `IFACE_*_IPV4` in compose.env is empty unless an explicit `interfaces[].ipv4` was set in the manifest

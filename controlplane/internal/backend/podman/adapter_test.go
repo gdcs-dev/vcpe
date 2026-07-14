@@ -110,9 +110,15 @@ func TestNetworkArgs(t *testing.T) {
 		t.Fatalf("unexpected ipvlan args: %#v", ipvlan)
 	}
 
-	// Custom ipam-driver
+	// Custom ipam-driver (non-none): subnet IS included
 	withIPAM := buildNetworkArgs(NetworkSpec{Name: "custom", IPAMDriver: "host-local", Subnet: "10.1.0.0/24"})
 	if !reflect.DeepEqual(withIPAM, []string{"network", "create", "--ipam-driver", "host-local", "--subnet", "10.1.0.0/24", "custom"}) {
 		t.Fatalf("unexpected ipam-driver args: %#v", withIPAM)
+	}
+
+	// ipam-driver=none: subnet is NOT included (Podman rejects subnet with none driver)
+	noneIPAM := buildNetworkArgs(NetworkSpec{Name: "example-wan", IPAMDriver: "none", Subnet: "10.7.200.0/24"})
+	if !reflect.DeepEqual(noneIPAM, []string{"network", "create", "--ipam-driver", "none", "example-wan"}) {
+		t.Fatalf("unexpected none-ipam args: %#v", noneIPAM)
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/gdcs-dev/vcpe/controlplane/internal/app/wizard"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/daemon"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/image"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/manifest"
@@ -122,9 +123,23 @@ func runManifest(opts Options) (daemon.CommandResponse, error) {
 	switch opts.CommandArgs[0] {
 	case "list":
 		return runManifestList(opts)
+	case "build":
+		return runManifestBuild(opts)
 	default:
 		return daemon.CommandResponse{}, fmt.Errorf("unknown manifest subcommand %q; run `vcpe manifest --help`", opts.CommandArgs[0])
 	}
+}
+
+// runManifestBuild runs the interactive manifest builder wizard.
+func runManifestBuild(opts Options) (daemon.CommandResponse, error) {
+	path, err := wizard.Run(context.Background(), wizard.Opts{
+		ExistingPath: opts.ManifestPath,
+		OutputPath:   opts.OutputPath,
+	})
+	if err != nil {
+		return daemon.CommandResponse{}, err
+	}
+	return daemon.CommandResponse{Message: "manifest written to " + path}, nil
 }
 
 // runManifestList discovers and prints all available manifest files.

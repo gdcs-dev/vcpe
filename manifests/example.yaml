@@ -8,7 +8,6 @@ spec:
   maxReplicasPerService: 3
   maxActiveDeployments: 10
 
-  # Network topology per docs/containers.drawio (Page 2 – Podman design):
   #
   #   [internet / host]
   #        |
@@ -33,12 +32,14 @@ spec:
     - role: wan
       nat: true
       firewall: true
+      ipamDriver: none
       ipv4:
         cidr: 10.7.200.0/24
         gateway: 10.7.200.1
         pool: { start: 10.7.200.10, end: 10.7.200.250 }
 
     - role: cm
+      ipamDriver: none
       ipv4:
         cidr: 10.7.201.0/24
         gateway: 10.7.201.1
@@ -46,24 +47,28 @@ spec:
 
     # GATEWAY LAN ports – four separate bridges matching gateway/compose.yaml
     - role: lan-p1
+      ipamDriver: none
       ipv4:
         cidr: 192.168.10.0/24
         gateway: 192.168.10.1
         pool: { start: 192.168.10.10, end: 192.168.10.250 }
 
     - role: lan-p2
+      ipamDriver: none
       ipv4:
         cidr: 192.168.20.0/24
         gateway: 192.168.20.1
         pool: { start: 192.168.20.10, end: 192.168.20.250 }
 
     - role: lan-p3
+      ipamDriver: none
       ipv4:
         cidr: 192.168.30.0/24
         gateway: 192.168.30.1
         pool: { start: 192.168.30.10, end: 192.168.30.250 }
 
     - role: lan-p4
+      ipamDriver: none
       ipv4:
         cidr: 192.168.40.0/24
         gateway: 192.168.40.1
@@ -83,8 +88,8 @@ spec:
         buildContext: services/bng
       interfaces:
         - { role: mgmt }
-        - { role: wan, defaultRoute: true }
-        - { role: cm }
+        - { role: wan, defaultRoute: true, ipv4: "10.7.200.1" }
+        - { role: cm, ipv4: "10.7.201.1" }
       config:
         access:
           - role: wan
@@ -129,11 +134,11 @@ spec:
       image:
         repository: ghcr.io/gdcs-dev/gateway
         tag: dev
-        pullPolicy: always-pull
+        pullPolicy: build-if-missing
         buildContext: services/gateway
       interfaces:
-        - { role: wan }
-        - { role: cm }
+        - { role: wan, ipv4: "10.7.200.10" }
+        - { role: cm, ipv4: "10.7.201.10" }
         - { role: lan-p1 }
         - { role: lan-p2 }
         - { role: lan-p3 }
@@ -164,3 +169,18 @@ spec:
         - { role: mgmt }
       dependsOn:
         - webpa
+    - name: client
+      type: generic-container
+      replicas: 1
+      image:
+        repository: docker.io/library/alpine
+        tag: "3.19"
+        pullPolicy: always-pull
+      dependsOn:
+        - gateway
+      interfaces:
+        - role: lan-p1
+          defaultRoute: true
+      config:
+        command:
+          ["/bin/sh", "-c", "ip addr flush dev eth0 && udhcpc -f -i eth0"]

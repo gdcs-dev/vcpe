@@ -4,7 +4,7 @@ Define the local declarative CLI contract and safety guarantees for planning and
 ## Requirements
 
 ### Requirement: Declarative local control-plane commands
-The system SHALL provide a local CLI contract with `plan`, `apply`, `status`, and `destroy` commands for deployments, and SHALL expose `init`, `build`, `up`, `down`, `logs`, `config`, and `state` commands as Go-owned operator commands rather than bash-owned behavior. Every command SHALL support `-h`/`--help` to display structured help text and exit 0. The `down` command SHALL remove the Podman networks created for the deployment after stopping all compose services. Network removal failures SHALL be treated as warnings and SHALL NOT prevent state cleanup.
+The system SHALL provide a local CLI contract with `plan`, `apply`, `status`, and `destroy` commands for deployments, and SHALL expose `init`, `build`, `up`, `down`, `logs`, `config`, and `state` commands as Go-owned operator commands rather than bash-owned behavior. Every command SHALL support `-h`/`--help` to display structured help text and exit 0. The `down` command SHALL remove the Podman networks created for the deployment after stopping all compose services. Network removal failures SHALL be treated as warnings and SHALL NOT prevent state cleanup. The `manifest` command group SHALL expose `list` and `build` subcommands; `build` SHALL run the interactive manifest builder wizard.
 
 #### Scenario: Plan reports intended changes
 - **WHEN** an operator runs `plan` for a valid deployment manifest
@@ -25,6 +25,10 @@ The system SHALL provide a local CLI contract with `plan`, `apply`, `status`, an
 #### Scenario: down completes even if network removal fails
 - **WHEN** an operator runs `vcpe down --name <deployment>` and a network cannot be removed
 - **THEN** the system logs a warning for the failed network but continues, clears IPAM leases, and removes the deployment snapshot
+
+#### Scenario: manifest build launches wizard
+- **WHEN** an operator runs `vcpe manifest build`
+- **THEN** the interactive wizard starts, collects deployment identity, networks, and services, and writes a valid manifest to the output path
 
 ### Requirement: Safe destructive operation guard
 The system SHALL require explicit user confirmation or force flag semantics before destroying an active deployment, and SHALL require explicit disruptive-change approval before applying changes that alter CIDRs, reset identities, remap volumes, or scale active services to zero.
@@ -165,6 +169,10 @@ The `--manifest` flag continues to accept: absolute paths, relative paths (conta
 #### Scenario: --manifest bare name
 - **WHEN** `vcpe apply --manifest single-gateway` is run
 - **THEN** the system searches discovery directories for `single-gateway.yaml` and uses it
+
+#### Scenario: manifest build launches wizard
+- **WHEN** an operator runs `vcpe manifest build`
+- **THEN** the interactive wizard starts, collects deployment identity, networks, and services, and writes a valid manifest to the output path
 
 #### Scenario: --manifest path-like value that doesn't exist
 - **WHEN** `vcpe apply --manifest ./missing.yaml` is run

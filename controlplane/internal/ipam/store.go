@@ -62,6 +62,9 @@ func (s *Store) CheckConflicts(deployment string, networks []manifest.Network) (
 	}
 	requested := []req{}
 	for _, n := range networks {
+		if n.IPAMDriver == "none" {
+			continue // container-managed network; Podman does not own the subnet
+		}
 		for _, cidr := range networkCIDRs(n) {
 			if _, err := netip.ParsePrefix(cidr); err != nil {
 				return nil, fmt.Errorf("invalid CIDR %q for role %q: %w", cidr, n.Role, err)
@@ -192,6 +195,9 @@ func AllocateInterfaces(dep *plan.Deployment) error {
 				net, ok := netByRole[iface.Role]
 				if !ok {
 					continue
+				}
+				if net.IPAMDriver == "none" {
+					continue // container manages its own IP on this network
 				}
 				if iface.IPv4 == "" && net.IPv4 != nil && net.IPv4.Pool != nil {
 					addr, err := allocate(net.IPv4.Pool, cursor4, used4, iface.Role)

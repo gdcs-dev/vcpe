@@ -115,6 +115,11 @@ EOF
 main() {
     rename_interfaces_by_mac
     configure_networking
+    # NAT all LAN (brlan0) traffic going out via erouter0 so clients can reach
+    # the internet and management hosts through the BNG.
+    if command -v iptables >/dev/null 2>&1; then
+        iptables -t nat -A POSTROUTING -o erouter0 -j MASQUERADE || true
+    fi
     # Point resolv.conf at BNG dnsmasq so gateway can resolve peer hostnames.
     if [[ -n "${BNG_DNS_SERVER:-}" ]]; then
         echo "nameserver ${BNG_DNS_SERVER}" > /etc/resolv.conf

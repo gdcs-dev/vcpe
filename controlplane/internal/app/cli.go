@@ -38,6 +38,7 @@ type Options struct {
 	OutputJSON      bool
 	Platforms       []string
 	Backend         string
+	OutputPath      string
 }
 
 // topLevelCommands are the public operator commands.
@@ -290,6 +291,13 @@ func parseArgs(_ string, args []string) (Options, error) {
 				return Options{}, err
 			}
 			opts.Backend = val
+			i = next
+		case arg == "--output":
+			val, next, err := takeValue(rest, i, "--output")
+			if err != nil {
+				return Options{}, err
+			}
+			opts.OutputPath = val
 			i = next
 		case arg == "--force":
 			opts.Force = true

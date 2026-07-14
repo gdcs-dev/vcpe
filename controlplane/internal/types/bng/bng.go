@@ -117,7 +117,33 @@ func (renderer) Render(_ context.Context, input render.Input) (render.Result, er
 		env = append(env, key+"="+iface.MAC)
 	}
 
-	composeYAML := renderBNGCompose(input.Service.Name, inst.Interfaces, input.Service.Volumes)
+	// For container-managed (ipamDriver: none) networks, the BNG must assign
+	// its own IPs. Add <ROLE>_IPV4_CIDR env vars so network-startup.sh can
+	// run `ip addr add` on those interfaces.
+	for _, iface := range inst.Interfaces {
+		if iface.Role == "mgmt" || iface.IPv4 == "" {
+			continue
+		}
+		n := input.Deployment.Network(iface.Role)
+		if n == nil || n.IPv4 == nil || n.IPv4.CIDR == "" {
+			continue
+		}
+		_, ipNet, err := net.ParseCIDR(n.IPv4.CIDR)
+		if err != nil {
+			continue
+		}
+		ones, _ := ipNet.Mask.Size()
+		roleKey := strings.ToUpper(strings.ReplaceAll(iface.Role, "-", "_"))
+		env = append(env, fmt.Sprintf("%s_IPV4_CIDR=%s/%d", roleKey, iface.IPv4, ones))
+	}
+
+	ipamNone := map[string]bool{}
+	for _, n := range input.Deployment.Networks {
+		if n.IPAMDriver == "none" {
+			ipamNone[n.Role] = true
+		}
+	}
+	composeYAML := renderBNGCompose(input.Service.Name, inst.Interfaces, input.Service.Volumes, ipamNone)
 
 	return render.Result{
 		Renderer: "bng-renderer",
@@ -288,16 +314,12 @@ func renderIPTablesV4(dep plan.Deployment, devByRole map[string]string) string {
 	if mgmtDev == "" {
 		mgmtDev = "eth0"
 	}
-	for _, n := range dep.Networks {
-		if n.NAT && n.IPv4 != nil {
-			// Masquerade all traffic from this WAN subnet leaving via the mgmt
-			// interface. This includes traffic destined for the mgmt subnet
-			// (e.g. gateway → webpa) so that reply packets can reach the sender
-			// via the BNG's connection-tracking table rather than the Podman
-			// bridge default route.
-			fmt.Fprintf(&b, "-A POSTROUTING -s %s -o %s -j MASQUERADE\n", n.IPv4.CIDR, mgmtDev)
-		}
-	}
+	// Masquerade ALL traffic leaving via the mgmt interface. Using a single
+	// broad rule (rather than per-subnet rules) ensures that traffic forwarded
+	// from gateway LAN clients (192.168.10.x) is also masqueraded, so webpa
+	// and other mgmt-side services see packets from the BNG's own mgmt IP and
+	// can reply correctly without needing routes to the LAN subnets.
+	fmt.Fprintf(&b, "-A POSTROUTING -o %s -j MASQUERADE\n", mgmtDev)
 	b.WriteString("COMMIT\n")
 	return b.String()
 }
@@ -354,6 +376,17 @@ func renderDnsmasqConf(ipByRole map[string]string, dep plan.Deployment) string {
 				continue // the container name itself resolves via aardvark
 			}
 			fmt.Fprintf(&b, "cname=%s,%s\n", alias, svc.Name)
+		}
+		// Clients on Podman-managed networks receive "search dns.podman" in
+		// their resolv.conf, causing "webpa" to resolve as "webpa.dns.podman"
+		// first. Podman's aardvark-dns answers with the IPAM address (e.g.
+		// 10.10.10.2), but BNG DHCP replaces that address with a lease from
+		// our pool (e.g. 10.10.10.149), leaving 10.10.10.2 unreachable.
+		// Override all *.dns.podman names for every webpa virtual host so
+		// queries that arrive here return the live DHCP-assigned IP instead.
+		for _, alias := range webpaVirtualHosts {
+			podmanName := alias + ".dns.podman"
+			fmt.Fprintf(&b, "cname=%s,%s\n", podmanName, svc.Name)
 		}
 		break
 	}
@@ -417,15 +450,18 @@ func renderDnsmasqSubnetsMap(dep plan.Deployment) string {
 // every interface from the resolved instance, regardless of role name. This
 // replaces the curated services/bng/compose.yaml for deployments where the BNG
 // connects to more than the standard mgmt/wan/cm trio.
-func renderBNGCompose(svcName string, ifaces []plan.Interface, extraVolumes []string) string {
+func renderBNGCompose(svcName string, ifaces []plan.Interface, extraVolumes []string, ipamNone map[string]bool) string {
 	svcNets := map[string]any{}
 	topNets := map[string]any{}
 	for _, iface := range ifaces {
 		key := strings.ToUpper(strings.ReplaceAll(iface.Role, "-", "_"))
-		svcNets[iface.Role] = map[string]any{
-			"mac_address":  "${IFACE_" + key + "_MAC}",
-			"ipv4_address": "${IFACE_" + key + "_IPV4}",
+		entry := map[string]any{
+			"mac_address": "${IFACE_" + key + "_MAC}",
 		}
+		if !ipamNone[iface.Role] {
+			entry["ipv4_address"] = "${IFACE_" + key + "_IPV4}"
+		}
+		svcNets[iface.Role] = entry
 		topNets[iface.Role] = map[string]any{
 			"external": true,
 			"name":     "${IFACE_" + key + "_NETWORK}",
@@ -474,16 +510,38 @@ driftfile /var/lib/ntp/ntp.drift
 `
 
 // bngNetworkStartup brings up all ethernet interfaces after the entrypoint's
-// rename pass. Podman assigns IPs before the container starts, but the rename
-// step leaves the re-named interfaces in DOWN state.
+// rename pass and, when ipamDriver:none is used, assigns IPs from the
+// <ROLE>_IPV4_CIDR env vars set by the renderer.
 const bngNetworkStartup = `#!/bin/bash
 set -euo pipefail
-# Bring up all ethernet interfaces. Podman has already assigned IPs; the
-# interface rename in the entrypoint leaves them down.
+# Bring up all ethernet interfaces. The entrypoint's rename pass leaves them
+# in DOWN state.
 for iface in /sys/class/net/eth*; do
     name=$(basename "$iface")
     ip link set "$name" up || true
 done
+# Assign IPs on container-managed networks (ipamDriver:none). When Podman
+# manages IPAM the variables are absent and these lines are no-ops.
+# <ROLE>_IPV4_CIDR is set by the bng-renderer for non-mgmt interfaces.
+for var in $(compgen -v | grep '_IPV4_CIDR$' 2>/dev/null || env | grep -o '^[A-Z_]*_IPV4_CIDR' || true); do
+    cidr="${!var:-}"
+    [[ -n "$cidr" ]] || continue
+    # Derive role name: WAN_IPV4_CIDR → WAN → look up device via IFACE_WAN_DEVICE
+    role="${var%_IPV4_CIDR}"
+    dev_var="IFACE_${role}_DEVICE"
+    dev="${!dev_var:-}"
+    [[ -n "$dev" ]] || continue
+    ip addr show "$dev" | grep -qF "${cidr%%/*}" || ip addr add "$cidr" dev "$dev" || true
+done
+# The interface rename removes Podman's default route. Restore it via the
+# mgmt gateway so the BNG can reach the internet and peer containers.
+if ! ip route show default | grep -q .; then
+    mgmt_gw="${IFACE_MGMT_GATEWAY4:-}"
+    mgmt_dev="${IFACE_MGMT_DEVICE:-}"
+    if [[ -n "$mgmt_gw" && -n "$mgmt_dev" ]]; then
+        ip route add default via "$mgmt_gw" dev "$mgmt_dev" || true
+    fi
+fi
 `
 
 // bngDCMResponse is the static DCM response payload served by BNG over HTTP

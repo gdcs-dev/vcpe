@@ -131,7 +131,9 @@ func buildNetworkArgs(spec NetworkSpec) []string {
 	if spec.IPAMDriver != "" {
 		args = append(args, "--ipam-driver", spec.IPAMDriver)
 	}
-	if strings.TrimSpace(spec.Subnet) != "" {
+	// Subnet, gateway, and DNS are Podman-IPAM concepts. When ipam-driver=none
+	// the container manages its own IPs and Podman rejects these flags.
+	if strings.TrimSpace(spec.Subnet) != "" && spec.IPAMDriver != "none" {
 		args = append(args, "--subnet", spec.Subnet)
 		if strings.TrimSpace(spec.HostGateway) != "" {
 			args = append(args, "--gateway", spec.HostGateway)
