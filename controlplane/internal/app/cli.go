@@ -39,6 +39,7 @@ type Options struct {
 	Platforms       []string
 	Backend         string
 	OutputPath      string
+	Version         string // release version tag (e.g. v0.2.0); required for release
 }
 
 // topLevelCommands are the public operator commands.
@@ -96,6 +97,7 @@ func extractHelpCommand(args []string) (string, bool) {
 		"--state-root": {},
 		"--config":     {},
 		"--socket":     {},
+		"--version":    {},
 	}
 	// canonical maps aliases to primary command names.
 	aliasMap := map[string]string{
@@ -300,6 +302,13 @@ func parseArgs(_ string, args []string) (Options, error) {
 			}
 			opts.OutputPath = val
 			i = next
+		case arg == "--version":
+			val, next, err := takeValue(rest, i, "--version")
+			if err != nil {
+				return Options{}, err
+			}
+			opts.Version = val
+			i = next
 		case arg == "--force":
 			opts.Force = true
 		case arg == "--json":
@@ -325,6 +334,9 @@ func parseArgs(_ string, args []string) (Options, error) {
 	if opts.Backend != "" && opts.Backend != "podman" && opts.Backend != "docker" {
 		return Options{}, fmt.Errorf("unknown backend %q: must be podman or docker", opts.Backend)
 	}
+	if opts.Version != "" && command != "release" {
+		return Options{}, fmt.Errorf("--version is only supported for release")
+	}
 
 	// Resolve --manifest (auto-discovery when omitted; bare-name lookup when set)
 	// before validateCommandShape so that validation always sees a populated path.
@@ -341,9 +353,16 @@ func parseArgs(_ string, args []string) (Options, error) {
 // validateCommandShape enforces per-command positional/flag grammar.
 func validateCommandShape(opts *Options) error {
 	switch opts.Command {
-	case "up", "apply", "build", "plan", "push", "release":
+	case "up", "apply", "build", "plan", "push":
 		if opts.ManifestPath == "" {
 			return fmt.Errorf("%s requires --manifest <path>; run `vcpe %s --help` for usage", opts.Command, opts.Command)
+		}
+	case "release":
+		if opts.ManifestPath == "" {
+			return fmt.Errorf("release requires --manifest <path>; run `vcpe release --help` for usage")
+		}
+		if opts.Version == "" {
+			return fmt.Errorf("release requires --version <vX.Y.Z>; run `vcpe release --help` for usage")
 		}
 	case "down", "destroy":
 		// --name is optional: if omitted, runDown auto-selects the single active
