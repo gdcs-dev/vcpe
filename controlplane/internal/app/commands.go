@@ -19,15 +19,14 @@ import (
 // osExecutable is a package-level variable so tests can inject a fake.
 var osExecutable = os.Executable
 
-// runRelease builds all first-party service images with a versioned tag (from
-// git describe --tags --abbrev=0) and :latest, pushes them to their registries,
-// then stamps the manifest file with the version tag on success. Always uses the
-// Docker backend since multi-arch buildx push is required.
+// runRelease performs a full versioned release:
+//  1. Stamp first-party image tags in the manifest (opts.Version).
+//  2. git add → commit → tag → push (via runGitRelease).
+//  3. Build all first-party service images as multi-arch with :version + :latest.
+//
+// --version is required and validated by the CLI before this function is called.
 func runRelease(opts Options) (daemon.CommandResponse, error) {
-	version, err := DetectGitVersion()
-	if err != nil {
-		return daemon.CommandResponse{}, err
-	}
+	version := opts.Version // validated non-empty by CLI
 
 	doc, err := manifest.Load(opts.ManifestPath)
 	if err != nil {
@@ -42,16 +41,28 @@ func runRelease(opts Options) (daemon.CommandResponse, error) {
 		platforms = []string{"linux/amd64", "linux/arm64"}
 	}
 
-	// Default to Docker for release since multi-arch buildx push requires it,
-	// but allow --backend to override (e.g. for single-arch or custom setups).
 	backendName := opts.Backend
 	if backendName == "" {
 		backendName = "docker"
 	}
-	backend := newImageBackend(backendName)
+
 	var b strings.Builder
 	fmt.Fprintf(&b, "release %s for deployment %q (platforms: %s)\n", version, doc.Metadata.Name, strings.Join(platforms, ","))
 
+	// Stamp manifest before git operations so the tag lands on the right commit.
+	if err := manifest.StampManifestFile(opts.ManifestPath, version); err != nil {
+		return daemon.CommandResponse{}, fmt.Errorf("stamp manifest: %w", err)
+	}
+	fmt.Fprintf(&b, "manifest stamped: %s → tag: %s\n", opts.ManifestPath, version)
+
+	// Commit, tag, and push via git.
+	if err := runGitRelease(opts.ManifestPath, version); err != nil {
+		return daemon.CommandResponse{}, err
+	}
+	fmt.Fprintf(&b, "git: committed, tagged %s, and pushed to origin\n", version)
+
+	// Build and push images after the git tag is public.
+	backend := newImageBackend(backendName)
 	for _, svc := range doc.Spec.Services {
 		if svc.Image.BuildContext == "" {
 			continue // third-party image, skip
@@ -66,16 +77,10 @@ func runRelease(opts Options) (daemon.CommandResponse, error) {
 		}); err != nil {
 			return daemon.CommandResponse{}, fmt.Errorf("release build %s (%s): %w", svc.Name, versionedRef, err)
 		}
-		fmt.Fprintf(&b, "  %s (%s): built and pushed as %s, %s\n", svc.Name, svc.Type, versionedRef, latestRef)
+		fmt.Fprintf(&b, "  %s (%s): pushed as %s, %s\n", svc.Name, svc.Type, versionedRef, latestRef)
 	}
 
-	// Stamp manifest only after all images have been successfully pushed.
-	if err := manifest.StampManifestFile(opts.ManifestPath, version); err != nil {
-		return daemon.CommandResponse{}, fmt.Errorf("stamp manifest: %w", err)
-	}
-	fmt.Fprintf(&b, "manifest stamped: %s → tag: %s\n", opts.ManifestPath, version)
-	fmt.Fprintf(&b, "commit the manifest to record the release: git commit %s -m 'release: pin images to %s'", opts.ManifestPath, version)
-
+	fmt.Fprintf(&b, "release %s complete", version)
 	return daemon.CommandResponse{Message: strings.TrimRight(b.String(), "\n")}, nil
 }
 

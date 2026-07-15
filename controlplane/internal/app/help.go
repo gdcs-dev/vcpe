@@ -207,15 +207,19 @@ var commandHelp = map[string]CommandHelp{
 		},
 	},
 	"release": {
-		Synopsis:    "Build, tag, and push versioned images; stamp the manifest",
-		Description: "Detects the current git tag (git describe --tags --abbrev=0), builds all first-party service images (those with a buildContext) as multi-arch OCI manifest lists with both a versioned tag and :latest, and pushes them to their registries. After all images are pushed successfully, updates the manifest file to pin each first-party image.tag to the detected version. Always uses the Docker backend. Create a git tag before running this command.",
+		Synopsis:    "Stamp manifest, commit, tag, push git, then build and push images",
+		Description: "Requires --version <vX.Y.Z>. Sequence: (1) validate not on a non-main branch and that the tag doesn't exist; (2) stamp first-party image tags in the manifest; (3) git add + commit + tag + push to origin; (4) build all first-party service images as multi-arch OCI manifest lists with both the versioned tag and :latest and push to registry. Always defaults to the Docker backend. Third-party images (no buildContext) are never modified.",
 		RequiredFlags: []FlagHelp{
-			{Name: "--manifest", Arg: "<path>", Description: "Path to deployment manifest YAML (will be updated in place)"},
+			{Name: "--manifest", Arg: "<path>", Description: "Path to deployment manifest YAML (will be stamped in place)"},
+			{Name: "--version", Arg: "<vX.Y.Z>", Description: "Release version tag to create (e.g. v0.2.0); must not already exist in git"},
 		},
-		OptionalFlags: []FlagHelp{{Name: "--backend", Arg: "<podman|docker>", Description: "Container runtime backend (default: docker). Docker is required for multi-arch buildx push."}, {Name: "--platform", Arg: "<os/arch,...>", Description: "Target platforms (default: linux/amd64,linux/arm64)"}},
+		OptionalFlags: []FlagHelp{
+			{Name: "--backend", Arg: "<podman|docker>", Description: "Container runtime backend (default: docker)"},
+			{Name: "--platform", Arg: "<os/arch,...>", Description: "Target platforms (default: linux/amd64,linux/arm64)"},
+		},
 		Examples: []string{
-			"git tag v0.2.0 && vcpe release --manifest manifests/example.yaml",
-			"vcpe release --manifest manifests/example.yaml --platform linux/amd64",
+			"vcpe release --manifest manifests/example.yaml --version v0.2.0",
+			"vcpe release --manifest manifests/example.yaml --version v0.2.0 --platform linux/amd64",
 		},
 	},
 }
