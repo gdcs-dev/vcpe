@@ -1,8 +1,10 @@
-# Curated compose for the gateway service type. The control plane renders a
-# compose.env in this directory before `up`, populating the canonical
-# IFACE_<ROLE>_* contract plus DEPLOYMENT_NAME/SERVICE_NAME/IMAGE and the
-# gateway-specific LAN_*/EROUTER_* variables. No customer/deployment literals live
-# here.
+# Standalone / development compose for the gateway service type.
+# vcpe up uses a renderer-generated compose.yaml from the operation artifacts
+# directory — this file is NOT invoked by the normal vcpe workflow.
+#
+# To use standalone: copy a compose.env from the operation artifacts dir
+# into this directory, then run:
+#   podman compose -f services/gateway/compose.yaml up -d
 services:
   gateway:
     image: ${IMAGE}

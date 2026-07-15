@@ -1,7 +1,10 @@
-# Curated compose for the webpa service type. The control plane renders a
-# compose.env in this directory before `up`, populating the canonical
-# IFACE_<ROLE>_* contract plus DEPLOYMENT_NAME/SERVICE_NAME/IMAGE. WebPA takes no
-# typed config; all instance data comes from the rendered env.
+# Standalone / development compose for the webpa service type.
+# vcpe up uses a renderer-generated compose.yaml from the operation artifacts
+# directory — this file is NOT invoked by the normal vcpe workflow.
+#
+# To use standalone: copy a compose.env from the operation artifacts dir
+# into this directory, then run:
+#   podman compose -f services/webpa/compose.yaml up -d
 services:
   webpa:
     image: ${IMAGE}

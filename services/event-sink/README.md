@@ -13,7 +13,7 @@ Useful for testing any event type flowing through the XMiDT pipeline.
 | `WEBHOOK_URL` | `http://event-sink:8080/webhook` | This service's webhook URL (must be reachable by Caduceus) |
 | `WEBHOOK_EVENTS_REGEX` | `apparmor/.*` | Caduceus events filter regex — change to capture different event types |
 | `WEBHOOK_DEVICE_MATCHER` | `.*` | Caduceus device_id filter regex |
-| `WEBHOOK_SECRET` | _(required)_ | HMAC-SHA256 secret shared with Caduceus for `X-Webpa-Signature` validation |
+| `WEBHOOK_SECRET` | _(required)_ | HMAC-SHA1 secret shared with Caduceus for `X-Webpa-Signature` validation |
 | `LISTEN_ADDR` | `:8080` | HTTP listen address |
 
 ## Starting the service
@@ -31,15 +31,17 @@ automatically. See `manifests/example.yaml` for a working example.
 
 ### Standalone (development / unit testing)
 
-For isolated testing, the compose file requires `${IFACE_MGMT_NETWORK}` from the
-webpa rendered `compose.env`:
+For isolated testing, run `vcpe up --manifest manifests/example.yaml` once first to
+generate the rendered env file, then reference it directly:
 
 ```bash
 podman compose \
-  --env-file services/webpa/compose.env \
+  --env-file ~/.local/state/vcpe-controlplane/artifacts/v1/operations/$(ls -t ~/.local/state/vcpe-controlplane/artifacts/v1/operations/ | head -1)/runtime/event-sink/compose.env \
   -f services/event-sink/compose.yaml \
   up -d
 ```
+
+Or set `IFACE_MGMT_NETWORK` manually if you know the network name.
 
 ## Capturing different event types
 
@@ -73,7 +75,7 @@ go build ./...   # verify compilation
 
 ## Architecture
 
-- Webhook registration is Argus-backed (PUT to `http://webpa:6600/store/webhooks/{sha256(url)}`), durable across Caduceus restarts.
+- Webhook registration uses the `ancla` library to register with Argus (bucket: `webhooks`), making registrations durable across Caduceus restarts.
 - TTL is 12 hours; a background goroutine refreshes every 6 hours.
-- All incoming webhook POSTs are validated with `X-Webpa-Signature: sha256=<hmac>`.
+- All incoming webhook POSTs are validated with `X-Webpa-Signature: sha1=<hmac>` (Caduceus signs with HMAC-SHA1).
 - Received events are logged as structured JSON to stdout — no persistent storage.

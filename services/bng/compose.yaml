@@ -1,8 +1,10 @@
-# Curated compose for the bng service type. The control plane renders a
-# compose.env in this directory before `up`, populating the canonical
-# IFACE_<ROLE>_* contract plus DEPLOYMENT_NAME/SERVICE_NAME/IMAGE. All instance
-# data (image, container name, MACs, networks) comes from that env file; this
-# file contains no customer- or deployment-specific literals.
+# Standalone / development compose for the bng service type.
+# vcpe up uses a renderer-generated compose.yaml from the operation artifacts
+# directory — this file is NOT invoked by the normal vcpe workflow.
+#
+# To use standalone: copy a compose.env from the operation artifacts dir
+# (or generate one manually) into this directory, then run:
+#   podman compose -f services/bng/compose.yaml up -d
 services:
   bng:
     image: ${IMAGE}

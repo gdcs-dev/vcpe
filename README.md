@@ -69,7 +69,6 @@ vcpe up --manifest manifests/example.yaml --allow-disruptive
 
 | Command | Description |
 |---------|-------------|
-| `vcpe init` | Initialize the vCPE state root |
 | `vcpe build` | Build or pull service images from a manifest |
 | `vcpe push` | Push service images to their registries |
 | `vcpe release` | Stamp manifest, git commit+tag+push, build and push images |
