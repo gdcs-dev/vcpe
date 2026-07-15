@@ -9,7 +9,6 @@ import (
 
 	"github.com/gdcs-dev/vcpe/controlplane/internal/app/wizard"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/daemon"
-	"github.com/gdcs-dev/vcpe/controlplane/internal/image"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/manifest"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/persist"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/planner"
@@ -18,125 +17,6 @@ import (
 
 // osExecutable is a package-level variable so tests can inject a fake.
 var osExecutable = os.Executable
-
-// runRelease performs a full versioned release:
-//  1. Stamp first-party image tags in the manifest (opts.Version).
-//  2. git add → commit → tag → push (via runGitRelease).
-//  3. Build all first-party service images as multi-arch with :version + :latest.
-//
-// --version is required and validated by the CLI before this function is called.
-func runRelease(opts Options) (daemon.CommandResponse, error) {
-	version := opts.Version // validated non-empty by CLI
-
-	doc, err := manifest.Load(opts.ManifestPath)
-	if err != nil {
-		return daemon.CommandResponse{}, err
-	}
-	if err := Preflight(doc); err != nil {
-		return daemon.CommandResponse{}, err
-	}
-
-	platforms := opts.Platforms
-	if len(platforms) == 0 {
-		platforms = []string{"linux/amd64", "linux/arm64"}
-	}
-
-	backendName := opts.Backend
-	if backendName == "" {
-		backendName = "docker"
-	}
-
-	var b strings.Builder
-	fmt.Fprintf(&b, "release %s for deployment %q (platforms: %s)\n", version, doc.Metadata.Name, strings.Join(platforms, ","))
-
-	// Run all git pre-flight checks before touching any files or the registry.
-	if err := gitReleasePreflight(version); err != nil {
-		return daemon.CommandResponse{}, err
-	}
-
-	// Stamp manifest before git commit so the tag lands on the right commit.
-	if err := manifest.StampManifestFile(opts.ManifestPath, version); err != nil {
-		return daemon.CommandResponse{}, fmt.Errorf("stamp manifest: %w", err)
-	}
-	fmt.Fprintf(&b, "manifest stamped: %s → tag: %s\n", opts.ManifestPath, version)
-
-	// Commit, tag, and push via git.
-	if err := runGitRelease(opts.ManifestPath, version); err != nil {
-		return daemon.CommandResponse{}, err
-	}
-	fmt.Fprintf(&b, "git: committed, tagged %s, and pushed to origin\n", version)
-
-	// Build and push images after the git tag is public.
-	backend := newImageBackend(backendName)
-	for _, svc := range doc.Spec.Services {
-		if svc.Image.BuildContext == "" {
-			continue // third-party image, skip
-		}
-		versionedRef := fmt.Sprintf("%s:%s", svc.Image.Repository, version)
-		latestRef := fmt.Sprintf("%s:latest", svc.Image.Repository)
-		if err := backend.BuildImage(context.Background(), image.BuildRequest{
-			Tags:      []string{versionedRef, latestRef},
-			Context:   svc.Image.BuildContext,
-			File:      svc.Image.Containerfile,
-			Platforms: platforms,
-		}); err != nil {
-			return daemon.CommandResponse{}, fmt.Errorf("release build %s (%s): %w", svc.Name, versionedRef, err)
-		}
-		fmt.Fprintf(&b, "  %s (%s): pushed as %s, %s\n", svc.Name, svc.Type, versionedRef, latestRef)
-	}
-
-	fmt.Fprintf(&b, "release %s complete", version)
-	return daemon.CommandResponse{Message: strings.TrimRight(b.String(), "\n")}, nil
-}
-
-// runBuild resolves image actions for the manifest's services without applying
-// runtime changes.
-func runBuild(opts Options) (daemon.CommandResponse, error) {
-	doc, err := manifest.Load(opts.ManifestPath)
-	if err != nil {
-		return daemon.CommandResponse{}, err
-	}
-	if err := Preflight(doc); err != nil {
-		return daemon.CommandResponse{}, err
-	}
-	platforms := opts.Platforms
-	if len(platforms) == 0 {
-		platforms = []string{"linux/amd64", "linux/arm64"}
-	}
-	mgr := image.New(newImageBackend(opts.Backend))
-	summary, err := mgr.BuildWithOptions(context.Background(), doc, image.BuildOptions{NoCache: opts.NoCache, Platforms: platforms, ForceBuild: true})
-	if err != nil {
-		return daemon.CommandResponse{}, err
-	}
-	var b strings.Builder
-	fmt.Fprintf(&b, "build complete for deployment %q (platforms: %s)\n", doc.Metadata.Name, strings.Join(platforms, ","))
-	for _, action := range summary.Actions {
-		fmt.Fprintf(&b, "  %s (%s): %s\n", action.Service, action.Type, action.Action)
-	}
-	return daemon.CommandResponse{Message: strings.TrimRight(b.String(), "\n")}, nil
-}
-
-// runPush pushes all service images from the manifest to their registries.
-func runPush(opts Options) (daemon.CommandResponse, error) {
-	doc, err := manifest.Load(opts.ManifestPath)
-	if err != nil {
-		return daemon.CommandResponse{}, err
-	}
-	if err := Preflight(doc); err != nil {
-		return daemon.CommandResponse{}, err
-	}
-	backend := newImageBackend(opts.Backend)
-	var b strings.Builder
-	fmt.Fprintf(&b, "push complete for deployment %q\n", doc.Metadata.Name)
-	for _, svc := range doc.Spec.Services {
-		ref := image.ImageReference(svc.Image)
-		if err := backend.PushImage(context.Background(), image.PushRequest{Reference: ref}); err != nil {
-			return daemon.CommandResponse{}, fmt.Errorf("push %s (%s): %w", svc.Name, ref, err)
-		}
-		fmt.Fprintf(&b, "  %s (%s): pushed\n", svc.Name, ref)
-	}
-	return daemon.CommandResponse{Message: strings.TrimRight(b.String(), "\n")}, nil
-}
 
 // runPlan validates and resolves a manifest, reporting the intended deployment
 // shape without mutating runtime resources or persisted state.

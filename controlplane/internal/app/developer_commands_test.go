@@ -1,3 +1,5 @@
+//go:build !homebrew
+
 package app
 
 import (
