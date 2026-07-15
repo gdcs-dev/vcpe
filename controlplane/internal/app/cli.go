@@ -45,9 +45,6 @@ type Options struct {
 // topLevelCommands are the public operator commands.
 var topLevelCommands = map[string]struct{}{
 	"init":     {},
-	"build":    {},
-	"push":     {},
-	"release":  {},
 	"up":       {},
 	"apply":    {},
 	"down":     {},

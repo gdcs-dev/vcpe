@@ -6,9 +6,9 @@ Required flags:
   --manifest <path>       Path to deployment manifest YAML
 
 Optional flags:
-  --backend <podman|docker>  Container runtime for push operations (default: podman). With --backend docker, this is a re-push; multi-arch images are already pushed during `vcpe build --backend docker`.
+  --backend <podman|docker>  Container runtime for push operations (default: podman).
   --state-root <path>     Override the default state root directory
 
 Examples:
-  vcpe push --manifest ./manifest-bng-7.yaml
-  vcpe push --manifest ./manifest-bng-7.yaml --backend docker
+  vcpe push --manifest manifests/example.yaml
+  vcpe push --manifest manifests/example.yaml --backend docker

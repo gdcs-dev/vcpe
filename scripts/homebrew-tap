@@ -157,6 +157,7 @@ class Vcpe < Formula
   def install
     cd "controlplane" do
       system "go", "build",
+             "-tags", "homebrew",
              "-ldflags", "-s -w -X 'main.version=#{version}'",
              "-o", bin/"vcpe",
              "./cmd/vcpe"

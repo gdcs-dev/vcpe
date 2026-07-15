@@ -32,12 +32,6 @@ func executeLocal(opts Options) (daemon.CommandResponse, error) {
 		return runInit(opts)
 	case "apply", "up":
 		return runApply(opts)
-	case "build":
-		return runBuild(opts)
-	case "push":
-		return runPush(opts)
-	case "release":
-		return runRelease(opts)
 	case "plan":
 		return runPlan(opts)
 	case "down", "destroy":
@@ -55,7 +49,7 @@ func executeLocal(opts Options) (daemon.CommandResponse, error) {
 	case "state":
 		return runState(opts)
 	default:
-		return daemon.CommandResponse{}, fmt.Errorf("command %q is not executable", opts.Command)
+		return dispatchDeveloperCommand(opts)
 	}
 }
 
