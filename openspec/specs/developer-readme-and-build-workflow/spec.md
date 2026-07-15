@@ -4,7 +4,7 @@ Define the top-level developer workflow and documentation contract for building,
 ## Requirements
 
 ### Requirement: Top-level README must provide an end-to-end developer workflow
-The project SHALL provide a top-level README that documents project overview, prerequisites, build steps, run steps, and test/verification steps with executable command examples for the primary Go `vcpe` command driven by a `vcpe.dev/v1` `Deployment` manifest.
+The project SHALL provide a top-level README that documents project overview, installation (Homebrew and from-source paths), quick start using `vcpe manifest list`/`vcpe manifest build`/`vcpe up`, all top-level vcpe commands with one-line descriptions, all registered service types, and troubleshooting steps. The README SHALL reflect the current command surface including `manifest list`, `manifest build`, `build`, `push`, `release`, and `version`. Service types documented SHALL include `bng`, `gateway`, `webpa`, `event-sink`, `xb10`, `oktopus`, and `generic-container`.
 
 #### Scenario: New developer follows quick start
 - **WHEN** a developer reads the top-level README quick start section
