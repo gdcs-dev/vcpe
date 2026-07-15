@@ -2,3 +2,4 @@
 # The ours driver always keeps the current branch's version of matched files.
 # Requires one-time git config: git config merge.ours.driver true
 openspec/** merge=ours
+.gitignore merge=ours
