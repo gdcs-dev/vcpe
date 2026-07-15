@@ -1,18 +1,34 @@
 ## Purpose
-Define the versioned image release workflow for vcpe: building, tagging, and pushing first-party container images with a git-derived version tag, and stamping deployment manifests with the pinned version.
+Define the versioned image release workflow for vcpe: building, tagging, and pushing first-party container images with an explicit version tag, and stamping deployment manifests with the pinned version.
 
 ## Requirements
 
 ### Requirement: Release command builds, tags, and stamps a versioned release
-The system SHALL provide a `vcpe release` command that: (1) detects the current release version from `git describe --tags --abbrev=0`, (2) builds all first-party service images (those with a non-empty `image.buildContext`) as a multi-arch OCI manifest list (`linux/amd64` and `linux/arm64`) in a single `buildx build --push` invocation with both the versioned tag and `:latest`, (3) after all images are successfully pushed, rewrites each `--manifest` file in place using the `gopkg.in/yaml.v3` Node API to change first-party service `image.tag` values from their current value to the detected version, preserving all YAML comments and formatting. Third-party images (no `buildContext`) SHALL be left unchanged. The command SHALL always use the Docker backend and SHALL fail with a clear error if no git tag is found before touching any image or file.
+The system SHALL provide a `vcpe release` command that requires an explicit `--version <vX.Y.Z>` flag. The command SHALL execute the following sequence: (1) validate that the provided version tag does not already exist in git; (2) stamp all first-party service images (those with a non-empty `image.buildContext`) in the `--manifest` file using the `gopkg.in/yaml.v3` Node API, changing `image.tag` values to the provided version and preserving all YAML comments and formatting; (3) stage the manifest file (`git add`), commit it (`git commit -m "release: pin images to <version>"`), create a lightweight git tag (`git tag <version>`), push the commit (`git push origin HEAD`), and push the tag (`git push origin <version>`); (4) build all first-party service images as a multi-arch OCI manifest list (`linux/amd64` and `linux/arm64`) in a single `buildx build --push` invocation with both the versioned tag and `:latest`; (5) report completion. Third-party images (no `buildContext`) SHALL be left unchanged in the manifest and not built or pushed. The command SHALL always use the Docker backend by default. Version auto-detection from `git describe` is removed.
 
-#### Scenario: Release stamps versioned and latest tags
-- **WHEN** an operator runs `vcpe release --manifest manifests/example.yaml` on a commit tagged `v0.1.0`
-- **THEN** each first-party service image is built and pushed as both `<repo>:v0.1.0` and `<repo>:latest`, and `manifests/example.yaml` is updated so every first-party `image.tag` reads `v0.1.0`
+#### Scenario: Release stamps, commits, tags, and pushes
+- **WHEN** an operator runs `vcpe release --manifest manifests/example.yaml --version v0.2.0`
+- **THEN** the manifest is stamped with `v0.2.0`, a commit and lightweight tag `v0.2.0` are created and pushed to `origin`, and each first-party service image is built and pushed as both `<repo>:v0.2.0` and `<repo>:latest`
 
 #### Scenario: Third-party images are untouched
 - **WHEN** a manifest contains a service with no `buildContext` (e.g. `docker.io/library/alpine`)
 - **THEN** `vcpe release` does not build, push, or retag that image, and its `tag` field in the manifest is not modified
+
+#### Scenario: Existing tag fails before side effects
+- **WHEN** an operator runs `vcpe release --version v0.2.0` and the tag `v0.2.0` already exists in git
+- **THEN** the command fails with a clear error before touching the manifest, git history, or any images
+
+#### Scenario: Non-main branch fails before side effects
+- **WHEN** an operator runs `vcpe release` from a branch other than `main`
+- **THEN** the command fails with a clear error identifying the current branch name, before touching the manifest, git history, or any images
+
+#### Scenario: --version omitted fails immediately
+- **WHEN** an operator runs `vcpe release` without `--version`
+- **THEN** the command fails with a clear error explaining that `--version` is required, before any side effects
+
+#### Scenario: Push failure after git tag — images not yet published
+- **WHEN** the git push succeeds but the image build or push fails
+- **THEN** the manifest stamp and git tag are intact; the operator can retry the image build+push step
 
 #### Scenario: No git tag fails before side effects
 - **WHEN** an operator runs `vcpe release` and no git tag exists on the current commit or its ancestors
