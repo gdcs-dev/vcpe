@@ -74,7 +74,7 @@ spec:
           replicas: 1
           image:
             repository: ghcr.io/gdcs-dev/bng
-            tag: dev
+            tag: v0.2.0
             pullPolicy: always-pull
             buildContext: services/bng
           interfaces:
@@ -106,7 +106,7 @@ spec:
           replicas: 1
           image:
             repository: ghcr.io/gdcs-dev/webpa
-            tag: dev
+            tag: v0.2.0
             pullPolicy: always-pull
             buildContext: services/webpa
           interfaces:
@@ -122,8 +122,8 @@ spec:
           replicas: 1
           image:
             repository: ghcr.io/gdcs-dev/gateway
-            tag: dev
-            pullPolicy: build-if-missing
+            tag: v0.2.0
+            pullPolicy: always-pull
             buildContext: services/gateway
           interfaces:
             - {role: wan, ipv4: "10.7.200.10"}
@@ -149,7 +149,7 @@ spec:
           replicas: 1
           image:
             repository: ghcr.io/gdcs-dev/event-sink
-            tag: dev
+            tag: v0.2.0
             pullPolicy: always-pull
             buildContext: services/event-sink
             containerfile: services/event-sink/Containerfile
