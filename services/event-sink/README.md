@@ -18,11 +18,24 @@ Useful for testing any event type flowing through the XMiDT pipeline.
 
 ## Starting the service
 
-The compose file needs `${IFACE_MGMT_NETWORK}` from the webpa rendered `compose.env`.
-Always start with `--env-file`:
+### Via vcpe (recommended)
+
+Declare event-sink in your deployment manifest and bring it up with vcpe:
 
 ```bash
-docker compose \
+vcpe up --manifest manifests/example.yaml
+```
+
+The manifest's `event-sink` service entry handles env vars and network attachment
+automatically. See `manifests/example.yaml` for a working example.
+
+### Standalone (development / unit testing)
+
+For isolated testing, the compose file requires `${IFACE_MGMT_NETWORK}` from the
+webpa rendered `compose.env`:
+
+```bash
+podman compose \
   --env-file services/webpa/compose.env \
   -f services/event-sink/compose.yaml \
   up -d
@@ -34,13 +47,13 @@ Change `WEBHOOK_EVENTS_REGEX` to match any Caduceus-routed event:
 
 ```bash
 # Capture all events
-WEBHOOK_EVENTS_REGEX=.* docker compose ...
+WEBHOOK_EVENTS_REGEX=.* podman compose ...
 
 # Capture only device-status events
-WEBHOOK_EVENTS_REGEX=device-status.* docker compose ...
+WEBHOOK_EVENTS_REGEX=device-status.* podman compose ...
 
 # Capture AppArmor denied events only
-WEBHOOK_EVENTS_REGEX=apparmor/denied.* docker compose ...
+WEBHOOK_EVENTS_REGEX=apparmor/denied.* podman compose ...
 ```
 
 ## Example log output

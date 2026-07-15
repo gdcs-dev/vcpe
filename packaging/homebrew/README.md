@@ -31,9 +31,21 @@ vcpe manifest list
 Apply a deployment:
 
 ```bash
-vcpe apply --manifest single-gateway   # by name (searches pkgshare + ~/.vcpe/manifests/)
-vcpe apply                              # auto-select when only one manifest is available
-vcpe apply --manifest /path/to/my.yaml # explicit path (unchanged)
+vcpe up --manifest single-gateway   # by name (searches pkgshare + ~/.vcpe/manifests/)
+vcpe up                              # auto-select when only one manifest is available
+vcpe up --manifest /path/to/my.yaml # explicit path (unchanged)
+```
+
+Create a new manifest interactively:
+
+```bash
+vcpe manifest build
+```
+
+Release a new version (stamps manifest, creates git tag, builds and pushes images):
+
+```bash
+vcpe release --manifest manifests/example.yaml --version v0.2.0
 ```
 
 User-local manifests can be placed in `~/.vcpe/manifests/` or any directory
@@ -43,9 +55,9 @@ listed in `VCPE_MANIFEST_DIRS` (colon-separated).
 
 | Channel | Branch | Notes |
 |---------|--------|-------|
+| `release` | tagged release | Stable release **(default)** |
 | `main` | `main` | Stable development branch |
-| `development` | `development` | Active development branch (default for this tap) |
-| `release` | tagged release | Requires `VCPE_HOMEBREW_VERSION` and `VCPE_HOMEBREW_SHA256` |
+| `development` | `development` | Active development branch |
 
 ## Updating the Formula
 
@@ -54,6 +66,12 @@ After significant pushes, refresh it:
 
 ```bash
 cd /path/to/vcpe
+scripts/sync-homebrew-vcpe
+```
+
+To sync a specific channel:
+
+```bash
 VCPE_HOMEBREW_CHANNEL=development scripts/sync-homebrew-vcpe
 ```
 
