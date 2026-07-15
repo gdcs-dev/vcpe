@@ -4,6 +4,8 @@ metadata:
   name: example-macvlan
   labels:
     scenario: example-macvlan
+  annotations:
+    description: "Full vCPE lab using macvlan WAN — BNG, WebPA, Gateway, event-sink, and Alpine client"
 
 spec:
   maxReplicasPerService: 3
@@ -42,7 +44,7 @@ spec:
       driver: macvlan
       ipamDriver: none
       driverOptions:
-        parent: eth0      # ← change to your physical NIC name
+        parent: eth0 # ← change to your physical NIC name
       ipv4:
         cidr: 10.7.200.0/24
         gateway: 10.7.200.1
