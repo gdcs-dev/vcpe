@@ -38,10 +38,9 @@ func initTempRepo(t *testing.T) string {
 	return dir
 }
 
-// runInDir is a helper that sets the working directory for runGitRelease by
-// temporarily changing os.Getwd. This relies on exec.Command inheriting the
-// working directory of the current process.
-func runGitReleaseIn(dir, manifestPath, version string) error {
+// runPreflightIn is a helper that sets the working directory for gitReleasePreflight
+// by temporarily changing the process working directory.
+func runPreflightIn(dir, version string) error {
 	orig, err := os.Getwd()
 	if err != nil {
 		return err
@@ -50,7 +49,7 @@ func runGitReleaseIn(dir, manifestPath, version string) error {
 		return err
 	}
 	defer os.Chdir(orig) //nolint:errcheck
-	return runGitRelease(manifestPath, version)
+	return gitReleasePreflight(version)
 }
 
 func TestRunGitRelease_NonMainBranch(t *testing.T) {
@@ -63,7 +62,7 @@ func TestRunGitRelease_NonMainBranch(t *testing.T) {
 		t.Fatalf("checkout: %v\n%s", err, out)
 	}
 
-	err := runGitReleaseIn(dir, "README.md", "v0.1.0")
+	err := runPreflightIn(dir, "v0.1.0")
 	if err == nil {
 		t.Fatal("expected error for non-main branch, got nil")
 	}
@@ -85,7 +84,7 @@ func TestRunGitRelease_TagAlreadyExists(t *testing.T) {
 		t.Fatalf("pre-tag: %v\n%s", err, out)
 	}
 
-	err := runGitReleaseIn(dir, "README.md", "v0.1.0")
+	err := runPreflightIn(dir, "v0.1.0")
 	if err == nil {
 		t.Fatal("expected error for existing tag, got nil")
 	}

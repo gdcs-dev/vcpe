@@ -49,7 +49,12 @@ func runRelease(opts Options) (daemon.CommandResponse, error) {
 	var b strings.Builder
 	fmt.Fprintf(&b, "release %s for deployment %q (platforms: %s)\n", version, doc.Metadata.Name, strings.Join(platforms, ","))
 
-	// Stamp manifest before git operations so the tag lands on the right commit.
+	// Run all git pre-flight checks before touching any files or the registry.
+	if err := gitReleasePreflight(version); err != nil {
+		return daemon.CommandResponse{}, err
+	}
+
+	// Stamp manifest before git commit so the tag lands on the right commit.
 	if err := manifest.StampManifestFile(opts.ManifestPath, version); err != nil {
 		return daemon.CommandResponse{}, fmt.Errorf("stamp manifest: %w", err)
 	}
