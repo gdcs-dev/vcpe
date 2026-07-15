@@ -19,6 +19,66 @@ import (
 // osExecutable is a package-level variable so tests can inject a fake.
 var osExecutable = os.Executable
 
+// runRelease builds all first-party service images with a versioned tag (from
+// git describe --tags --abbrev=0) and :latest, pushes them to their registries,
+// then stamps the manifest file with the version tag on success. Always uses the
+// Docker backend since multi-arch buildx push is required.
+func runRelease(opts Options) (daemon.CommandResponse, error) {
+	version, err := DetectGitVersion()
+	if err != nil {
+		return daemon.CommandResponse{}, err
+	}
+
+	doc, err := manifest.Load(opts.ManifestPath)
+	if err != nil {
+		return daemon.CommandResponse{}, err
+	}
+	if err := Preflight(doc); err != nil {
+		return daemon.CommandResponse{}, err
+	}
+
+	platforms := opts.Platforms
+	if len(platforms) == 0 {
+		platforms = []string{"linux/amd64", "linux/arm64"}
+	}
+
+	// Default to Docker for release since multi-arch buildx push requires it,
+	// but allow --backend to override (e.g. for single-arch or custom setups).
+	backendName := opts.Backend
+	if backendName == "" {
+		backendName = "docker"
+	}
+	backend := newImageBackend(backendName)
+	var b strings.Builder
+	fmt.Fprintf(&b, "release %s for deployment %q (platforms: %s)\n", version, doc.Metadata.Name, strings.Join(platforms, ","))
+
+	for _, svc := range doc.Spec.Services {
+		if svc.Image.BuildContext == "" {
+			continue // third-party image, skip
+		}
+		versionedRef := fmt.Sprintf("%s:%s", svc.Image.Repository, version)
+		latestRef := fmt.Sprintf("%s:latest", svc.Image.Repository)
+		if err := backend.BuildImage(context.Background(), image.BuildRequest{
+			Tags:      []string{versionedRef, latestRef},
+			Context:   svc.Image.BuildContext,
+			File:      svc.Image.Containerfile,
+			Platforms: platforms,
+		}); err != nil {
+			return daemon.CommandResponse{}, fmt.Errorf("release build %s (%s): %w", svc.Name, versionedRef, err)
+		}
+		fmt.Fprintf(&b, "  %s (%s): built and pushed as %s, %s\n", svc.Name, svc.Type, versionedRef, latestRef)
+	}
+
+	// Stamp manifest only after all images have been successfully pushed.
+	if err := manifest.StampManifestFile(opts.ManifestPath, version); err != nil {
+		return daemon.CommandResponse{}, fmt.Errorf("stamp manifest: %w", err)
+	}
+	fmt.Fprintf(&b, "manifest stamped: %s → tag: %s\n", opts.ManifestPath, version)
+	fmt.Fprintf(&b, "commit the manifest to record the release: git commit %s -m 'release: pin images to %s'", opts.ManifestPath, version)
+
+	return daemon.CommandResponse{Message: strings.TrimRight(b.String(), "\n")}, nil
+}
+
 // runBuild resolves image actions for the manifest's services without applying
 // runtime changes.
 func runBuild(opts Options) (daemon.CommandResponse, error) {

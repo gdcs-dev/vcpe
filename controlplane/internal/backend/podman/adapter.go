@@ -27,7 +27,7 @@ type NetworkSpec struct {
 }
 
 type ImageBuildRequest struct {
-	Tag       string
+	Tags      []string // one or more repo:tag values; at least one required
 	Context   string
 	File      string
 	NoCache   bool
@@ -281,9 +281,9 @@ func (a *Adapter) BuildImage(ctx context.Context, req ImageBuildRequest) error {
 	// When building a multi-arch manifest list, remove any existing image or
 	// manifest with the same tag first. podman build --manifest fails if the
 	// name already exists as a regular (single-arch) image.
-	if len(req.Platforms) > 0 {
-		exec.CommandContext(ctx, "podman", "manifest", "rm", req.Tag).Run() //nolint:errcheck
-		exec.CommandContext(ctx, "podman", "rmi", "--force", req.Tag).Run() //nolint:errcheck
+	if len(req.Platforms) > 0 && len(req.Tags) > 0 {
+		exec.CommandContext(ctx, "podman", "manifest", "rm", req.Tags[0]).Run() //nolint:errcheck
+		exec.CommandContext(ctx, "podman", "rmi", "--force", req.Tags[0]).Run() //nolint:errcheck
 	}
 	args, err := buildImageArgs(req)
 	if err != nil {
@@ -293,7 +293,11 @@ func (a *Adapter) BuildImage(ctx context.Context, req ImageBuildRequest) error {
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("build podman image %s: %w", req.Tag, err)
+		primary := ""
+		if len(req.Tags) > 0 {
+			primary = req.Tags[0]
+		}
+		return fmt.Errorf("build podman image %s: %w", primary, err)
 	}
 	return nil
 }
@@ -337,17 +341,21 @@ func (a *Adapter) TagImage(ctx context.Context, req ImageTagRequest) error {
 }
 
 func buildImageArgs(req ImageBuildRequest) ([]string, error) {
-	if req.Tag == "" {
-		return nil, fmt.Errorf("build image tag is required")
+	if len(req.Tags) == 0 {
+		return nil, fmt.Errorf("build image tags are required")
 	}
 	if req.Context == "" {
 		return nil, fmt.Errorf("build context is required")
 	}
 	var args []string
 	if len(req.Platforms) > 0 {
-		args = []string{"build", "--platform", strings.Join(req.Platforms, ","), "--manifest", req.Tag}
+		// Multi-arch: podman build only accepts a single --manifest name.
+		args = []string{"build", "--platform", strings.Join(req.Platforms, ","), "--manifest", req.Tags[0]}
 	} else {
-		args = []string{"build", "-t", req.Tag}
+		args = []string{"build"}
+		for _, t := range req.Tags {
+			args = append(args, "-t", t)
+		}
 	}
 	if req.NoCache {
 		args = append(args, "--no-cache")

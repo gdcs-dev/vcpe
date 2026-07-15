@@ -46,6 +46,7 @@ var topLevelCommands = map[string]struct{}{
 	"init":     {},
 	"build":    {},
 	"push":     {},
+	"release":  {},
 	"up":       {},
 	"apply":    {},
 	"down":     {},
@@ -130,7 +131,7 @@ func extractHelpCommand(args []string) (string, bool) {
 // should participate in manifest auto-discovery when --manifest is omitted.
 func isManifestCommand(cmd string) bool {
 	switch cmd {
-	case "build", "push", "up", "apply", "plan":
+	case "build", "push", "release", "up", "apply", "plan":
 		return true
 	}
 	return false
@@ -315,11 +316,11 @@ func parseArgs(_ string, args []string) (Options, error) {
 	if opts.NoCache && command != "build" {
 		return Options{}, fmt.Errorf("--no-cache is only supported for build")
 	}
-	if len(opts.Platforms) > 0 && command != "build" {
-		return Options{}, fmt.Errorf("--platform is only supported for build")
+	if len(opts.Platforms) > 0 && command != "build" && command != "release" {
+		return Options{}, fmt.Errorf("--platform is only supported for build and release")
 	}
-	if opts.Backend != "" && command != "build" && command != "push" {
-		return Options{}, fmt.Errorf("--backend is only supported for build and push")
+	if opts.Backend != "" && command != "build" && command != "push" && command != "release" {
+		return Options{}, fmt.Errorf("--backend is only supported for build, push, and release")
 	}
 	if opts.Backend != "" && opts.Backend != "podman" && opts.Backend != "docker" {
 		return Options{}, fmt.Errorf("unknown backend %q: must be podman or docker", opts.Backend)
@@ -340,7 +341,7 @@ func parseArgs(_ string, args []string) (Options, error) {
 // validateCommandShape enforces per-command positional/flag grammar.
 func validateCommandShape(opts *Options) error {
 	switch opts.Command {
-	case "up", "apply", "build", "plan", "push":
+	case "up", "apply", "build", "plan", "push", "release":
 		if opts.ManifestPath == "" {
 			return fmt.Errorf("%s requires --manifest <path>; run `vcpe %s --help` for usage", opts.Command, opts.Command)
 		}

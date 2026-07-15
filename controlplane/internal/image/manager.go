@@ -25,7 +25,7 @@ type Backend interface {
 }
 
 type BuildRequest struct {
-	Tag       string
+	Tags      []string // one or more repo:tag values; at least one required
 	Context   string
 	File      string
 	NoCache   bool
@@ -115,7 +115,7 @@ func (m *Manager) BuildWithOptions(ctx context.Context, doc manifest.Document, o
 		if opts.ForceBuild {
 			if service.Image.BuildContext != "" {
 				action.Action = "build"
-				if err := m.backend.BuildImage(ctx, BuildRequest{Tag: imageRef, Context: service.Image.BuildContext, File: service.Image.Containerfile, NoCache: opts.NoCache, Platforms: opts.Platforms}); err != nil {
+				if err := m.backend.BuildImage(ctx, BuildRequest{Tags: []string{imageRef}, Context: service.Image.BuildContext, File: service.Image.Containerfile, NoCache: opts.NoCache, Platforms: opts.Platforms}); err != nil {
 					return summary, &LifecycleError{Service: action.Service, Image: action.Image, Action: action.Action, Reason: "build command failed", Err: err}
 				}
 			} else if imageRef != "" {
@@ -143,7 +143,7 @@ func (m *Manager) BuildWithOptions(ctx context.Context, doc manifest.Document, o
 			}
 		default:
 			action.Action = "build"
-			if err := m.backend.BuildImage(ctx, BuildRequest{Tag: imageRef, Context: service.Image.BuildContext, File: service.Image.Containerfile, NoCache: opts.NoCache, Platforms: opts.Platforms}); err != nil {
+			if err := m.backend.BuildImage(ctx, BuildRequest{Tags: []string{imageRef}, Context: service.Image.BuildContext, File: service.Image.Containerfile, NoCache: opts.NoCache, Platforms: opts.Platforms}); err != nil {
 				return summary, &LifecycleError{Service: action.Service, Image: action.Image, Action: action.Action, Reason: "build command failed", Err: err}
 			}
 		}
@@ -176,7 +176,7 @@ func (m *Manager) EnsureForApply(ctx context.Context, doc manifest.Document) (Su
 		default:
 			if !exists {
 				actionName = "build"
-				if err := m.backend.BuildImage(ctx, BuildRequest{Tag: imageRef, Context: service.Image.BuildContext, File: service.Image.Containerfile}); err != nil {
+				if err := m.backend.BuildImage(ctx, BuildRequest{Tags: []string{imageRef}, Context: service.Image.BuildContext, File: service.Image.Containerfile}); err != nil {
 					return summary, &LifecycleError{Service: service.Name, Image: imageRef, Action: actionName, Reason: "build-if-missing policy selected", Err: err}
 				}
 			}

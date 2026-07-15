@@ -206,6 +206,18 @@ var commandHelp = map[string]CommandHelp{
 			"vcpe version",
 		},
 	},
+	"release": {
+		Synopsis:    "Build, tag, and push versioned images; stamp the manifest",
+		Description: "Detects the current git tag (git describe --tags --abbrev=0), builds all first-party service images (those with a buildContext) as multi-arch OCI manifest lists with both a versioned tag and :latest, and pushes them to their registries. After all images are pushed successfully, updates the manifest file to pin each first-party image.tag to the detected version. Always uses the Docker backend. Create a git tag before running this command.",
+		RequiredFlags: []FlagHelp{
+			{Name: "--manifest", Arg: "<path>", Description: "Path to deployment manifest YAML (will be updated in place)"},
+		},
+		OptionalFlags: []FlagHelp{{Name: "--backend", Arg: "<podman|docker>", Description: "Container runtime backend (default: docker). Docker is required for multi-arch buildx push."}, {Name: "--platform", Arg: "<os/arch,...>", Description: "Target platforms (default: linux/amd64,linux/arm64)"}},
+		Examples: []string{
+			"git tag v0.2.0 && vcpe release --manifest manifests/example.yaml",
+			"vcpe release --manifest manifests/example.yaml --platform linux/amd64",
+		},
+	},
 }
 
 // GlobalHelp returns the top-level help string listing all public commands.
@@ -216,7 +228,7 @@ func GlobalHelp() string {
 
 	// Fixed column width for aligned synopsis column.
 	const synopsisCol = 10
-	order := []string{"init", "build", "push", "up", "plan", "down", "list", "manifest", "status", "logs", "config", "state", "version"}
+	order := []string{"init", "build", "push", "release", "up", "plan", "down", "list", "manifest", "status", "logs", "config", "state", "version"}
 	for _, cmd := range order {
 		h := commandHelp[cmd]
 		padding := synopsisCol - len(cmd)

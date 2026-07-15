@@ -6,7 +6,7 @@ import (
 )
 
 func TestImageCommandArgs(t *testing.T) {
-	args, err := buildImageArgs(ImageBuildRequest{Tag: "ghcr.io/gdcs-dev/bng:dev", Context: "services/bng", File: "services/bng/Containerfile"})
+	args, err := buildImageArgs(ImageBuildRequest{Tags: []string{"ghcr.io/gdcs-dev/bng:dev"}, Context: "services/bng", File: "services/bng/Containerfile"})
 	if err != nil {
 		t.Fatalf("build args: %v", err)
 	}
@@ -14,7 +14,7 @@ func TestImageCommandArgs(t *testing.T) {
 		t.Fatalf("unexpected build args: %#v", args)
 	}
 
-	noCacheArgs, err := buildImageArgs(ImageBuildRequest{Tag: "ghcr.io/gdcs-dev/bng:dev", Context: "services/bng", NoCache: true})
+	noCacheArgs, err := buildImageArgs(ImageBuildRequest{Tags: []string{"ghcr.io/gdcs-dev/bng:dev"}, Context: "services/bng", NoCache: true})
 	if err != nil {
 		t.Fatalf("build args no-cache: %v", err)
 	}
@@ -23,7 +23,7 @@ func TestImageCommandArgs(t *testing.T) {
 	}
 
 	// Single platform: --manifest mode
-	singlePlatform, err := buildImageArgs(ImageBuildRequest{Tag: "ghcr.io/gdcs-dev/bng:dev", Context: "services/bng", Platforms: []string{"linux/amd64"}})
+	singlePlatform, err := buildImageArgs(ImageBuildRequest{Tags: []string{"ghcr.io/gdcs-dev/bng:dev"}, Context: "services/bng", Platforms: []string{"linux/amd64"}})
 	if err != nil {
 		t.Fatalf("build args single platform: %v", err)
 	}
@@ -32,7 +32,7 @@ func TestImageCommandArgs(t *testing.T) {
 	}
 
 	// Multi-platform: --manifest mode with comma-joined platforms
-	multiPlatform, err := buildImageArgs(ImageBuildRequest{Tag: "ghcr.io/gdcs-dev/bng:dev", Context: "services/bng", Platforms: []string{"linux/amd64", "linux/arm64"}})
+	multiPlatform, err := buildImageArgs(ImageBuildRequest{Tags: []string{"ghcr.io/gdcs-dev/bng:dev"}, Context: "services/bng", Platforms: []string{"linux/amd64", "linux/arm64"}})
 	if err != nil {
 		t.Fatalf("build args multi platform: %v", err)
 	}
@@ -66,7 +66,7 @@ func TestImageCommandArgs(t *testing.T) {
 }
 
 func TestImageCommandArgsValidation(t *testing.T) {
-	if _, err := buildImageArgs(ImageBuildRequest{Tag: "x"}); err == nil {
+	if _, err := buildImageArgs(ImageBuildRequest{Tags: []string{"x"}}); err == nil {
 		t.Fatalf("expected build context validation failure")
 	}
 	if _, err := pullImageArgs(ImagePullRequest{}); err == nil {

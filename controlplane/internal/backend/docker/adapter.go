@@ -15,7 +15,7 @@ import (
 type Adapter struct{}
 
 type ImageBuildRequest struct {
-	Tag       string
+	Tags      []string // one or more repo:tag values; at least one required
 	Context   string
 	File      string
 	NoCache   bool
@@ -64,7 +64,11 @@ func (a *Adapter) BuildImage(ctx context.Context, req ImageBuildRequest) error {
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("build docker image %s: %w", req.Tag, err)
+		primary := ""
+		if len(req.Tags) > 0 {
+			primary = req.Tags[0]
+		}
+		return fmt.Errorf("build docker image %s: %w", primary, err)
 	}
 	return nil
 }
@@ -115,8 +119,8 @@ func (a *Adapter) TagImage(ctx context.Context, req ImageTagRequest) error {
 // active (set with `docker buildx use <builder>`).
 // Single platform or no platform: uses plain docker build for a local image.
 func buildImageArgs(req ImageBuildRequest) ([]string, error) {
-	if req.Tag == "" {
-		return nil, fmt.Errorf("build image tag is required")
+	if len(req.Tags) == 0 {
+		return nil, fmt.Errorf("build image tags are required")
 	}
 	if req.Context == "" {
 		return nil, fmt.Errorf("build context is required")
@@ -128,15 +132,17 @@ func buildImageArgs(req ImageBuildRequest) ([]string, error) {
 		args = []string{"buildx", "build",
 			"--platform", strings.Join(req.Platforms, ","),
 			"--builder", "multiarch",
-			"--tag", req.Tag,
 			"--push",
 		}
 	} else {
 		// Single-arch or no explicit platform: plain docker build into local store.
-		args = []string{"build", "--tag", req.Tag}
+		args = []string{"build"}
 		if len(req.Platforms) == 1 {
 			args = append(args, "--platform", req.Platforms[0])
 		}
+	}
+	for _, t := range req.Tags {
+		args = append(args, "--tag", t)
 	}
 	if req.NoCache {
 		args = append(args, "--no-cache")

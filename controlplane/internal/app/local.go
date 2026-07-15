@@ -36,6 +36,8 @@ func executeLocal(opts Options) (daemon.CommandResponse, error) {
 		return runBuild(opts)
 	case "push":
 		return runPush(opts)
+	case "release":
+		return runRelease(opts)
 	case "plan":
 		return runPlan(opts)
 	case "down", "destroy":

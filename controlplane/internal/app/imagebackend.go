@@ -52,7 +52,7 @@ func (b podmanImageBackend) ImageExists(ctx context.Context, reference string) (
 
 func (b podmanImageBackend) BuildImage(ctx context.Context, req image.BuildRequest) error {
 	return b.adapter.BuildImage(ctx, podman.ImageBuildRequest{
-		Tag:       req.Tag,
+		Tags:      req.Tags,
 		Context:   req.Context,
 		File:      req.File,
 		NoCache:   req.NoCache,
@@ -78,7 +78,7 @@ func (b dockerImageBackend) ImageExists(ctx context.Context, reference string) (
 
 func (b dockerImageBackend) BuildImage(ctx context.Context, req image.BuildRequest) error {
 	return b.adapter.BuildImage(ctx, docker.ImageBuildRequest{
-		Tag:       req.Tag,
+		Tags:      req.Tags,
 		Context:   req.Context,
 		File:      req.File,
 		NoCache:   req.NoCache,
