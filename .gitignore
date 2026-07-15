@@ -8,7 +8,6 @@ services/routerd/.build-src/
 
 # AI tool working state
 .opencode/
-openspec/
 
 # Go build outputs
 controlplane/bin/

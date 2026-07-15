@@ -1,8 +1,10 @@
-# Curated compose for the oktopus service type.
+# Standalone / development compose for the oktopus service type.
+# vcpe up uses a renderer-generated compose.yaml from the operation artifacts
+# directory — this file is NOT invoked by the normal vcpe workflow.
 #
-# The control plane renders a compose.env in this directory before `up`,
-# populating the canonical IFACE_<ROLE>_* contract plus DEPLOYMENT_NAME,
-# SERVICE_NAME, IMAGE, and any config values from the manifest.
+# To use standalone: copy a compose.env from the operation artifacts dir
+# into this directory, then run:
+#   podman compose -f services/oktopus/compose.yaml up -d
 #
 # The container bundles NATS, MongoDB, nginx, the Next.js frontend, and all
 # five USP MTPs (ws, stomp, mqtt, adapter, controller, taas) under systemd.

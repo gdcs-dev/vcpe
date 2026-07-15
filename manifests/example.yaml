@@ -1,175 +1,177 @@
 apiVersion: vcpe.dev/v1
 kind: Deployment
 metadata:
-    name: example
-    labels:
-        scenario: example
-    annotations:
-        description: "Full vCPE lab — BNG, WebPA, Gateway, event-sink, and Alpine client over a bridge WAN network."
+  name: example
+  labels:
+    scenario: example
+  annotations:
+    description: "Full vCPE lab — BNG, WebPA, Gateway, event-sink, and Alpine client over a bridge WAN network."
+
 spec:
-    maxReplicasPerService: 3
-    maxActiveDeployments: 10
-    #
-    #   [internet / host]
-    #        |
-    #   mgmt-bridge (10.10.10.0/24)  ── BNG eth0, WebPA eth0
-    #        |
-    #   wan-bridge  (10.7.200.0/24)  ── BNG eth1 (DHCP server)
-    #        |                              GATEWAY wan (DHCP client, erouter0)
-    #   cm-bridge   (10.7.201.0/24)  ── BNG eth2 (DHCP server)
-    #        |                              GATEWAY cm
-    #   lan-p1-bridge (192.168.10.0/24) ── GATEWAY brlan0, client eth0
-    #   lan-p2-bridge (192.168.20.0/24) ── GATEWAY (unused port)
-    #   lan-p3-bridge (192.168.30.0/24) ── GATEWAY (unused port)
-    #   lan-p4-bridge (192.168.40.0/24) ── GATEWAY (unused port)
-    networks:
-        - role: mgmt
-          ipv4:
-            cidr: 10.10.10.0/24
-            gateway: 10.10.10.1
-            pool: {start: 10.10.10.10, end: 10.10.10.250}
-        - role: wan
-          nat: true
-          firewall: true
-          ipamDriver: none
-          ipv4:
-            cidr: 10.7.200.0/24
-            gateway: 10.7.200.1
-            pool: {start: 10.7.200.10, end: 10.7.200.250}
-        - role: cm
-          ipamDriver: none
-          ipv4:
-            cidr: 10.7.201.0/24
-            gateway: 10.7.201.1
-            pool: {start: 10.7.201.10, end: 10.7.201.250}
-        # GATEWAY LAN ports – four separate bridges matching gateway/compose.yaml
+  maxReplicasPerService: 3
+  maxActiveDeployments: 10
+  #
+  #   [internet / host]
+  #        |
+  #   mgmt-bridge (10.10.10.0/24)  ── BNG eth0, WebPA eth0
+  #        |
+  #   wan-bridge  (10.7.200.0/24)  ── BNG eth1 (DHCP server)
+  #        |                              GATEWAY wan (DHCP client, erouter0)
+  #   cm-bridge   (10.7.201.0/24)  ── BNG eth2 (DHCP server)
+  #        |                              GATEWAY cm
+  #   lan-p1-bridge (192.168.10.0/24) ── GATEWAY brlan0, client eth0
+  #   lan-p2-bridge (192.168.20.0/24) ── GATEWAY (unused port)
+  #   lan-p3-bridge (192.168.30.0/24) ── GATEWAY (unused port)
+  #   lan-p4-bridge (192.168.40.0/24) ── GATEWAY (unused port)
+  networks:
+    - role: mgmt
+      ipv4:
+        cidr: 10.10.10.0/24
+        gateway: 10.10.10.1
+        pool: { start: 10.10.10.10, end: 10.10.10.250 }
+    - role: wan
+      nat: true
+      firewall: true
+      ipamDriver: none
+      ipv4:
+        cidr: 10.7.200.0/24
+        gateway: 10.7.200.1
+        pool: { start: 10.7.200.10, end: 10.7.200.250 }
+    - role: cm
+      ipamDriver: none
+      ipv4:
+        cidr: 10.7.201.0/24
+        gateway: 10.7.201.1
+        pool: { start: 10.7.201.10, end: 10.7.201.250 }
+    # GATEWAY LAN ports – four separate bridges matching gateway/compose.yaml
+    - role: lan-p1
+      ipamDriver: none
+      ipv4:
+        cidr: 192.168.10.0/24
+        gateway: 192.168.10.1
+        pool: { start: 192.168.10.10, end: 192.168.10.250 }
+    - role: lan-p2
+      ipamDriver: none
+      ipv4:
+        cidr: 192.168.20.0/24
+        gateway: 192.168.20.1
+        pool: { start: 192.168.20.10, end: 192.168.20.250 }
+    - role: lan-p3
+      ipamDriver: none
+      ipv4:
+        cidr: 192.168.30.0/24
+        gateway: 192.168.30.1
+        pool: { start: 192.168.30.10, end: 192.168.30.250 }
+    - role: lan-p4
+      ipamDriver: none
+      ipv4:
+        cidr: 192.168.40.0/24
+        gateway: 192.168.40.1
+        pool: { start: 192.168.40.10, end: 192.168.40.250 }
+  services:
+    # ── BNG ─────────────────────────────────────────────────────────────────
+    # Broadband Network Gateway: DHCP4/RADVD/DNS on WAN and CM segments,
+    # iptables MASQUERADE for WAN traffic leaving via mgmt.
+    - name: bng
+      type: bng
+      replicas: 1
+      image:
+        repository: ghcr.io/gdcs-dev/bng
+        tag: dev
+        pullPolicy: always-pull
+        buildContext: services/bng
+      interfaces:
+        - { role: mgmt }
+        - { role: wan, defaultRoute: true, ipv4: "10.7.200.1" }
+        - { role: cm, ipv4: "10.7.201.1" }
+      config:
+        access:
+          - role: wan
+            dhcp4:
+              subnet: 10.7.200.0/24
+              ranges:
+                - { start: 10.7.200.100, end: 10.7.200.200 }
+              options:
+                routers: 10.7.200.1
+              leaseSeconds: 3600
+          - role: cm
+            dhcp4:
+              subnet: 10.7.201.0/24
+              ranges:
+                - { start: 10.7.201.100, end: 10.7.201.200 }
+              options:
+                routers: 10.7.201.1
+              leaseSeconds: 3600
+    # ── WebPA / WebConfig ────────────────────────────────────────────────────
+    # USP/WebPA device-management server; CPEs contact it via mgmt network.
+    - name: webpa
+      type: webpa
+      replicas: 1
+      image:
+        repository: ghcr.io/gdcs-dev/webpa
+        tag: dev
+        pullPolicy: always-pull
+        buildContext: services/webpa
+      interfaces:
+        - { role: mgmt }
+      dependsOn:
+        - bng
+    # ── GATEWAY ─────────────────────────────────────────────────────────────────
+    # Cable-modem / CPE simulator. Gets a DHCP lease from BNG on WAN (erouter0),
+    # bridges LAN ports for attached clients. LAN gateway IP is statically
+    # configured via the lan.ipv4 option.
+    - name: gateway
+      type: gateway
+      replicas: 1
+      image:
+        repository: ghcr.io/gdcs-dev/gateway
+        tag: dev
+        pullPolicy: always-pull
+        buildContext: services/gateway
+      interfaces:
+        - { role: wan, ipv4: "10.7.200.10" }
+        - { role: cm, ipv4: "10.7.201.10" }
+        - { role: lan-p1 }
+        - { role: lan-p2 }
+        - { role: lan-p3 }
+        - { role: lan-p4 }
+      config:
+        lan:
+          ipv4: 192.168.10.1/24
+          dhcpStart: 192.168.10.100
+          dhcpEnd: 192.168.10.200
+      dependsOn:
+        - bng
+    # ── Event Sink ────────────────────────────────────────────────────────────
+    # Generic XMiDT webhook consumer. Registers a Caduceus webhook via Argus
+    # and logs all matching WRP events as structured JSON to stdout.
+    # Default filter: apparmor/.* (captures AppArmor simulator events).
+    # Override WEBHOOK_EVENTS_REGEX to capture any other event type.
+    - name: event-sink
+      type: event-sink
+      replicas: 1
+      image:
+        repository: ghcr.io/gdcs-dev/event-sink
+        tag: dev
+        pullPolicy: always-pull
+        buildContext: services/event-sink
+        containerfile: services/event-sink/Containerfile
+      interfaces:
+        - { role: mgmt }
+      dependsOn:
+        - webpa
+    - name: client
+      type: generic-container
+      replicas: 1
+      image:
+        repository: docker.io/library/alpine
+        tag: "3.19"
+        pullPolicy: always-pull
+      dependsOn:
+        - gateway
+      interfaces:
         - role: lan-p1
-          ipamDriver: none
-          ipv4:
-            cidr: 192.168.10.0/24
-            gateway: 192.168.10.1
-            pool: {start: 192.168.10.10, end: 192.168.10.250}
-        - role: lan-p2
-          ipamDriver: none
-          ipv4:
-            cidr: 192.168.20.0/24
-            gateway: 192.168.20.1
-            pool: {start: 192.168.20.10, end: 192.168.20.250}
-        - role: lan-p3
-          ipamDriver: none
-          ipv4:
-            cidr: 192.168.30.0/24
-            gateway: 192.168.30.1
-            pool: {start: 192.168.30.10, end: 192.168.30.250}
-        - role: lan-p4
-          ipamDriver: none
-          ipv4:
-            cidr: 192.168.40.0/24
-            gateway: 192.168.40.1
-            pool: {start: 192.168.40.10, end: 192.168.40.250}
-    services:
-        # ── BNG ─────────────────────────────────────────────────────────────────
-        # Broadband Network Gateway: DHCP4/RADVD/DNS on WAN and CM segments,
-        # iptables MASQUERADE for WAN traffic leaving via mgmt.
-        - name: bng
-          type: bng
-          replicas: 1
-          image:
-            repository: ghcr.io/gdcs-dev/bng
-            tag: v0.2.2
-            pullPolicy: always-pull
-            buildContext: services/bng
-          interfaces:
-            - {role: mgmt}
-            - {role: wan, defaultRoute: true, ipv4: "10.7.200.1"}
-            - {role: cm, ipv4: "10.7.201.1"}
-          config:
-            access:
-                - role: wan
-                  dhcp4:
-                    subnet: 10.7.200.0/24
-                    ranges:
-                        - {start: 10.7.200.100, end: 10.7.200.200}
-                    options:
-                        routers: 10.7.200.1
-                    leaseSeconds: 3600
-                - role: cm
-                  dhcp4:
-                    subnet: 10.7.201.0/24
-                    ranges:
-                        - {start: 10.7.201.100, end: 10.7.201.200}
-                    options:
-                        routers: 10.7.201.1
-                    leaseSeconds: 3600
-        # ── WebPA / WebConfig ────────────────────────────────────────────────────
-        # USP/WebPA device-management server; CPEs contact it via mgmt network.
-        - name: webpa
-          type: webpa
-          replicas: 1
-          image:
-            repository: ghcr.io/gdcs-dev/webpa
-            tag: v0.2.2
-            pullPolicy: always-pull
-            buildContext: services/webpa
-          interfaces:
-            - {role: mgmt}
-          dependsOn:
-            - bng
-        # ── GATEWAY ─────────────────────────────────────────────────────────────────
-        # Cable-modem / CPE simulator. Gets a DHCP lease from BNG on WAN (erouter0),
-        # bridges LAN ports for attached clients. LAN gateway IP is statically
-        # configured via the lan.ipv4 option.
-        - name: gateway
-          type: gateway
-          replicas: 1
-          image:
-            repository: ghcr.io/gdcs-dev/gateway
-            tag: v0.2.2
-            pullPolicy: always-pull
-            buildContext: services/gateway
-          interfaces:
-            - {role: wan, ipv4: "10.7.200.10"}
-            - {role: cm, ipv4: "10.7.201.10"}
-            - {role: lan-p1}
-            - {role: lan-p2}
-            - {role: lan-p3}
-            - {role: lan-p4}
-          config:
-            lan:
-                ipv4: 192.168.10.1/24
-                dhcpStart: 192.168.10.100
-                dhcpEnd: 192.168.10.200
-          dependsOn:
-            - bng
-        # ── Event Sink ────────────────────────────────────────────────────────────
-        # Generic XMiDT webhook consumer. Registers a Caduceus webhook via Argus
-        # and logs all matching WRP events as structured JSON to stdout.
-        # Default filter: apparmor/.* (captures AppArmor simulator events).
-        # Override WEBHOOK_EVENTS_REGEX to capture any other event type.
-        - name: event-sink
-          type: event-sink
-          replicas: 1
-          image:
-            repository: ghcr.io/gdcs-dev/event-sink
-            tag: v0.2.2
-            pullPolicy: always-pull
-            buildContext: services/event-sink
-            containerfile: services/event-sink/Containerfile
-          interfaces:
-            - {role: mgmt}
-          dependsOn:
-            - webpa
-        - name: client
-          type: generic-container
-          replicas: 1
-          image:
-            repository: docker.io/library/alpine
-            tag: "3.19"
-            pullPolicy: always-pull
-          dependsOn:
-            - gateway
-          interfaces:
-            - role: lan-p1
-              defaultRoute: true
-          config:
-            command: ["/bin/sh", "-c", "ip addr flush dev eth0 && udhcpc -f -i eth0"]
+          defaultRoute: true
+      config:
+        command:
+          ["/bin/sh", "-c", "ip addr flush dev eth0 && udhcpc -f -i eth0"]
