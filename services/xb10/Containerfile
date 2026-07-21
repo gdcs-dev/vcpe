@@ -1,4 +1,4 @@
-FROM localhost/xb10-dev
+FROM localhost/xb10-dev:latest
 
 ARG TARGET_ARCH=cortexa53
 
@@ -30,9 +30,11 @@ RUN systemctl mask \
 RUN mkdir -p /data_bak /data_bak /nvram/secure/oemdata
 
 RUN ln -s /bin/ifconfig /sbin/ifconfig
-RUN touch /nvram/ETHWAN_ENABLE
+#RUN touch /nvram/ETHWAN_ENABLE
 ENV SDKTARGETSYSROOT=/
 ENV TARGET_ARCH=${TARGET_ARCH}
+
+RUN echo 'MODEL_NAME=xb10-simulator' >> /etc/device.properties
 RUN echo 'PS1="[\u@xb10-dev \W]\\$ "' >> /home/root/.bashrc
 
 COPY container/runtime-init-xb10 /usr/local/bin/runtime-init-xb10

@@ -63,7 +63,7 @@ The system SHALL provide a `vcpe push --manifest <path>` command that pushes all
 - **THEN** the command fails with an error indicating that `--manifest` is required
 
 ### Requirement: sync-homebrew-vcpe defaults to release channel with auto-detected version
-`sync-homebrew-vcpe` SHALL default to the `release` Homebrew channel. When `VCPE_HOMEBREW_VERSION` is not set, the release channel SHALL auto-detect the version from the latest git tag in the source repository. When `VCPE_HOMEBREW_SHA256` is not set, it SHALL be computed by downloading the tagged archive from GitHub. The Homebrew formula SHALL embed the version string into the binary via `-ldflags` at install time.
+`sync-homebrew-vcpe` SHALL default to the `release` Homebrew channel. When `VCPE_HOMEBREW_VERSION` is not set, the release channel SHALL auto-detect the version from the latest git tag in the source repository. When `VCPE_HOMEBREW_SHA256` is not set, it SHALL be computed by downloading the tagged archive from GitHub. The Homebrew formula SHALL embed the version string into the binary via `-ldflags` at install time. The formula SHALL pass `-tags homebrew` to `go build` so that developer-only commands (`build`, `push`, `release`) are excluded from the installed binary. The formula SHALL NOT enumerate which commands are excluded — that knowledge resides solely in the Go source.
 
 #### Scenario: sync with no env vars uses latest tag
 - **WHEN** a developer runs `scripts/sync-homebrew-vcpe` with no environment overrides and a git tag v0.1.0 exists in the repo
