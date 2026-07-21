@@ -74,7 +74,7 @@ spec:
           replicas: 1
           image:
             repository: ghcr.io/gdcs-dev/bng
-            tag: v0.2.4
+            tag: v0.2.5
             pullPolicy: always-pull
             buildContext: services/bng
           interfaces:
@@ -106,7 +106,7 @@ spec:
           replicas: 1
           image:
             repository: ghcr.io/gdcs-dev/webpa
-            tag: v0.2.4
+            tag: v0.2.5
             pullPolicy: always-pull
             buildContext: services/webpa
           interfaces:
@@ -123,7 +123,7 @@ spec:
           replicas: 1
           image:
             repository: ghcr.io/gdcs-dev/xb10
-            tag: v0.2.4
+            tag: v0.2.5
             pullPolicy: always-pull
             buildContext: services/xb10
             containerfile: services/xb10/Containerfile
