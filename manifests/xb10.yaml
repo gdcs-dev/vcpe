@@ -1,157 +1,154 @@
 apiVersion: vcpe.dev/v1
 kind: Deployment
 metadata:
-  name: xb10
-  labels:
-    scenario: xb10
+    name: xb10
+    labels:
+        scenario: xb10
 spec:
-  maxReplicasPerService: 3
-  maxActiveDeployments: 10
-  #
-  #   [internet / host]
-  #        |
-  #   mgmt-bridge (10.10.10.0/24)  ── BNG eth0, WebPA eth0
-  #        |
-  #   wan-bridge  (10.7.200.0/24)  ── BNG eth1 (DHCP server)
-  #        |                              GATEWAY wan (DHCP client, erouter0)
-  #   cm-bridge   (10.7.201.0/24)  ── BNG eth2 (DHCP server)
-  #        |                              GATEWAY cm
-  #   lan-p1-bridge (192.168.10.0/24) ── GATEWAY brlan0, client eth0
-  #   lan-p2-bridge (192.168.20.0/24) ── GATEWAY (unused port)
-  #   lan-p3-bridge (192.168.30.0/24) ── GATEWAY (unused port)
-  #   lan-p4-bridge (192.168.40.0/24) ── GATEWAY (unused port)
-  networks:
-    - role: mgmt
-      ipv4:
-        cidr: 10.10.10.0/24
-        gateway: 10.10.10.1
-        pool: { start: 10.10.10.10, end: 10.10.10.250 }
-    - role: wan
-      nat: true
-      firewall: true
-      ipamDriver: none
-      ipv4:
-        cidr: 10.7.200.0/24
-        gateway: 10.7.200.1
-        pool: { start: 10.7.200.10, end: 10.7.200.250 }
-    - role: cm
-      ipamDriver: none
-      ipv4:
-        cidr: 10.7.201.0/24
-        gateway: 10.7.201.1
-        pool: { start: 10.7.201.10, end: 10.7.201.250 }
-    # GATEWAY LAN ports – four separate bridges matching gateway/compose.yaml
-    - role: lan-p1
-      ipamDriver: none
-      ipv4:
-        cidr: 192.168.10.0/24
-        gateway: 192.168.10.1
-        pool: { start: 192.168.10.10, end: 192.168.10.250 }
-    - role: lan-p2
-      ipamDriver: none
-      ipv4:
-        cidr: 192.168.20.0/24
-        gateway: 192.168.20.1
-        pool: { start: 192.168.20.10, end: 192.168.20.250 }
-    - role: lan-p3
-      ipamDriver: none
-      ipv4:
-        cidr: 192.168.30.0/24
-        gateway: 192.168.30.1
-        pool: { start: 192.168.30.10, end: 192.168.30.250 }
-    - role: lan-p4
-      ipamDriver: none
-      ipv4:
-        cidr: 192.168.40.0/24
-        gateway: 192.168.40.1
-        pool: { start: 192.168.40.10, end: 192.168.40.250 }
-  services:
-    # ── BNG ─────────────────────────────────────────────────────────────────
-    # Broadband Network Gateway: DHCP4/RADVD/DNS on WAN and CM segments,
-    # iptables MASQUERADE for WAN traffic leaving via mgmt.
-    - name: bng
-      type: bng
-      replicas: 1
-      image:
-        repository: ghcr.io/gdcs-dev/bng
-        tag: dev
-        pullPolicy: always-pull
-        buildContext: services/bng
-      interfaces:
-        - { role: mgmt }
-        - { role: wan, defaultRoute: true, ipv4: "10.7.200.1" }
-        - { role: cm, ipv4: "10.7.201.1" }
-      config:
-        access:
-          - role: wan
-            dhcp4:
-              subnet: 10.7.200.0/24
-              ranges:
-                - { start: 10.7.200.100, end: 10.7.200.200 }
-              options:
-                routers: 10.7.200.1
-              leaseSeconds: 3600
-          - role: cm
-            dhcp4:
-              subnet: 10.7.201.0/24
-              ranges:
-                - { start: 10.7.201.100, end: 10.7.201.200 }
-              options:
-                routers: 10.7.201.1
-              leaseSeconds: 3600
-    # ── WebPA / WebConfig ────────────────────────────────────────────────────
-    # USP/WebPA device-management server; CPEs contact it via mgmt network.
-    - name: webpa
-      type: webpa
-      replicas: 1
-      image:
-        repository: ghcr.io/gdcs-dev/webpa
-        tag: dev
-        pullPolicy: always-pull
-        buildContext: services/webpa
-      interfaces:
-        - { role: mgmt }
-      dependsOn:
-        - bng
-
-    # ── XB10 ─────────────────────────────────────────────────────────────────
-    # RDK-B gateway simulator. Gets a DHCP lease from BNG on WAN (erouter0),
-    # bridges LAN ports for attached clients.
-    - name: xb10
-      type: xb10
-      #volumes:
-      #  - /mnt/docker_disk/shared/xb10-dev:/home/root/xb10-dev
-      replicas: 1
-      image:
-        repository: ghcr.io/gdcs-dev/xb10
-        tag: dev
-        pullPolicy: always-pull
-        buildContext: services/xb10
-        containerfile: services/xb10/Containerfile
-      interfaces:
-        - { role: wan, ipv4: "10.7.200.20" }
-        - { role: cm, ipv4: "10.7.201.20" }
-        - { role: lan-p1 }
-        - { role: lan-p2 }
-        - { role: lan-p3 }
-        - { role: lan-p4 }
-      ports:
-        - "2295:22"
-      dependsOn:
-        - bng
-
-    - name: client
-      type: generic-container
-      replicas: 1
-      image:
-        repository: docker.io/library/alpine
-        tag: "3.19"
-        pullPolicy: always-pull
-      dependsOn:
-        - xb10
-      interfaces:
+    maxReplicasPerService: 3
+    maxActiveDeployments: 10
+    #
+    #   [internet / host]
+    #        |
+    #   mgmt-bridge (10.10.10.0/24)  ── BNG eth0, WebPA eth0
+    #        |
+    #   wan-bridge  (10.7.200.0/24)  ── BNG eth1 (DHCP server)
+    #        |                              GATEWAY wan (DHCP client, erouter0)
+    #   cm-bridge   (10.7.201.0/24)  ── BNG eth2 (DHCP server)
+    #        |                              GATEWAY cm
+    #   lan-p1-bridge (192.168.10.0/24) ── GATEWAY brlan0, client eth0
+    #   lan-p2-bridge (192.168.20.0/24) ── GATEWAY (unused port)
+    #   lan-p3-bridge (192.168.30.0/24) ── GATEWAY (unused port)
+    #   lan-p4-bridge (192.168.40.0/24) ── GATEWAY (unused port)
+    networks:
+        - role: mgmt
+          ipv4:
+            cidr: 10.10.10.0/24
+            gateway: 10.10.10.1
+            pool: {start: 10.10.10.10, end: 10.10.10.250}
+        - role: wan
+          nat: true
+          firewall: true
+          ipamDriver: none
+          ipv4:
+            cidr: 10.7.200.0/24
+            gateway: 10.7.200.1
+            pool: {start: 10.7.200.10, end: 10.7.200.250}
+        - role: cm
+          ipamDriver: none
+          ipv4:
+            cidr: 10.7.201.0/24
+            gateway: 10.7.201.1
+            pool: {start: 10.7.201.10, end: 10.7.201.250}
+        # GATEWAY LAN ports – four separate bridges matching gateway/compose.yaml
         - role: lan-p1
-          defaultRoute: true
-      config:
-        command:
-          ["/bin/sh", "-c", "ip addr flush dev eth0 && udhcpc -f -i eth0"]
+          ipamDriver: none
+          ipv4:
+            cidr: 192.168.10.0/24
+            gateway: 192.168.10.1
+            pool: {start: 192.168.10.10, end: 192.168.10.250}
+        - role: lan-p2
+          ipamDriver: none
+          ipv4:
+            cidr: 192.168.20.0/24
+            gateway: 192.168.20.1
+            pool: {start: 192.168.20.10, end: 192.168.20.250}
+        - role: lan-p3
+          ipamDriver: none
+          ipv4:
+            cidr: 192.168.30.0/24
+            gateway: 192.168.30.1
+            pool: {start: 192.168.30.10, end: 192.168.30.250}
+        - role: lan-p4
+          ipamDriver: none
+          ipv4:
+            cidr: 192.168.40.0/24
+            gateway: 192.168.40.1
+            pool: {start: 192.168.40.10, end: 192.168.40.250}
+    services:
+        # ── BNG ─────────────────────────────────────────────────────────────────
+        # Broadband Network Gateway: DHCP4/RADVD/DNS on WAN and CM segments,
+        # iptables MASQUERADE for WAN traffic leaving via mgmt.
+        - name: bng
+          type: bng
+          replicas: 1
+          image:
+            repository: ghcr.io/gdcs-dev/bng
+            tag: v0.2.5
+            pullPolicy: always-pull
+            buildContext: services/bng
+          interfaces:
+            - {role: mgmt}
+            - {role: wan, defaultRoute: true, ipv4: "10.7.200.1"}
+            - {role: cm, ipv4: "10.7.201.1"}
+          config:
+            access:
+                - role: wan
+                  dhcp4:
+                    subnet: 10.7.200.0/24
+                    ranges:
+                        - {start: 10.7.200.100, end: 10.7.200.200}
+                    options:
+                        routers: 10.7.200.1
+                    leaseSeconds: 3600
+                - role: cm
+                  dhcp4:
+                    subnet: 10.7.201.0/24
+                    ranges:
+                        - {start: 10.7.201.100, end: 10.7.201.200}
+                    options:
+                        routers: 10.7.201.1
+                    leaseSeconds: 3600
+        # ── WebPA / WebConfig ────────────────────────────────────────────────────
+        # USP/WebPA device-management server; CPEs contact it via mgmt network.
+        - name: webpa
+          type: webpa
+          replicas: 1
+          image:
+            repository: ghcr.io/gdcs-dev/webpa
+            tag: v0.2.5
+            pullPolicy: always-pull
+            buildContext: services/webpa
+          interfaces:
+            - {role: mgmt}
+          dependsOn:
+            - bng
+        # ── XB10 ─────────────────────────────────────────────────────────────────
+        # RDK-B gateway simulator. Gets a DHCP lease from BNG on WAN (erouter0),
+        # bridges LAN ports for attached clients.
+        - name: xb10
+          type: xb10
+          #volumes:
+          #  - /mnt/docker_disk/shared/xb10-dev:/home/root/xb10-dev
+          replicas: 1
+          image:
+            repository: ghcr.io/gdcs-dev/xb10
+            tag: v0.2.5
+            pullPolicy: always-pull
+            buildContext: services/xb10
+            containerfile: services/xb10/Containerfile
+          interfaces:
+            - {role: wan, ipv4: "10.7.200.20"}
+            - {role: cm, ipv4: "10.7.201.20"}
+            - {role: lan-p1}
+            - {role: lan-p2}
+            - {role: lan-p3}
+            - {role: lan-p4}
+          ports:
+            - "2295:22"
+          dependsOn:
+            - bng
+        - name: client
+          type: generic-container
+          replicas: 1
+          image:
+            repository: docker.io/library/alpine
+            tag: "3.19"
+            pullPolicy: always-pull
+          dependsOn:
+            - xb10
+          interfaces:
+            - role: lan-p1
+              defaultRoute: true
+          config:
+            command: ["/bin/sh", "-c", "ip addr flush dev eth0 && udhcpc -f -i eth0"]
