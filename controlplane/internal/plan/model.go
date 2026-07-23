@@ -61,8 +61,9 @@ type Pool struct {
 
 // Service is a resolved workload with one entry in Instances per replica.
 type Service struct {
-	Name      string
-	Type      string
+	Name string
+	Type string
+	// Replicas is the desired replica count from the manifest.
 	Replicas  int
 	Image     manifest.Image
 	DependsOn []string
@@ -70,9 +71,26 @@ type Service struct {
 	Volumes   []string
 	Config    yaml.Node
 	Instances []Instance
+	// PreviousReplicaCount is the replica count from the last successful apply,
+	// read from persisted deployment state. Zero means no prior apply.
+	PreviousReplicaCount int
+	// Delta is the set of 0-based replica indices to add and remove during a
+	// delta apply. It is computed from PreviousReplicaCount vs Replicas.
+	Delta ReplicaDelta
+}
+
+// ReplicaDelta contains the 0-based replica indices to add and remove during
+// a delta apply operation.
+type ReplicaDelta struct {
+	// ToAdd holds 0-based indices of replicas to create, in ascending order.
+	ToAdd []int
+	// ToRemove holds 0-based indices of replicas to remove, in descending
+	// order (highest index first) to minimise disruption to lower-index replicas.
+	ToRemove []int
 }
 
 // Instance is a single replica with its concrete interface identities.
+// Index is 0-based internally; the external compose service name uses Index+1.
 type Instance struct {
 	Index      int
 	Interfaces []Interface

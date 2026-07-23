@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"path/filepath"
+	"strconv"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -461,4 +462,40 @@ func (s *Store) LatestDesiredSnapshot(customerID string) ([]byte, bool, error) {
 		return nil, false, fmt.Errorf("query latest desired snapshot: %w", err)
 	}
 	return []byte(manifestText), true, nil
+}
+
+// GetReplicaCount returns the replica count from the last successful apply for
+// the given deployment/service pair. Returns 0 when no prior apply exists
+// (the migration/fallback: treat as "no prior apply" causing a full deploy).
+func (s *Store) GetReplicaCount(deployment, service string) (int, error) {
+	key := "replica_count/" + deployment + "/" + service
+	var value string
+	err := s.db.QueryRow(`SELECT value FROM checkpoints WHERE key = ?`, key).Scan(&value)
+	if err == sql.ErrNoRows {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, fmt.Errorf("get replica count %s/%s: %w", deployment, service, err)
+	}
+	count, err := strconv.Atoi(value)
+	if err != nil {
+		return 0, nil // malformed value — treat as no prior apply
+	}
+	return count, nil
+}
+
+// SetReplicaCount persists the applied replica count for a deployment/service
+// pair. Called after each successful apply to track the live baseline.
+func (s *Store) SetReplicaCount(deployment, service string, count int) error {
+	return s.UpsertCheckpoint("replica_count/"+deployment+"/"+service, strconv.Itoa(count))
+}
+
+// DeleteReplicaCounts removes all persisted replica counts for a deployment.
+// Called by vcpe down so future applies start fresh.
+func (s *Store) DeleteReplicaCounts(deployment string) error {
+	prefix := "replica_count/" + deployment + "/%"
+	if _, err := s.db.Exec(`DELETE FROM checkpoints WHERE key LIKE ?`, prefix); err != nil {
+		return fmt.Errorf("delete replica counts for %s: %w", deployment, err)
+	}
+	return nil
 }

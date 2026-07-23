@@ -119,6 +119,15 @@ func (renderer) Render(_ context.Context, input render.Input) (render.Result, er
 func generateCompose(input render.Input, cfg Config, lanDNS []string) (string, error) {
 	inst := input.Service.Instances[0]
 	replicas := input.Service.Replicas
+	if replicas <= 0 {
+		// Fall back to the number of resolved instances when Replicas is not
+		// explicitly set (e.g., when the service is constructed without going
+		// through the planner).
+		replicas = len(input.Service.Instances)
+		if replicas == 0 {
+			replicas = 1
+		}
+	}
 
 	// Build the top-level external network declarations from the first
 	// instance's interface list (network names are the same across replicas).
@@ -186,14 +195,14 @@ func generateCompose(input render.Input, cfg Config, lanDNS []string) (string, e
 	}
 
 	services := map[string]any{}
-	if replicas <= 1 {
-		services[input.Service.Name] = buildSvcEntry(true)
-	} else {
-		// One named service entry per replica so podman-compose starts each
-		// as an independent container with a Podman-assigned unique MAC.
-		for i := 0; i < replicas; i++ {
-			services[fmt.Sprintf("%s-%d", input.Service.Name, i+1)] = buildSvcEntry(false)
-		}
+	// Always use 1-based indexed names ({service}-{n}) regardless of replica
+	// count so that names are stable when replicas changes. This enables
+	// scale-up and scale-down without orphaning existing containers.
+	for i := 0; i < replicas; i++ {
+		// Pin the MAC address only for single-replica services, where the IPAM
+		// MAC is stable. Multi-replica services let Podman assign unique MACs.
+		pinMAC := replicas == 1
+		services[fmt.Sprintf("%s-%d", input.Service.Name, i+1)] = buildSvcEntry(pinMAC)
 	}
 
 	doc := map[string]any{"services": services}

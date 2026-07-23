@@ -25,7 +25,8 @@ RUN systemctl mask \
    simulator-sysevent.service \
    erouter-rename.service \
    ethwan-static-apply.service \
-   ethwan-static-capture.service
+   ethwan-static-capture.service \
+   coredump-upload.service
 
 RUN mkdir -p /data_bak /data_bak /nvram/secure/oemdata
 
@@ -40,6 +41,15 @@ RUN echo 'PS1="[\u@xb10-dev \W]\\$ "' >> /home/root/.bashrc
 COPY container/runtime-init-xb10 /usr/local/bin/runtime-init-xb10
 COPY container/entrypoint.sh /usr/local/bin/xb10-legacy-entrypoint.sh
 RUN chmod 0755 /usr/local/bin/runtime-init-xb10 /usr/local/bin/xb10-legacy-entrypoint.sh
+
+# Fix broken /etc/snmp/snmpd.conf symlink (target /etc/var/ doesn't exist in container)
+RUN rm /etc/snmp/snmpd.conf && \
+   printf 'agentaddress tcp:127.0.0.1:1161\nsyslocation "RDK Gateway"\nsyscontact admin@localhost\nrocommunity public\nrwcommunity private\ndlmod ccsp_snmp_plugin /usr/lib/libsnmp_plugin.so\n' \
+   > /etc/snmp/snmpd.conf
+
+RUN sed -i \
+   '/dmcli eRT retv Device.X_CISCO_COM_CableModem.MACAddress/a\        if [ -z "$mac" ]; then mac=`cat /sys/class/net/erouter0/address 2>/dev/null | tr '"'"'[a-f]'"'"' '"'"'[A-F]'"'"'`; fi' \
+   /lib/rdk/utils.sh
 
 ENTRYPOINT ["/usr/local/bin/runtime-init-xb10"]
 CMD ["/usr/local/bin/xb10-legacy-entrypoint.sh", "/sbin/init"]

@@ -17,7 +17,9 @@ import (
 
 // Build resolves the manifest into a deployment plan. Services in the result
 // are ordered for startup (dependencies first); reverse the slice for teardown.
-func Build(doc manifest.Document) (plan.Deployment, error) {
+// previousReplicas maps service name to the replica count from the last
+// successful apply, enabling delta computation. Pass nil for a fresh deploy.
+func Build(doc manifest.Document, previousReplicas map[string]int) (plan.Deployment, error) {
 	networks := resolveNetworks(doc)
 	netByRole := map[string]plan.Network{}
 	for _, n := range networks {
@@ -31,7 +33,11 @@ func Build(doc manifest.Document) (plan.Deployment, error) {
 
 	services := make([]plan.Service, 0, len(ordered))
 	for _, svc := range ordered {
-		services = append(services, resolveService(doc.Metadata.Name, svc, netByRole))
+		prev := 0
+		if previousReplicas != nil {
+			prev = previousReplicas[svc.Name]
+		}
+		services = append(services, resolveService(doc.Metadata.Name, svc, prev, netByRole))
 	}
 
 	return plan.Deployment{
@@ -40,6 +46,21 @@ func Build(doc manifest.Document) (plan.Deployment, error) {
 		Networks: networks,
 		Services: services,
 	}, nil
+}
+
+// computeReplicaDelta derives the set of 0-based replica indices to add and
+// remove. ToAdd is ascending; ToRemove is descending (highest index first).
+func computeReplicaDelta(previous, desired int) plan.ReplicaDelta {
+	delta := plan.ReplicaDelta{}
+	// Indices in [previous, desired) are new.
+	for i := previous; i < desired; i++ {
+		delta.ToAdd = append(delta.ToAdd, i)
+	}
+	// Indices in [desired, previous) are excess; remove highest first.
+	for i := previous - 1; i >= desired; i-- {
+		delta.ToRemove = append(delta.ToRemove, i)
+	}
+	return delta
 }
 
 func resolveNetworks(doc manifest.Document) []plan.Network {
@@ -150,17 +171,19 @@ func resolveFamily(fam *manifest.AddressFamily) *plan.Family {
 	return f
 }
 
-func resolveService(deployment string, svc manifest.Service, netByRole map[string]plan.Network) plan.Service {
+func resolveService(deployment string, svc manifest.Service, prev int, netByRole map[string]plan.Network) plan.Service {
 	replicas := svc.Replicas
 	out := plan.Service{
-		Name:      svc.Name,
-		Type:      svc.Type,
-		Replicas:  replicas,
-		Image:     svc.Image,
-		DependsOn: append([]string(nil), svc.DependsOn...),
-		Ports:     append([]string(nil), svc.Ports...),
-		Volumes:   append([]string(nil), svc.Volumes...),
-		Config:    svc.Config,
+		Name:                 svc.Name,
+		Type:                 svc.Type,
+		Replicas:             replicas,
+		Image:                svc.Image,
+		DependsOn:            append([]string(nil), svc.DependsOn...),
+		Ports:                append([]string(nil), svc.Ports...),
+		Volumes:              append([]string(nil), svc.Volumes...),
+		Config:               svc.Config,
+		PreviousReplicaCount: prev,
+		Delta:                computeReplicaDelta(prev, replicas),
 	}
 	if replicas <= 0 {
 		return out
@@ -181,15 +204,16 @@ func resolveInstance(deployment string, svc manifest.Service, index, replicas in
 			device = fmt.Sprintf("eth%d", pos)
 		}
 
+		// Always derive the MAC from the 0-based index so the key is stable
+		// regardless of replica count. Explicit MACs are only honoured for
+		// single-replica services; multi-replica services always derive.
 		mac := iface.MAC
-		macIndex := 0
 		if replicas > 1 {
 			// Explicit MAC/address are ambiguous across replicas; derive per index.
 			mac = ""
-			macIndex = index
 		}
 		if mac == "" {
-			mac = plan.CanonicalMAC(deployment, svc.Name, iface.Role, macIndex)
+			mac = plan.CanonicalMAC(deployment, svc.Name, iface.Role, index)
 		}
 
 		ipv4, ipv6 := "", ""

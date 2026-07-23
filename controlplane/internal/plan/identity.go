@@ -3,7 +3,6 @@ package plan
 import (
 	"crypto/sha1"
 	"fmt"
-	"strings"
 )
 
 // ifnameMax is the usable length of a Linux network interface name. The kernel
@@ -11,15 +10,13 @@ import (
 const ifnameMax = 15
 
 // CanonicalMAC derives a stable, locally-administered unicast MAC address from
-// the deployment-scoped identity tuple. The key is metadata.name/service/role
-// for single-replica services and metadata.name/service/role/index for indexed
-// replicas. The same helper is used by the planner and the runtime-init
-// contract builder so both agree byte-for-byte.
+// the deployment-scoped identity tuple. The key is always
+// metadata.name/service/role/index (0-based index is always included so that
+// MAC derivation is stable when replica count changes). The same helper is used
+// by the planner and the runtime-init contract builder so both agree
+// byte-for-byte.
 func CanonicalMAC(deployment, service, role string, index int) string {
-	key := strings.Join([]string{deployment, service, role}, "/")
-	if index > 0 {
-		key = fmt.Sprintf("%s/%d", key, index)
-	}
+	key := fmt.Sprintf("%s/%s/%s/%d", deployment, service, role, index)
 	sum := sha1.Sum([]byte(key))
 	// 0x02 sets the locally-administered bit and clears the multicast bit.
 	return fmt.Sprintf("02:%02x:%02x:%02x:%02x:%02x", sum[0], sum[1], sum[2], sum[3], sum[4])

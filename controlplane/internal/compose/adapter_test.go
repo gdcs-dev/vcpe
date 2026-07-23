@@ -14,6 +14,22 @@ func TestCommandArgsForComposeOperations(t *testing.T) {
 	if !reflect.DeepEqual(up, []string{"-p", "podman-bng-20", "--env-file", "runtime/20/compose.env", "-f", "services/bng/compose.yaml", "up", "-d"}) {
 		t.Fatalf("unexpected up args: %#v", up)
 	}
+	// --remove-orphans is added when RemoveOrphans is set.
+	upOrphans, err := commandArgs("up", Request{ProjectName: "podman-bng-20", EnvFile: "runtime/20/compose.env", ComposeFile: "services/bng/compose.yaml", RemoveOrphans: true})
+	if err != nil {
+		t.Fatalf("up orphans args: %v", err)
+	}
+	if !reflect.DeepEqual(upOrphans, []string{"-p", "podman-bng-20", "--env-file", "runtime/20/compose.env", "-f", "services/bng/compose.yaml", "up", "-d", "--remove-orphans"}) {
+		t.Fatalf("unexpected up orphans args: %#v", upOrphans)
+	}
+	// Service-scoped up passes service names after --remove-orphans.
+	upScoped, err := commandArgs("up", Request{ProjectName: "podman-bng-20", EnvFile: "runtime/20/compose.env", ComposeFile: "services/bng/compose.yaml", RemoveOrphans: true, Services: []string{"client-2"}})
+	if err != nil {
+		t.Fatalf("scoped up args: %v", err)
+	}
+	if !reflect.DeepEqual(upScoped, []string{"-p", "podman-bng-20", "--env-file", "runtime/20/compose.env", "-f", "services/bng/compose.yaml", "up", "-d", "--remove-orphans", "client-2"}) {
+		t.Fatalf("unexpected scoped up args: %#v", upScoped)
+	}
 	down, err := commandArgs("down", req)
 	if err != nil {
 		t.Fatalf("down args: %v", err)

@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -74,7 +76,7 @@ func runApply(opts Options) (daemon.CommandResponse, error) {
 		return daemon.CommandResponse{}, err
 	}
 
-	resolved, err := planner.Build(doc)
+	resolved, err := planner.Build(doc, previousReplicaCounts(ps, doc.Metadata.Name, doc.Spec.Services))
 	if err != nil {
 		return daemon.CommandResponse{}, err
 	}
@@ -188,6 +190,14 @@ func runApply(opts Options) (daemon.CommandResponse, error) {
 	}
 	_ = ps.RecordPhase(opID, "lifecycle", "succeeded", "compose lifecycle applied")
 
+	// Persist the applied replica count per service so future applies can
+	// compute a delta instead of unconditionally re-deploying all replicas.
+	for _, svc := range resolved.Services {
+		if err := ps.SetReplicaCount(name, svc.Name, svc.Replicas); err != nil {
+			return fail("record", fmt.Errorf("persist replica count for %s: %w", svc.Name, err))
+		}
+	}
+
 	// Record desired snapshot keyed by deployment name and finish.
 	raw, _ := os.ReadFile(opts.ManifestPath)
 	if err := ps.SaveDesiredSnapshot(name, raw); err != nil {
@@ -208,6 +218,51 @@ func rollback(ps *persist.Store, opID, name string) {
 	_ = ps.ReplaceCustomerLeases(name, nil)
 	_ = ps.DeleteDeploymentSnapshot(name)
 	_ = ps.RecordPhase(opID, "rollback", "succeeded", "reverted allocation")
+}
+
+// removeIndexedOrphans removes containers from a compose project whose service
+// label matches "{serviceName}-{n}" (e.g., bng-1, bng-2). These are orphaned
+// from a previous broken deploy that incorrectly applied indexed naming to
+// curated services. podman-compose exits 1 with a "missing services" warning
+// when it encounters such containers, even without --remove-orphans.
+// Failures are silently ignored — best-effort cleanup only.
+func removeIndexedOrphans(projectName, serviceName string) {
+	re := regexp.MustCompile(`^` + regexp.QuoteMeta(serviceName) + `-\d+$`)
+
+	// List container IDs and their com.docker.compose.service label.
+	out, err := exec.Command("podman", "ps", "-a",
+		"--filter", "label=com.docker.compose.project="+projectName,
+		"--format", "{{.ID}} {{index .Labels \"com.docker.compose.service\"}}",
+	).Output()
+	if err != nil || len(out) == 0 {
+		return
+	}
+	var toRemove []string
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		parts := strings.SplitN(strings.TrimSpace(line), " ", 2)
+		if len(parts) == 2 && re.MatchString(parts[1]) {
+			toRemove = append(toRemove, parts[0])
+		}
+	}
+	if len(toRemove) > 0 {
+		args := append([]string{"rm", "-f"}, toRemove...)
+		_ = exec.Command("podman", args...).Run()
+	}
+}
+
+// previousReplicaCounts reads the persisted replica counts for all services in
+// a deployment, returning a map of service name → previous count. Services with
+// no prior apply return 0.
+func previousReplicaCounts(ps *persist.Store, deployment string, services []manifest.Service) map[string]int {
+	counts := make(map[string]int, len(services))
+	for _, svc := range services {
+		n, err := ps.GetReplicaCount(deployment, svc.Name)
+		if err != nil {
+			n = 0 // fallback: treat as no prior apply
+		}
+		counts[svc.Name] = n
+	}
+	return counts
 }
 
 // enforceActiveDeploymentCap rejects a new deployment that would exceed
@@ -355,6 +410,13 @@ func applyComposeLifecycle(ctx context.Context, stateRoot, opID string, dep plan
 			runtimeDst := filepath.Join(repoRoot, "services", svc.Type, "runtime")
 			_ = stageRuntimeTree(runtimeSrc, runtimeDst)
 		}
+		// usesIndexedNames is true only for generic-container, which generates
+		// compose services named {svc}-1, {svc}-2, etc. All other types —
+		// including bng, gateway, and webpa — generate compose files with the
+		// plain service name ({svc}) even though they are not "curated" in the
+		// sense of using checked-in compose files.
+		usesIndexedNames := svc.Type == "generic-container"
+
 		req := compose.Request{
 			ComposeGroup: svc.Type,
 			ProjectName:  dep.Name + "-" + svc.Name,
@@ -362,7 +424,46 @@ func applyComposeLifecycle(ctx context.Context, stateRoot, opID string, dep plan
 			ComposeFile:  composeFile,
 			EnvFile:      envFile,
 			Timeout:      2 * time.Minute,
+			// Only indexed-naming types (generic-container) need --remove-orphans
+			// to clean up scaled-down replicas. Other types use plain service
+			// names and orphan removal is handled by removeIndexedOrphans above.
+			RemoveOrphans: usesIndexedNames,
 		}
+		// For types that use plain (non-indexed) service names, remove any
+		// containers with indexed names (e.g., bng-1) left by a previous broken
+		// deploy. podman-compose exits 1 with a "missing services" warning when
+		// it encounters such orphans.
+		if !usesIndexedNames {
+			removeIndexedOrphans(req.ProjectName, svc.Name)
+		}
+
+		// Delta-aware compose up:
+		//   - If nothing changed (empty delta with tracked previous state), skip.
+		//   - If only scale-up (no removals), pass new service names so compose
+		//     only starts the new replicas; existing ones are untouched.
+		//   - If scale-down (or first deploy), run compose up with
+		//     --remove-orphans to remove excess replicas and start missing ones.
+		delta := svc.Delta
+		// noChange is true only when the delta is empty AND we have a prior
+		// apply baseline (PreviousReplicaCount > 0). An empty delta with
+		// PreviousReplicaCount=0 means either a first deploy or a plan built
+		// without delta tracking — always run compose in that case.
+		noChange := len(delta.ToAdd) == 0 && len(delta.ToRemove) == 0 &&
+			(svc.PreviousReplicaCount > 0 || svc.Replicas == 0)
+		if noChange {
+			continue // nothing to do for this service
+		}
+		if len(delta.ToRemove) == 0 && len(delta.ToAdd) > 0 && usesIndexedNames {
+			// Scale-up only for indexed-naming types (generic-container): pass
+			// just the new services so existing replicas are untouched.
+			newServices := make([]string, 0, len(delta.ToAdd))
+			for _, idx := range delta.ToAdd {
+				newServices = append(newServices, fmt.Sprintf("%s-%d", svc.Name, idx+1))
+			}
+			req.Services = newServices
+		}
+		// compose up handles --remove-orphans (for scale-down) and creates
+		// missing services (for scale-up / first deploy).
 		if _, err := adapter.Up(ctx, req); err != nil {
 			return fmt.Errorf("compose up %s: %w", svc.Name, err)
 		}
@@ -414,7 +515,7 @@ func teardownNetworks(ctx context.Context, ps *persist.Store, depName string, pr
 		fmt.Fprintf(os.Stderr, "warn: parse snapshot for network teardown of %q: %v\n", depName, err)
 		return
 	}
-	dep, err := planner.Build(doc)
+	dep, err := planner.Build(doc, nil)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "warn: plan networks for teardown of %q: %v\n", depName, err)
 		return
