@@ -63,7 +63,7 @@ func TestGenericContainerGeneratesComposeAndEnv(t *testing.T) {
 			t.Fatalf("compose.env missing %q:\n%s", frag, env)
 		}
 	}
-	for _, frag := range []string{"client:", "image: docker.io/library/alpine:3.19", "8080:80"} {
+	for _, frag := range []string{"client-1:", "image: docker.io/library/alpine:3.19", "8080:80"} {
 		if !strings.Contains(compose, frag) {
 			t.Fatalf("compose.yaml missing %q:\n%s", frag, compose)
 		}

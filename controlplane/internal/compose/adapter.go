@@ -19,6 +19,15 @@ type Request struct {
 	ComposeFile  string
 	EnvFile      string
 	Timeout      time.Duration
+	// Services, when non-empty, restricts the compose up command to the named
+	// compose services. When empty, all services in the compose file are targeted.
+	// Only valid for generated (non-curated) compose files.
+	Services []string
+	// RemoveOrphans, when true, adds --remove-orphans to compose up so that
+	// containers for services removed from the compose file are cleaned up.
+	// Only set this for generated compose files where service names are
+	// controlled; curated compose files have fixed service names.
+	RemoveOrphans bool
 }
 
 type OperationRecord struct {
@@ -97,6 +106,11 @@ func commandArgs(command string, req Request) ([]string, error) {
 	args = append(args, command)
 	if command == "up" {
 		args = append(args, "-d")
+		if req.RemoveOrphans {
+			args = append(args, "--remove-orphans")
+		}
+		// Append specific service names when provided (scale-up optimisation).
+		args = append(args, req.Services...)
 	}
 	return args, nil
 }

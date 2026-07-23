@@ -39,7 +39,7 @@ func TestContractMatchesPlannerIdentities(t *testing.T) {
 		},
 	}
 
-	resolved, err := planner.Build(doc)
+	resolved, err := planner.Build(doc, nil)
 	if err != nil {
 		t.Fatalf("planner build: %v", err)
 	}
@@ -96,7 +96,7 @@ func TestBridgeNameDeterminismMatchesPlanner(t *testing.T) {
 			},
 		},
 	}
-	resolved, err := planner.Build(doc)
+	resolved, err := planner.Build(doc, nil)
 	if err != nil {
 		t.Fatalf("planner build: %v", err)
 	}

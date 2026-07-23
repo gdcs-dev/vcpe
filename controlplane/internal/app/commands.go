@@ -28,7 +28,7 @@ func runPlan(opts Options) (daemon.CommandResponse, error) {
 	if err := Preflight(doc); err != nil {
 		return daemon.CommandResponse{}, err
 	}
-	resolved, err := planner.Build(doc)
+	resolved, err := planner.Build(doc, nil)
 	if err != nil {
 		return daemon.CommandResponse{}, err
 	}
@@ -250,6 +250,8 @@ func runDown(opts Options) (daemon.CommandResponse, error) {
 		_ = ps.FinishOperation(opID, "failed", err.Error())
 		return daemon.CommandResponse{}, err
 	}
+	// Clear persisted replica counts so a future apply starts fresh.
+	_ = ps.DeleteReplicaCounts(opts.Name)
 	if err := ps.FinishOperation(opID, "succeeded", "deployment torn down"); err != nil {
 		return daemon.CommandResponse{}, err
 	}
