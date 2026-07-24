@@ -6,10 +6,22 @@ normalize_mac() {
 }
 
 rename_interfaces_by_order() {
+    # Fallback: rename in interface index order using IFACE_*_DEVICE values.
+    # Collect device names in sorted role order as a stable sequence.
+    local -a ordered=()
+    while IFS='=' read -r var_name device_val; do
+        [[ "$var_name" == IFACE_*_DEVICE ]] || continue
+        [[ -n "$device_val" ]] || continue
+        ordered+=("$device_val")
+    done < <(env | sort)
+
+    # If no IFACE_*_DEVICE vars found, fall back to eth0 eth1 eth2.
+    if (( ${#ordered[@]} == 0 )); then
+        ordered=(eth0 eth1 eth2)
+    fi
+
     local index=0
     local iface
-    local -a ordered=(eth0 eth1 eth2)
-
     while read -r iface; do
         [[ "$iface" == lo ]] && continue
         [[ $index -lt ${#ordered[@]} ]] || break
@@ -22,41 +34,51 @@ rename_interfaces_by_order() {
 }
 
 rename_interfaces_by_mac() {
-    local iface mac target tmp index=0
-    local -A target_by_mac=()
-    local -A current_by_target=()
-    local -A temp_by_target=()
-    local -a ordered=(eth0 eth1 eth2)
+    local iface mac role_key device_var device
+    local -A target_by_mac=()    # mac → desired device name
+    local -A current_by_mac=()   # mac → current kernel name
+    local -A temp_by_target=()   # desired device name → temp name
 
-    [[ -n "${MGMT_MAC:-}" ]] && target_by_mac["$(normalize_mac "$MGMT_MAC")"]=eth0
-    [[ -n "${WAN_MAC:-}" ]] && target_by_mac["$(normalize_mac "$WAN_MAC")"]=eth1
-    [[ -n "${CM_MAC:-}" ]] && target_by_mac["$(normalize_mac "$CM_MAC")"]=eth2
-    (( ${#target_by_mac[@]} == 3 )) || return 1
+    # Build rename table from IFACE_*_MAC + IFACE_*_DEVICE env vars.
+    while IFS='=' read -r var_name mac_val; do
+        [[ "$var_name" == IFACE_*_MAC ]] || continue
+        [[ -n "$mac_val" ]] || continue
+        role_key="${var_name%_MAC}"
+        role_key="${role_key#IFACE_}"
+        device_var="IFACE_${role_key}_DEVICE"
+        device="${!device_var:-}"
+        [[ -n "$device" ]] || continue
+        target_by_mac["$(normalize_mac "$mac_val")"]="$device"
+    done < <(env)
 
+    (( ${#target_by_mac[@]} > 0 )) || return 1
+
+    # Map current kernel interface names by their MAC address.
     while read -r iface; do
         [[ "$iface" == lo ]] && continue
         mac=$(normalize_mac "$(cat "/sys/class/net/$iface/address")")
-        target=${target_by_mac[$mac]:-}
-        [[ -n "$target" ]] || continue
-        current_by_target["$target"]=$iface
+        current_by_mac["$mac"]=$iface
     done < <(ls /sys/class/net | sort)
 
-    for target in "${ordered[@]}"; do
-        [[ -n "${current_by_target[$target]:-}" ]] || return 1
+    # Verify all target MACs are visible on the system.
+    for mac in "${!target_by_mac[@]}"; do
+        [[ -n "${current_by_mac[$mac]:-}" ]] || return 1
     done
 
-    for target in "${ordered[@]}"; do
-        iface=${current_by_target[$target]}
-        tmp="podtmp${index}"
-        index=$((index + 1))
-        if [[ "$iface" != "$tmp" ]]; then
-            ip link set "$iface" down || true
-            ip link set "$iface" name "$tmp"
-        fi
+    # Two-phase rename to avoid name collisions (e.g. eth0→eth1, eth1→eth0).
+    local idx=0
+    for mac in "${!target_by_mac[@]}"; do
+        local target="${target_by_mac[$mac]}"
+        iface="${current_by_mac[$mac]}"
+        [[ "$iface" == "$target" ]] && continue  # already correct
+        local tmp="podtmp${idx}"
+        idx=$((idx + 1))
+        ip link set "$iface" down || true
+        ip link set "$iface" name "$tmp"
         temp_by_target["$target"]=$tmp
     done
 
-    for target in "${ordered[@]}"; do
+    for target in "${!temp_by_target[@]}"; do
         ip link set "${temp_by_target[$target]}" name "$target"
     done
 }

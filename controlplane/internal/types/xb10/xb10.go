@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/gdcs-dev/vcpe/controlplane/internal/manifest"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/plan"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/render"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/typeregistry"
@@ -65,6 +66,14 @@ func (serviceType) ExpectedRoles() []typeregistry.RoleRequirement {
 
 func (serviceType) DefaultImagePolicy() string { return "build" }
 
+func (serviceType) ValidateInterfaces(_ []manifest.Interface) error { return nil }
+
+func (serviceType) Description() string {
+	return "XB10 CPE gateway simulator"
+}
+
+func (serviceType) DefaultImage() string { return "ghcr.io/gdcs-dev/xb10" }
+
 type renderer struct{}
 
 func (renderer) Name() string { return "xb10-renderer" }
@@ -99,31 +108,18 @@ func (renderer) Render(_ context.Context, input render.Input) (render.Result, er
 
 	// Standard IFACE_* env vars.
 	env := render.IfaceEnv(input.Deployment, input.Service, inst)
+	// IFACE_*_MAC / IFACE_*_DEVICE are the canonical env var contract.
+	// Legacy role-specific aliases (LAN*_MAC=, WAN0_MAC=, EROUTER0_MAC=) are
+	// no longer emitted; the entrypoint uses IFACE_*_MAC + IFACE_*_DEVICE.
 
-	// Build a role → Interface lookup for legacy alias derivation.
+	// Build a role → Interface lookup for WAN/CM vars still used directly.
 	ifaceByRole := make(map[string]plan.Interface, len(inst.Interfaces))
 	for _, iface := range inst.Interfaces {
 		ifaceByRole[iface.Role] = iface
 	}
 
-	// LAN port MACs: roles matching lanPrefix+{1-4} → LAN{1-4}_MAC
-	// These are consumed by rename_interfaces_by_mac() in entrypoint.sh.
-	for i := 1; i <= 4; i++ {
-		mac := ""
-		if iface, ok := ifaceByRole[fmt.Sprintf("%s%d", lanPrefix, i)]; ok {
-			mac = iface.MAC
-		}
-		env = append(env, fmt.Sprintf("LAN%d_MAC=%s", i, mac))
-	}
-
-	// cmRole → wan0 (physical cable-modem line interface)
-	env = append(env, "WAN0_MAC="+ifaceByRole[cmRole].MAC)
-
-	// wanRole → erouter0 (the erouter/WAN IP interface)
+	// WAN/erouter interface vars (manifest-driven via IFACE_* — no legacy aliases).
 	wanIface := ifaceByRole[wanRole]
-	env = append(env, "EROUTER0_MAC="+wanIface.MAC)
-
-	// EROUTER0_IPV4 in CIDR notation for ip addr add.
 	wanCIDR := ""
 	if n := input.Deployment.Network(wanRole); n != nil && n.IPv4 != nil {
 		wanCIDR = n.IPv4.CIDR

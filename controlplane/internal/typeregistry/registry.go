@@ -9,6 +9,7 @@ import (
 	"sort"
 	"sync"
 
+	"github.com/gdcs-dev/vcpe/controlplane/internal/manifest"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/render"
 	"gopkg.in/yaml.v3"
 )
@@ -32,6 +33,17 @@ type ServiceType interface {
 	ExpectedRoles() []RoleRequirement
 	// DefaultImagePolicy returns the default pull policy ("build" or "pull").
 	DefaultImagePolicy() string
+	// Description returns a human-readable one-line description of the service
+	// type, used by tooling such as the visual manifest editor palette.
+	Description() string
+	// DefaultImage returns the default OCI image repository for this type
+	// (e.g. "ghcr.io/gdcs-dev/bng"). Returns an empty string when no canonical
+	// default exists and the user must supply the image.
+	DefaultImage() string
+	// ValidateInterfaces validates the per-interface fields declared by a service
+	// of this type. It is called at preflight for every service. Types with no
+	// per-interface constraints must return nil.
+	ValidateInterfaces(interfaces []manifest.Interface) error
 }
 
 var (

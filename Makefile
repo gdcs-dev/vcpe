@@ -9,7 +9,7 @@ ifeq ($(GIT_VERSION),)
   GIT_VERSION := dev
 endif
 
-.PHONY: help init build up down status logs-bng logs-webpa smoke-go smoke-services smoke-controlplane release-gate clean
+.PHONY: help init build up down status logs-bng logs-webpa smoke-go smoke-services smoke-controlplane release-gate clean build-extension install-extension
 
 help:
 	@echo "vCPE developer helpers (direct vcpe command wrappers)"
@@ -53,6 +53,14 @@ logs-webpa:
 
 release-gate:
 	cd controlplane && go test ./...
+
+build-extension:
+	cd extensions/vcpe-visual-editor && npm install && npm run build && npm run package
+
+install-extension:
+	$(MAKE) build-extension
+	$(or $(shell command -v code 2>/dev/null),/Applications/Visual\ Studio\ Code.app/Contents/Resources/app/bin/code) \
+		--install-extension extensions/vcpe-visual-editor/vcpe-visual-editor-*.vsix
 
 clean:
 	@echo "No build artifacts are managed by this Makefile."

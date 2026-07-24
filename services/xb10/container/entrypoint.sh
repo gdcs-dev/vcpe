@@ -45,19 +45,28 @@ finalize_rename() {
 }
 
 rename_interfaces_by_mac() {
-    temp_eth0=$(stage_rename "$LAN1_MAC" eth0)
-    temp_eth1=$(stage_rename "$LAN2_MAC" eth1)
-    temp_eth2=$(stage_rename "$LAN3_MAC" eth2)
-    temp_eth3=$(stage_rename "$LAN4_MAC" eth3)
-    temp_eth4=$(stage_rename "$EROUTER0_MAC" eth4)
-    temp_eth5=$(stage_rename "$WAN0_MAC" eth5)
+    # Build rename table from IFACE_*_MAC + IFACE_*_DEVICE env vars.
+    # No legacy aliases (LAN1_MAC, EROUTER0_MAC, WAN0_MAC, etc.) are used.
+    local var_name mac_val role_key device_var device iface temp_name
 
-    finalize_rename "$temp_eth0" eth0
-    finalize_rename "$temp_eth1" eth1
-    finalize_rename "$temp_eth2" eth2
-    finalize_rename "$temp_eth3" eth3
-    finalize_rename "$temp_eth4" cm0
-    finalize_rename "$temp_eth5" wan0
+    for var_name in $(env | grep '^IFACE_.*_MAC=' | cut -d= -f1); do
+        mac_val=$(eval "echo \"\${$var_name}\"")
+        [ -n "$mac_val" ] || continue
+        role_key="${var_name%_MAC}"
+        role_key="${role_key#IFACE_}"
+        device_var="IFACE_${role_key}_DEVICE"
+        device=$(eval "echo \"\${${device_var}:-}\"")
+        [ -n "$device" ] || continue
+
+        iface=$(current_iface_for_mac "$mac_val" || true)
+        [ -n "$iface" ] || continue
+        [ "$iface" = "$device" ] && continue
+
+        temp_name="tmp-$device"
+        ip link set "$iface" down || true
+        ip link set "$iface" name "$temp_name"
+        ip link set "$temp_name" name "$device"
+    done
 }
 
 start_dhcp_client() {
@@ -70,5 +79,6 @@ EOF
 }
 
 rename_interfaces_by_mac
-start_dhcp_client cm0
+# Use the CM interface device name from the manifest env var.
+start_dhcp_client "${IFACE_CM_DEVICE:-cm0}"
 exec "$@"

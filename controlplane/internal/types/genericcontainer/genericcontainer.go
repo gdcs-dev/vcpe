@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/gdcs-dev/vcpe/controlplane/internal/manifest"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/render"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/typeregistry"
 	"gopkg.in/yaml.v3"
@@ -41,6 +42,14 @@ func (serviceType) Renderer() render.Renderer { return renderer{} }
 func (serviceType) ExpectedRoles() []typeregistry.RoleRequirement { return nil }
 
 func (serviceType) DefaultImagePolicy() string { return "build" }
+
+func (serviceType) ValidateInterfaces(_ []manifest.Interface) error { return nil }
+
+func (serviceType) Description() string {
+	return "Catch-all generic container workload"
+}
+
+func (serviceType) DefaultImage() string { return "" }
 
 type renderer struct{}
 

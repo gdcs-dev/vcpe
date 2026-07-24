@@ -52,6 +52,7 @@ var topLevelCommands = map[string]struct{}{
 	"plan":     {},
 	"list":     {},
 	"manifest": {},
+	"service":  {},
 	"status":   {},
 	"logs":     {},
 	"config":   {},

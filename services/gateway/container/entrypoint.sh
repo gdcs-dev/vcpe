@@ -3,19 +3,22 @@ set -euo pipefail
 
 rename_interfaces_by_mac() {
     declare -A current_by_mac=()
-    declare -A target_by_mac=(
-        ["${LAN1_MAC,,}"]=eth0
-        ["${LAN2_MAC,,}"]=eth1
-        ["${LAN3_MAC,,}"]=eth2
-        ["${LAN4_MAC,,}"]=eth3
-        ["${WAN0_MAC,,}"]=wan0
-        ["${EROUTER0_MAC,,}"]=erouter0
-    )
+    declare -A target_by_mac=()
     declare -A temp_by_target=()
-    local name
-    local mac
-    local target
-    local temp_name
+    local name mac role_key device_var device
+
+    # Build rename table from IFACE_*_MAC + IFACE_*_DEVICE env vars.
+    # No legacy aliases (LAN1_MAC, EROUTER0_MAC, WAN0_MAC) are used.
+    while IFS='=' read -r var_name mac_val; do
+        [[ "$var_name" == IFACE_*_MAC ]] || continue
+        [[ -n "$mac_val" ]] || continue
+        role_key="${var_name%_MAC}"
+        role_key="${role_key#IFACE_}"
+        device_var="IFACE_${role_key}_DEVICE"
+        device="${!device_var:-}"
+        [[ -n "$device" ]] || continue
+        target_by_mac["${mac_val,,}"]="$device"
+    done < <(env)
 
     for path in /sys/class/net/*; do
         name=$(basename "$path")
@@ -25,57 +28,60 @@ rename_interfaces_by_mac() {
     done
 
     for mac in "${!target_by_mac[@]}"; do
-        target=${target_by_mac[$mac]}
+        local target=${target_by_mac[$mac]}
         [[ -n "${current_by_mac[$mac]:-}" ]] || continue
         if [[ "${current_by_mac[$mac]}" == "$target" ]]; then
             continue
         fi
-        temp_name="tmp-${target}"
+        local temp_name="tmp-${target}"
         ip link set "${current_by_mac[$mac]}" down
         ip link set "${current_by_mac[$mac]}" name "$temp_name"
         temp_by_target[$target]=$temp_name
     done
 
-    for target in eth0 eth1 eth2 eth3 wan0 erouter0; do
-        [[ -n "${temp_by_target[$target]:-}" ]] || continue
+    for target in "${!temp_by_target[@]}"; do
         ip link set "${temp_by_target[$target]}" name "$target"
     done
 }
 
 configure_networking() {
-    local erouter_iface=erouter0
+    # Read interface names from manifest-driven env vars.
+    local wan_dev="${IFACE_WAN_DEVICE}"
+    local cm_dev="${IFACE_CM_DEVICE}"
+    local lan_bridge="${LAN_BRIDGE:-brlan0}"
+    local erouter_iface="$wan_dev"
 
     ip link set lo up
 
-    ip link add brlan0 type bridge
-    ip link set brlan0 up
+    ip link add "$lan_bridge" type bridge
+    ip link set "$lan_bridge" up
 
-    for lan_if in eth0 eth1 eth2 eth3; do
+    for lan_if in ${LAN_DEVICES:-}; do
         ip link set "$lan_if" up
-        ip link set "$lan_if" master brlan0
-        ip addr flush dev "$lan_if"   # remove Podman IPAM address; only brlan0 needs an IP
+        ip link set "$lan_if" master "$lan_bridge"
+        ip addr flush dev "$lan_if"   # remove Podman IPAM address; only the bridge needs an IP
     done
 
-    ip addr add "$BRLAN0_IPV4" dev brlan0
+    ip addr add "$BRLAN0_IPV4" dev "$lan_bridge"
     if [[ -n "${BRLAN0_IPV6:-}" ]]; then
-        ip -6 addr add "$BRLAN0_IPV6" dev brlan0
+        ip -6 addr add "$BRLAN0_IPV6" dev "$lan_bridge"
     fi
 
-    ip link set wan0 up
+    ip link set "$cm_dev" up
 
     if [[ -n "${WAN0_IPV4:-}" ]]; then
-        ip addr add "$WAN0_IPV4" dev wan0
+        ip addr add "$WAN0_IPV4" dev "$cm_dev"
     fi
 
     if [[ -n "${WAN0_IPV6:-}" ]]; then
-        ip -6 addr add "$WAN0_IPV6" dev wan0
+        ip -6 addr add "$WAN0_IPV6" dev "$cm_dev"
     fi
 
-    ip link set erouter0 up
+    ip link set "$wan_dev" up
 
     if [[ -n "${EROUTER0_VLAN:-}" ]]; then
-        erouter_iface="erouter0.${EROUTER0_VLAN}"
-        ip link add link erouter0 name "$erouter_iface" type vlan id "$EROUTER0_VLAN"
+        erouter_iface="${wan_dev}.${EROUTER0_VLAN}"
+        ip link add link "$wan_dev" name "$erouter_iface" type vlan id "$EROUTER0_VLAN"
         ip link set "$erouter_iface" up
     fi
 
@@ -115,10 +121,10 @@ EOF
 main() {
     rename_interfaces_by_mac
     configure_networking
-    # NAT all LAN (brlan0) traffic going out via erouter0 so clients can reach
-    # the internet and management hosts through the BNG.
+    # NAT all LAN bridge traffic going out via the WAN (erouter) interface so
+    # clients can reach the internet and management hosts through the BNG.
     if command -v iptables >/dev/null 2>&1; then
-        iptables -t nat -A POSTROUTING -o erouter0 -j MASQUERADE || true
+        iptables -t nat -A POSTROUTING -o "${IFACE_WAN_DEVICE}" -j MASQUERADE || true
     fi
     # Point resolv.conf at BNG dnsmasq so gateway can resolve peer hostnames.
     if [[ -n "${BNG_DNS_SERVER:-}" ]]; then

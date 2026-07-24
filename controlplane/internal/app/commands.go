@@ -12,6 +12,7 @@ import (
 	"github.com/gdcs-dev/vcpe/controlplane/internal/manifest"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/persist"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/planner"
+	"github.com/gdcs-dev/vcpe/controlplane/internal/typeregistry"
 	"gopkg.in/yaml.v3"
 )
 
@@ -78,6 +79,87 @@ func runManifest(opts Options) (daemon.CommandResponse, error) {
 	default:
 		return daemon.CommandResponse{}, fmt.Errorf("unknown manifest subcommand %q; run `vcpe manifest --help`", opts.CommandArgs[0])
 	}
+}
+
+// runService dispatches vcpe service <subcommand>.
+func runService(opts Options) (daemon.CommandResponse, error) {
+	if len(opts.CommandArgs) == 0 {
+		return daemon.CommandResponse{}, fmt.Errorf("service requires a subcommand; try `vcpe service types`")
+	}
+	switch opts.CommandArgs[0] {
+	case "types":
+		return runServiceTypes(opts)
+	default:
+		return daemon.CommandResponse{}, fmt.Errorf("unknown service subcommand %q; run `vcpe service --help`", opts.CommandArgs[0])
+	}
+}
+
+// runServiceTypes lists all registered service types. With --json it emits a
+// structured JSON object; otherwise it prints a human-readable table.
+func runServiceTypes(opts Options) (daemon.CommandResponse, error) {
+	names := typeregistry.Registered()
+
+	if opts.OutputJSON {
+		type roleJSON struct {
+			Role     string `json:"role"`
+			Required bool   `json:"required"`
+		}
+		type typeJSON struct {
+			Name              string     `json:"name"`
+			Description       string     `json:"description"`
+			DefaultPullPolicy string     `json:"defaultPullPolicy"`
+			DefaultImage      string     `json:"defaultImage"`
+			ExpectedRoles     []roleJSON `json:"expectedRoles"`
+		}
+		types := make([]typeJSON, 0, len(names))
+		for _, name := range names {
+			st, _ := typeregistry.Lookup(name)
+			roles := make([]roleJSON, 0, len(st.ExpectedRoles()))
+			for _, r := range st.ExpectedRoles() {
+				roles = append(roles, roleJSON{Role: r.Role, Required: r.Required})
+			}
+			types = append(types, typeJSON{
+				Name:              st.Type(),
+				Description:       st.Description(),
+				DefaultPullPolicy: st.DefaultImagePolicy(),
+				DefaultImage:      st.DefaultImage(),
+				ExpectedRoles:     roles,
+			})
+		}
+		out := map[string]interface{}{"types": types}
+		b, err := json.Marshal(out)
+		if err != nil {
+			return daemon.CommandResponse{}, fmt.Errorf("marshal service types: %w", err)
+		}
+		return daemon.CommandResponse{Message: string(b)}, nil
+	}
+
+	if len(names) == 0 {
+		return daemon.CommandResponse{Message: "no service types registered"}, nil
+	}
+
+	// Build aligned table: NAME  PULL_POLICY  DESCRIPTION
+	const minPad = 2
+	maxName, maxPolicy := len("NAME"), len("PULL_POLICY")
+	for _, name := range names {
+		if len(name) > maxName {
+			maxName = len(name)
+		}
+		st, _ := typeregistry.Lookup(name)
+		if len(st.DefaultImagePolicy()) > maxPolicy {
+			maxPolicy = len(st.DefaultImagePolicy())
+		}
+	}
+	colName := maxName + minPad
+	colPolicy := maxPolicy + minPad
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "%-*s%-*s%s\n", colName, "NAME", colPolicy, "PULL_POLICY", "DESCRIPTION")
+	for _, name := range names {
+		st, _ := typeregistry.Lookup(name)
+		fmt.Fprintf(&b, "%-*s%-*s%s\n", colName, name, colPolicy, st.DefaultImagePolicy(), st.Description())
+	}
+	return daemon.CommandResponse{Message: strings.TrimRight(b.String(), "\n")}, nil
 }
 
 // runManifestBuild runs the interactive manifest builder wizard.

@@ -12,6 +12,13 @@ services/routerd/.build-src/
 # Go build outputs
 controlplane/bin/
 
+# VS Code extension: webview bundle (rebuilt by npm run build / make build-extension)
+extensions/vcpe-visual-editor/webview/dist/
+extensions/vcpe-visual-editor/dist/
+extensions/vcpe-visual-editor/node_modules/
+# .vsix artifacts — not committed; install via make install-extension
+extensions/vcpe-visual-editor/*.vsix
+
 # Generated compose.env files staged by the orchestrator into services/<type>/
 compose.env
 

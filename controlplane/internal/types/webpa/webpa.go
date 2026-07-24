@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/gdcs-dev/vcpe/controlplane/internal/manifest"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/render"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/typeregistry"
 	"gopkg.in/yaml.v3"
@@ -36,6 +37,14 @@ func (serviceType) ExpectedRoles() []typeregistry.RoleRequirement {
 }
 
 func (serviceType) DefaultImagePolicy() string { return "build" }
+
+func (serviceType) ValidateInterfaces(_ []manifest.Interface) error { return nil }
+
+func (serviceType) Description() string {
+	return "USP/WebPA device-management server"
+}
+
+func (serviceType) DefaultImage() string { return "ghcr.io/gdcs-dev/webpa" }
 
 type renderer struct{}
 

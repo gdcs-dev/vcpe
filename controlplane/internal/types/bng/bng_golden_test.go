@@ -106,7 +106,6 @@ func TestBNGGoldenComposeEnv(t *testing.T) {
 		"IFACE_WAN_IPV6=",
 		"IFACE_WAN_MAC=02:aa:bb:cc:dd:ee",
 		"IFACE_WAN_NETWORK=edge-wan",
-		"WAN_MAC=02:aa:bb:cc:dd:ee",
 		"WAN_IPV4_CIDR=10.200.0.2/24",
 	}, "\n") + "\n"
 	if got != want {

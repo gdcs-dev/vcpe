@@ -78,12 +78,12 @@ spec:
       image:
         repository: ghcr.io/gdcs-dev/bng
         tag: dev
-        pullPolicy: always-pull
+        pullPolicy: build-if-missing
         buildContext: services/bng
       interfaces:
-        - { role: mgmt }
-        - { role: wan, defaultRoute: true, ipv4: "10.7.200.1" }
-        - { role: cm, ipv4: "10.7.201.1" }
+        - { role: mgmt, device: eth0 }
+        - { role: wan, device: eth1, defaultRoute: true, ipv4: "10.7.200.1" }
+        - { role: cm, device: eth2, ipv4: "10.7.201.1" }
       config:
         access:
           - role: wan
@@ -110,7 +110,7 @@ spec:
       image:
         repository: ghcr.io/gdcs-dev/webpa
         tag: dev
-        pullPolicy: always-pull
+        pullPolicy: build-if-missing
         buildContext: services/webpa
       interfaces:
         - { role: mgmt }
@@ -126,15 +126,15 @@ spec:
       image:
         repository: ghcr.io/gdcs-dev/gateway
         tag: dev
-        pullPolicy: always-pull
+        pullPolicy: build-if-missing
         buildContext: services/gateway
       interfaces:
-        - { role: wan, ipv4: "10.7.200.10" }
-        - { role: cm, ipv4: "10.7.201.10" }
-        - { role: lan-p1 }
-        - { role: lan-p2 }
-        - { role: lan-p3 }
-        - { role: lan-p4 }
+        - { role: wan, device: erouter0, ipv4: "10.7.200.10" }
+        - { role: cm, device: wan0, ipv4: "10.7.201.10" }
+        - { role: lan-p1, device: eth0 }
+        - { role: lan-p2, device: eth1 }
+        - { role: lan-p3, device: eth2 }
+        - { role: lan-p4, device: eth3 }
       config:
         lan:
           ipv4: 192.168.10.1/24
@@ -153,7 +153,7 @@ spec:
       image:
         repository: ghcr.io/gdcs-dev/event-sink
         tag: dev
-        pullPolicy: always-pull
+        pullPolicy: build-if-missing
         buildContext: services/event-sink
         containerfile: services/event-sink/Containerfile
       interfaces:

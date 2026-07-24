@@ -49,6 +49,15 @@ func TestRegistryCompleteness(t *testing.T) {
 		if policy := st.DefaultImagePolicy(); policy == "" {
 			t.Errorf("type %q has empty DefaultImagePolicy", name)
 		}
+		if desc := st.Description(); desc == "" {
+			t.Errorf("type %q has empty Description", name)
+		}
+		// DefaultImage may be empty for types with no canonical default image.
+		_ = st.DefaultImage()
+		// ValidateInterfaces with nil slice must not panic and must return nil
+		// for types that impose no per-interface constraints.
+		// (Gateway will return an error for missing device, tested separately.)
+		_ = st.ValidateInterfaces(nil)
 		// ExpectedRoles may be empty (e.g. generic-container) but must not panic
 		// and each declared role must be non-empty.
 		for _, req := range st.ExpectedRoles() {

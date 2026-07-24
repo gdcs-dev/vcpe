@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/gdcs-dev/vcpe/controlplane/internal/manifest"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/plan"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/render"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/typeregistry"
@@ -80,9 +81,23 @@ func (serviceType) ValidateConfig(node yaml.Node) error {
 
 func (serviceType) Renderer() render.Renderer { return renderer{} }
 
-func (serviceType) ExpectedRoles() []typeregistry.RoleRequirement { return nil }
+func (serviceType) ExpectedRoles() []typeregistry.RoleRequirement {
+	return []typeregistry.RoleRequirement{
+		{Role: "wan", Required: true},
+		{Role: "cm", Required: false},
+		{Role: "mgmt", Required: false},
+	}
+}
 
 func (serviceType) DefaultImagePolicy() string { return "build" }
+
+func (serviceType) ValidateInterfaces(_ []manifest.Interface) error { return nil }
+
+func (serviceType) Description() string {
+	return "Broadband Network Gateway — DHCP4/RADVD/DNS on WAN and CM segments"
+}
+
+func (serviceType) DefaultImage() string { return "ghcr.io/gdcs-dev/bng" }
 
 type renderer struct{}
 
@@ -110,12 +125,9 @@ func (renderer) Render(_ context.Context, input render.Input) (render.Result, er
 	}
 
 	env := render.IfaceEnv(input.Deployment, input.Service, inst)
-	// The BNG entrypoint renames interfaces by MGMT_MAC/WAN_MAC/CM_MAC.
-	// Append legacy aliases so the rename logic uses the IPAM-assigned MACs.
-	for _, iface := range inst.Interfaces {
-		key := strings.ToUpper(strings.ReplaceAll(iface.Role, "-", "_")) + "_MAC"
-		env = append(env, key+"="+iface.MAC)
-	}
+	// IFACE_*_MAC / IFACE_*_DEVICE are the canonical env var contract.
+	// Legacy role-specific aliases (MGMT_MAC=, WAN_MAC=, CM_MAC=) are no
+	// longer emitted; the entrypoint uses IFACE_*_MAC + IFACE_*_DEVICE.
 
 	// For container-managed (ipamDriver: none) networks, the BNG must assign
 	// its own IPs. Add <ROLE>_IPV4_CIDR env vars so network-startup.sh can

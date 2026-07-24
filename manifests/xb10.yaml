@@ -78,9 +78,9 @@ spec:
         pullPolicy: always-pull
         buildContext: services/bng
       interfaces:
-        - { role: mgmt }
-        - { role: wan, defaultRoute: true, ipv4: "10.7.200.1" }
-        - { role: cm, ipv4: "10.7.201.1" }
+        - { role: mgmt, device: eth0 }
+        - { role: wan, defaultRoute: true, ipv4: "10.7.200.1", device: eth1 }
+        - { role: cm, ipv4: "10.7.201.1", device: eth2 }
       config:
         access:
           - role: wan
@@ -129,12 +129,12 @@ spec:
         buildContext: services/xb10
         containerfile: services/xb10/Containerfile
       interfaces:
-        - { role: wan, ipv4: "10.7.200.20" }
-        - { role: cm, ipv4: "10.7.201.20" }
-        - { role: lan-p1 }
-        - { role: lan-p2 }
-        - { role: lan-p3 }
-        - { role: lan-p4 }
+        - { role: wan, ipv4: "10.7.200.20", device: erouter0 }
+        - { role: cm, ipv4: "10.7.201.20", device: wan0 }
+        - { role: lan-p1, device: eth0 }
+        - { role: lan-p2, device: eth1 }
+        - { role: lan-p3, device: eth2 }
+        - { role: lan-p4, device: eth3 }
       ports:
         - "2295:22"
       dependsOn:
