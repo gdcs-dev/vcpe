@@ -12,6 +12,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/gdcs-dev/vcpe/controlplane/internal/manifest"
@@ -23,10 +24,11 @@ type Options struct {
 	Command     string
 	CommandArgs []string
 
-	ManifestPath string
-	StateRoot    string
-	SocketPath   string
-	ConfigPath   string
+	ManifestPath  string
+	ManifestPaths []string // repeatable --manifest with glob expansion; used by stamp and release
+	StateRoot     string
+	SocketPath    string
+	ConfigPath    string
 
 	// Name selects a target deployment (metadata.name) for down/destroy/logs/
 	// status/service commands.
@@ -39,7 +41,7 @@ type Options struct {
 	Platforms       []string
 	Backend         string
 	OutputPath      string
-	Version         string // release version tag (e.g. v0.2.0); required for release
+	Version         string // release version tag (e.g. v0.2.0); required for release/stamp
 }
 
 // topLevelCommands are the public operator commands.
@@ -129,9 +131,11 @@ func extractHelpCommand(args []string) (string, bool) {
 
 // isManifestCommand reports whether cmd requires a manifest to operate and
 // should participate in manifest auto-discovery when --manifest is omitted.
+// stamp and release use ManifestPaths (repeatable + glob) instead and handle
+// their own manifest resolution, so they are excluded here.
 func isManifestCommand(cmd string) bool {
 	switch cmd {
-	case "build", "push", "release", "up", "apply", "plan":
+	case "build", "push", "up", "apply", "plan":
 		return true
 	}
 	return false
@@ -245,7 +249,17 @@ func parseArgs(_ string, args []string) (Options, error) {
 			if err != nil {
 				return Options{}, err
 			}
-			opts.ManifestPath = val
+			// stamp and release: accumulate all --manifest values with glob expansion.
+			// All other commands: keep single-path semantics.
+			if command == "stamp" || command == "release" {
+				expanded, err := expandManifestGlob(val)
+				if err != nil {
+					return Options{}, err
+				}
+				opts.ManifestPaths = append(opts.ManifestPaths, expanded...)
+			} else {
+				opts.ManifestPath = val
+			}
 			i = next
 		case arg == "--name":
 			val, next, err := takeValue(rest, i, "--name")
@@ -332,8 +346,8 @@ func parseArgs(_ string, args []string) (Options, error) {
 	if opts.Backend != "" && opts.Backend != "podman" && opts.Backend != "docker" {
 		return Options{}, fmt.Errorf("unknown backend %q: must be podman or docker", opts.Backend)
 	}
-	if opts.Version != "" && command != "release" {
-		return Options{}, fmt.Errorf("--version is only supported for release")
+	if opts.Version != "" && command != "release" && command != "stamp" {
+		return Options{}, fmt.Errorf("--version is only supported for release and stamp")
 	}
 
 	// Resolve --manifest (auto-discovery when omitted; bare-name lookup when set)
@@ -356,11 +370,16 @@ func validateCommandShape(opts *Options) error {
 			return fmt.Errorf("%s requires --manifest <path>; run `vcpe %s --help` for usage", opts.Command, opts.Command)
 		}
 	case "release":
-		if opts.ManifestPath == "" {
-			return fmt.Errorf("release requires --manifest <path>; run `vcpe release --help` for usage")
-		}
 		if opts.Version == "" {
 			return fmt.Errorf("release requires --version <vX.Y.Z>; run `vcpe release --help` for usage")
+		}
+		// --manifest is optional: auto-detect via git diff when omitted.
+	case "stamp":
+		if len(opts.ManifestPaths) == 0 {
+			return fmt.Errorf("stamp requires at least one --manifest <path>; run `vcpe stamp --help` for usage")
+		}
+		if opts.Version == "" {
+			return fmt.Errorf("stamp requires --version <vX.Y.Z>; run `vcpe stamp --help` for usage")
 		}
 	case "down", "destroy":
 		// --name is optional: if omitted, runDown auto-selects the single active
@@ -413,4 +432,27 @@ func takeValue(args []string, i int, flag string) (string, int, error) {
 		return "", i, fmt.Errorf("flag %s requires a value", flag)
 	}
 	return args[i+1], i + 1, nil
+}
+
+// expandManifestGlob expands a single --manifest value into one or more file
+// paths. Values containing glob metacharacters (*?[) are expanded with
+// filepath.Glob; literal paths are stat-validated. Returns an error if no
+// files match a glob or a literal path does not exist.
+func expandManifestGlob(val string) ([]string, error) {
+	isGlob := strings.ContainsAny(val, "*?[")
+	if isGlob {
+		matches, err := filepath.Glob(val)
+		if err != nil {
+			return nil, fmt.Errorf("--manifest glob %q: %w", val, err)
+		}
+		if len(matches) == 0 {
+			return nil, fmt.Errorf("--manifest glob %q matched no files", val)
+		}
+		return matches, nil
+	}
+	// Literal path: validate it exists.
+	if _, err := os.Stat(val); err != nil {
+		return nil, fmt.Errorf("--manifest %q: %w", val, err)
+	}
+	return []string{val}, nil
 }

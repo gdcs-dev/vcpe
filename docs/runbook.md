@@ -164,6 +164,47 @@ make release-gate
 This target enforces direct `vcpe` command coverage and control-plane integration
 smokes before release packaging.
 
+## Publishing A Release
+
+The release workflow is a two-step process that separates stamping from the git tag, allowing you to test pinned images across multiple manifests before the tag is created.
+
+**Step 1 — Stamp all manifests** (no git operations):
+
+```bash
+# Stamp a single manifest
+vcpe stamp --version v0.3.0 --manifest manifests/example.yaml
+
+# Stamp multiple manifests explicitly
+vcpe stamp --version v0.3.0 \
+  --manifest manifests/example.yaml \
+  --manifest manifests/example-macvlan.yaml
+
+# Stamp all manifests in a directory with a glob
+vcpe stamp --version v0.3.0 --manifest "manifests/*.yaml"
+```
+
+After stamping, test your deployments:
+
+```bash
+vcpe up --manifest manifests/example.yaml
+# verify, then:
+vcpe down --manifest manifests/example.yaml
+```
+
+**Step 2 — Publish the release** (git commit + tag + push + build + push images):
+
+```bash
+# Auto-detects stamped manifests via git diff
+vcpe release --version v0.3.0
+
+# Or provide explicit manifest paths
+vcpe release --version v0.3.0 --manifest "manifests/*.yaml"
+```
+
+`vcpe release` verifies that every first-party image tag in each manifest equals `--version` before touching git. If any manifest was missed by `stamp`, it will fail with a clear error naming the offending file and service.
+
+Both `vcpe stamp` and `vcpe release` must be run from the `main` branch.
+
 ## Stop And Cleanup
 
 ```bash

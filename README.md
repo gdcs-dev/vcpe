@@ -71,7 +71,8 @@ vcpe up --manifest manifests/example.yaml --allow-disruptive
 |---------|-------------|
 | `vcpe build` | Build or pull service images from a manifest |
 | `vcpe push` | Push service images to their registries |
-| `vcpe release` | Stamp manifest, git commit+tag+push, build and push images |
+| `vcpe stamp` | Pin image tags in one or more manifests to a version (no git ops) |
+| `vcpe release` | git commit+tag+push pre-stamped manifests, then build and push images |
 | `vcpe up` | Bring up a deployment from a manifest (alias: `apply`) |
 | `vcpe plan` | Show planned changes without applying |
 | `vcpe down` | Tear down a named deployment (alias: `destroy`, requires `--force`) |

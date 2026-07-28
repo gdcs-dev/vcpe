@@ -1,0 +1,15 @@
+Usage: vcpe release --version <vX.Y.Z> [flags]
+
+Requires --version <vX.Y.Z>. Sequence: (1) validate on main branch and that the tag doesn't exist; (2) collect manifest set from --manifest flags or auto-detect via git diff; (3) verify coherence (all first-party tags == version); (4) git add + commit + tag + push to origin; (5) build and push all first-party images (deduplicated) as multi-arch OCI manifests with :version and :latest. Run `vcpe stamp` first to pin tags across all manifests.
+
+Required flags:
+  --version <vX.Y.Z>      Release version tag to create (e.g. v0.3.0); must not already exist in git
+
+Optional flags:
+  --manifest <path|glob>  Path or glob to manifest file(s); may be repeated. If omitted, auto-detected via git diff
+  --backend <podman|docker>  Container runtime backend (default: docker)
+  --platform <os/arch,...>  Target platforms (default: linux/amd64,linux/arm64)
+
+Examples:
+  vcpe release --version v0.3.0
+  vcpe release --version v0.3.0 --manifest "manifests/*.yaml"

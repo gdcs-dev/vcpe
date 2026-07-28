@@ -4,7 +4,8 @@ Commands:
   init      Initialize the vCPE state root
   build     Build or pull service images from a manifest
   push      Push service images from a manifest to their registries
-  release   Stamp manifest, commit, tag, push git, then build and push images
+  stamp     Pin image tags in one or more manifest files without touching git
+  release   Commit, tag, push git, then build and push images for pre-stamped manifests
   up        Bring up a deployment from a manifest
   plan      Show planned changes without applying
   down      Tear down a named deployment

@@ -7,9 +7,10 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// StampManifestFile rewrites the manifest at path, updating the image.tag field
-// to version for every first-party service (those with a non-empty buildContext).
-// Third-party images (no buildContext) are left unchanged.
+// StampManifestFile rewrites the manifest at path, updating the image.tag to
+// version and image.pullPolicy to "always-pull" for every first-party service
+// (those with a non-empty buildContext). Third-party images (no buildContext)
+// are left unchanged.
 //
 // The file is rewritten using the gopkg.in/yaml.v3 Node API so all comments
 // and formatting are preserved.
@@ -63,6 +64,7 @@ func stampServices(root *yaml.Node, version string) error {
 			continue
 		}
 		nodeSet(img, "tag", version)
+		nodeSet(img, "pullPolicy", "always-pull")
 	}
 	return nil
 }
@@ -102,4 +104,15 @@ func nodeSet(m *yaml.Node, key, value string) {
 		&yaml.Node{Kind: yaml.ScalarNode, Value: key},
 		&yaml.Node{Kind: yaml.ScalarNode, Value: value},
 	)
+}
+
+// StampManifestFiles stamps every path in paths to version by calling
+// StampManifestFile for each. It stops and returns the first error encountered.
+func StampManifestFiles(paths []string, version string) error {
+	for _, p := range paths {
+		if err := StampManifestFile(p, version); err != nil {
+			return err
+		}
+	}
+	return nil
 }

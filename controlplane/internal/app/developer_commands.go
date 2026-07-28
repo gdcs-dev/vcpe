@@ -18,6 +18,7 @@ func init() {
 	// help output and are accepted as valid top-level commands.
 	topLevelCommands["build"] = struct{}{}
 	topLevelCommands["push"] = struct{}{}
+	topLevelCommands["stamp"] = struct{}{}
 	topLevelCommands["release"] = struct{}{}
 
 	commandHelp["build"] = CommandHelp{
@@ -54,32 +55,48 @@ func init() {
 			"vcpe push --manifest manifests/example.yaml --backend docker",
 		},
 	}
-	commandHelp["release"] = CommandHelp{
-		Synopsis:    "Stamp manifest, commit, tag, push git, then build and push images",
-		Description: "Requires --version <vX.Y.Z>. Sequence: (1) validate on main branch and that the tag doesn't exist; (2) stamp first-party image tags in the manifest; (3) git add + commit + tag + push to origin; (4) build all first-party service images as multi-arch OCI manifest lists with both the versioned tag and :latest and push to registry. Always defaults to the Docker backend.",
+	commandHelp["stamp"] = CommandHelp{
+		Synopsis:    "Pin image tags in one or more manifest files without touching git",
+		Description: "Stamps every first-party service image (those with a buildContext) in the specified manifests to the target version. Does not perform any git operations. Run this before `vcpe release` to pin tags across multiple manifests and test them before the git tag is created.",
 		RequiredFlags: []FlagHelp{
-			{Name: "--manifest", Arg: "<path>", Description: "Path to deployment manifest YAML (will be stamped in place)"},
-			{Name: "--version", Arg: "<vX.Y.Z>", Description: "Release version tag to create (e.g. v0.2.0); must not already exist in git"},
+			{Name: "--manifest", Arg: "<path|glob>", Description: "Path or glob to manifest file(s); may be repeated"},
+			{Name: "--version", Arg: "<vX.Y.Z>", Description: "Version tag to stamp into image.tag fields"},
+		},
+		Examples: []string{
+			"vcpe stamp --version v0.3.0 --manifest manifests/example.yaml",
+			"vcpe stamp --version v0.3.0 --manifest manifests/example.yaml --manifest manifests/example-macvlan.yaml",
+			`vcpe stamp --version v0.3.0 --manifest "manifests/*.yaml"`,
+		},
+	}
+	commandHelp["release"] = CommandHelp{
+		Synopsis:    "Commit, tag, push git, then build and push images for pre-stamped manifests",
+		Description: "Requires --version <vX.Y.Z>. Sequence: (1) validate on main branch and that the tag doesn't exist; (2) collect manifest set from --manifest flags or auto-detect via git diff; (3) verify coherence (all first-party tags == version); (4) git add + commit + tag + push to origin; (5) build and push all first-party images (deduplicated) as multi-arch OCI manifests with :version and :latest. Run `vcpe stamp` first to pin tags across all manifests.",
+		RequiredFlags: []FlagHelp{
+			{Name: "--version", Arg: "<vX.Y.Z>", Description: "Release version tag to create (e.g. v0.3.0); must not already exist in git"},
 		},
 		OptionalFlags: []FlagHelp{
+			{Name: "--manifest", Arg: "<path|glob>", Description: "Path or glob to manifest file(s); may be repeated. If omitted, auto-detected via git diff"},
 			{Name: "--backend", Arg: "<podman|docker>", Description: "Container runtime backend (default: docker)"},
 			{Name: "--platform", Arg: "<os/arch,...>", Description: "Target platforms (default: linux/amd64,linux/arm64)"},
 		},
 		Examples: []string{
-			"vcpe release --manifest manifests/example.yaml --version v0.2.0",
+			"vcpe release --version v0.3.0",
+			`vcpe release --version v0.3.0 --manifest "manifests/*.yaml"`,
 		},
 	}
 
-	developerCommandOrder = []string{"build", "push", "release"}
+	developerCommandOrder = []string{"build", "push", "stamp", "release"}
 }
 
-// dispatchDeveloperCommand routes build/push/release to their implementations.
+// dispatchDeveloperCommand routes build/push/stamp/release to their implementations.
 func dispatchDeveloperCommand(opts Options) (daemon.CommandResponse, error) {
 	switch opts.Command {
 	case "build":
 		return runBuild(opts)
 	case "push":
 		return runPush(opts)
+	case "stamp":
+		return runStamp(opts)
 	case "release":
 		return runRelease(opts)
 	default:
@@ -136,68 +153,156 @@ func runPush(opts Options) (daemon.CommandResponse, error) {
 	return daemon.CommandResponse{Message: strings.TrimRight(b.String(), "\n")}, nil
 }
 
+// runStamp pins image tags in one or more manifest files without touching git.
+// Use this before `vcpe release` to stamp multiple manifests and test them
+// before the git tag is created.
+func runStamp(opts Options) (daemon.CommandResponse, error) {
+	version := opts.Version // validated non-empty by CLI
+	if version == "" {
+		return daemon.CommandResponse{}, fmt.Errorf("stamp requires --version <vX.Y.Z>")
+	}
+	paths := opts.ManifestPaths
+
+	var b strings.Builder
+	stamped := 0
+	for _, path := range paths {
+		doc, err := manifest.Load(path)
+		if err != nil {
+			return daemon.CommandResponse{}, fmt.Errorf("stamp %s: %w", path, err)
+		}
+		if err := Preflight(doc); err != nil {
+			return daemon.CommandResponse{}, fmt.Errorf("stamp %s: %w", path, err)
+		}
+		if err := manifest.StampManifestFile(path, version); err != nil {
+			return daemon.CommandResponse{}, err
+		}
+		fmt.Fprintf(&b, "  stamped: %s → %s\n", path, version)
+		stamped++
+	}
+	fmt.Fprintf(&b, "stamped %d manifest(s) to %s", stamped, version)
+	return daemon.CommandResponse{Message: strings.TrimRight(b.String(), "\n")}, nil
+}
+
 // runRelease performs a full versioned release:
-//  1. Stamp first-party image tags in the manifest (opts.Version).
-//  2. git add → commit → tag → push (via runGitRelease).
-//  3. Build all first-party service images as multi-arch with :version + :latest.
+//  1. Validate git state (main branch, tag absent).
+//  2. Collect manifest set: ManifestPaths if provided, else auto-detect via git diff.
+//  3. Verify coherence: every first-party service tag == version.
+//  4. git add → commit → tag → push (via runGitRelease).
+//  5. Build and push images (deduplicated across all manifests).
 func runRelease(opts Options) (daemon.CommandResponse, error) {
 	version := opts.Version // validated non-empty by CLI
-
-	doc, err := manifest.Load(opts.ManifestPath)
-	if err != nil {
-		return daemon.CommandResponse{}, err
-	}
-	if err := Preflight(doc); err != nil {
-		return daemon.CommandResponse{}, err
-	}
 
 	platforms := opts.Platforms
 	if len(platforms) == 0 {
 		platforms = []string{"linux/amd64", "linux/arm64"}
 	}
-
 	backendName := opts.Backend
 	if backendName == "" {
 		backendName = "docker"
 	}
 
-	var b strings.Builder
-	fmt.Fprintf(&b, "release %s for deployment %q (platforms: %s)\n", version, doc.Metadata.Name, strings.Join(platforms, ","))
-
 	if err := gitReleasePreflight(version); err != nil {
 		return daemon.CommandResponse{}, err
 	}
 
-	if err := manifest.StampManifestFile(opts.ManifestPath, version); err != nil {
-		return daemon.CommandResponse{}, fmt.Errorf("stamp manifest: %w", err)
+	// Collect manifest set: explicit --manifest flags, or auto-detect via git diff.
+	manifestPaths := opts.ManifestPaths
+	if len(manifestPaths) == 0 {
+		detected, err := detectStampedManifests()
+		if err != nil {
+			return daemon.CommandResponse{}, err
+		}
+		if len(detected) == 0 {
+			return daemon.CommandResponse{}, fmt.Errorf(
+				"no stamped manifests detected; run `vcpe stamp --version %s --manifest <path>` first,\n"+
+					"or provide explicit --manifest flags", version)
+		}
+		manifestPaths = detected
 	}
-	fmt.Fprintf(&b, "manifest stamped: %s → tag: %s\n", opts.ManifestPath, version)
 
-	if err := runGitRelease(opts.ManifestPath, version); err != nil {
+	// Coherence check: every first-party service in each manifest must be stamped to version.
+	type buildKey struct{ repo, context string }
+	seen := map[buildKey]bool{}
+	type buildTarget struct {
+		name, repo, ctx, containerfile string
+	}
+	var builds []buildTarget
+	var deploymentNames []string
+
+	for _, path := range manifestPaths {
+		doc, err := manifest.Load(path)
+		if err != nil {
+			return daemon.CommandResponse{}, fmt.Errorf("release: load %s: %w", path, err)
+		}
+		deploymentNames = append(deploymentNames, doc.Metadata.Name)
+		for _, svc := range doc.Spec.Services {
+			if svc.Image.BuildContext == "" {
+				continue
+			}
+			if svc.Image.Tag != version {
+				return daemon.CommandResponse{}, fmt.Errorf(
+					"coherence check failed: %s service %q has tag %q, expected %q;\n"+
+						"run `vcpe stamp --version %s --manifest %s` first",
+					path, svc.Name, svc.Image.Tag, version, version, path)
+			}
+			k := buildKey{svc.Image.Repository, svc.Image.BuildContext}
+			if !seen[k] {
+				seen[k] = true
+				builds = append(builds, buildTarget{
+					name:          svc.Name,
+					repo:          svc.Image.Repository,
+					ctx:           svc.Image.BuildContext,
+					containerfile: svc.Image.Containerfile,
+				})
+			}
+		}
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "release %s for deployments: %s (platforms: %s)\n",
+		version, strings.Join(deploymentNames, ", "), strings.Join(platforms, ","))
+
+	if err := runGitRelease(manifestPaths, version); err != nil {
 		return daemon.CommandResponse{}, err
 	}
 	fmt.Fprintf(&b, "git: committed, tagged %s, and pushed to origin\n", version)
 
 	backend := newImageBackend(backendName)
-	for _, svc := range doc.Spec.Services {
-		if svc.Image.BuildContext == "" {
-			continue
-		}
-		versionedRef := fmt.Sprintf("%s:%s", svc.Image.Repository, version)
-		latestRef := fmt.Sprintf("%s:latest", svc.Image.Repository)
+	for _, t := range builds {
+		versionedRef := fmt.Sprintf("%s:%s", t.repo, version)
+		latestRef := fmt.Sprintf("%s:latest", t.repo)
 		if err := backend.BuildImage(context.Background(), image.BuildRequest{
 			Tags:      []string{versionedRef, latestRef},
-			Context:   svc.Image.BuildContext,
-			File:      svc.Image.Containerfile,
+			Context:   t.ctx,
+			File:      t.containerfile,
 			Platforms: platforms,
 		}); err != nil {
-			return daemon.CommandResponse{}, fmt.Errorf("release build %s (%s): %w", svc.Name, versionedRef, err)
+			return daemon.CommandResponse{}, fmt.Errorf("release build %s (%s): %w", t.name, versionedRef, err)
 		}
-		fmt.Fprintf(&b, "  %s (%s): pushed as %s, %s\n", svc.Name, svc.Type, versionedRef, latestRef)
+		fmt.Fprintf(&b, "  %s: pushed as %s, %s\n", t.name, versionedRef, latestRef)
 	}
 
 	fmt.Fprintf(&b, "release %s complete", version)
 	return daemon.CommandResponse{Message: strings.TrimRight(b.String(), "\n")}, nil
+}
+
+// detectStampedManifests runs git diff to find modified YAML files under manifests/.
+func detectStampedManifests() ([]string, error) {
+	out, err := exec.Command("git", "diff", "--name-only", "--", "manifests/").Output()
+	if err != nil {
+		return nil, fmt.Errorf("release: detect stamped manifests: %w", err)
+	}
+	var paths []string
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if strings.HasSuffix(line, ".yaml") || strings.HasSuffix(line, ".yml") {
+			paths = append(paths, line)
+		}
+	}
+	return paths, nil
 }
 
 // gitReleasePreflight validates git state before any file or registry mutations.
@@ -221,10 +326,11 @@ func gitReleasePreflight(version string) error {
 	return nil
 }
 
-// runGitRelease stages, commits, tags, and pushes the release.
-func runGitRelease(manifestPath, version string) error {
-	if out, err := exec.Command("git", "add", manifestPath).CombinedOutput(); err != nil {
-		return fmt.Errorf("release: git add %s: %w\n%s", manifestPath, err, strings.TrimSpace(string(out)))
+// runGitRelease stages all manifest files, commits, tags, and pushes the release.
+func runGitRelease(manifestPaths []string, version string) error {
+	args := append([]string{"add"}, manifestPaths...)
+	if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {
+		return fmt.Errorf("release: git add: %w\n%s", err, strings.TrimSpace(string(out)))
 	}
 	msg := fmt.Sprintf("release: pin images to %s", version)
 	if out, err := exec.Command("git", "commit", "-m", msg).CombinedOutput(); err != nil {

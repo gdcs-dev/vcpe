@@ -1,0 +1,12 @@
+Usage: vcpe stamp --manifest <path|glob> --version <vX.Y.Z> [flags]
+
+Stamps every first-party service image (those with a buildContext) in the specified manifests to the target version. Does not perform any git operations. Run this before `vcpe release` to pin tags across multiple manifests and test them before the git tag is created.
+
+Required flags:
+  --manifest <path|glob>  Path or glob to manifest file(s); may be repeated
+  --version <vX.Y.Z>      Version tag to stamp into image.tag fields
+
+Examples:
+  vcpe stamp --version v0.3.0 --manifest manifests/example.yaml
+  vcpe stamp --version v0.3.0 --manifest manifests/example.yaml --manifest manifests/example-macvlan.yaml
+  vcpe stamp --version v0.3.0 --manifest "manifests/*.yaml"

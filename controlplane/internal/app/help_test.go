@@ -77,6 +77,16 @@ func TestHelpForPush(t *testing.T) {
 	checkGolden(t, "push", got)
 }
 
+func TestHelpForStamp(t *testing.T) {
+	got := HelpFor("stamp")
+	checkGolden(t, "stamp", got)
+}
+
+func TestHelpForRelease(t *testing.T) {
+	got := HelpFor("release")
+	checkGolden(t, "release", got)
+}
+
 func TestHelpForUp(t *testing.T) {
 	got := HelpFor("up")
 	checkGolden(t, "up", got)
