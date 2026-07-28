@@ -119,8 +119,6 @@ spec:
     # bridges LAN ports for attached clients.
     - name: xb10
       type: xb10
-      #volumes:
-      #  - /mnt/docker_disk/shared/xb10-dev:/home/root/xb10-dev
       replicas: 1
       image:
         repository: ghcr.io/gdcs-dev/xb10

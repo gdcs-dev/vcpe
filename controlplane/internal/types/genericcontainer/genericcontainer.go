@@ -211,7 +211,13 @@ func generateCompose(input render.Input, cfg Config, lanDNS []string) (string, e
 		// Pin the MAC address only for single-replica services, where the IPAM
 		// MAC is stable. Multi-replica services let Podman assign unique MACs.
 		pinMAC := replicas == 1
-		services[fmt.Sprintf("%s-%d", input.Service.Name, i+1)] = buildSvcEntry(pinMAC)
+		entry := buildSvcEntry(pinMAC)
+		// Set an explicit container_name and hostname, always indexed (e.g.
+		// example-client-1) so names are stable and unambiguous regardless of
+		// replica count.
+		entry["container_name"] = fmt.Sprintf("${DEPLOYMENT_NAME}-${SERVICE_NAME}-%d", i+1)
+		entry["hostname"] = fmt.Sprintf("${SERVICE_NAME}-%d", i+1)
+		services[fmt.Sprintf("%s-%d", input.Service.Name, i+1)] = entry
 	}
 
 	doc := map[string]any{"services": services}

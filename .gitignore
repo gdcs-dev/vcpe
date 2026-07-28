@@ -29,3 +29,4 @@ runtime/
 # Generic-container compose.yaml staged by the orchestrator for the client service
 services/client/compose.yaml
 
+*-layout.json

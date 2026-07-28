@@ -53,11 +53,17 @@ function NetworkForm({ model, network, onMutation, rawYaml }: { model: ManifestM
     onMutation(description, newYaml);
   };
 
+  const isMacvlan = network.driver === 'macvlan' || network.driver === 'ipvlan';
+
   return (
     <div>
       <Field label="Role" value={network.role} readOnly hint="Network role cannot be renamed in v1 — delete and recreate to change." />
       <Field label="Driver" value={network.driver ?? 'bridge (default)'} readOnly />
-      {network.driverOptions?.parent && <Field label="Parent NIC" value={network.driverOptions.parent} readOnly />}
+      {isMacvlan && (
+        <Field label="Parent NIC" value={network.driverOptions?.parent ?? ''}
+          hint="Host network interface to attach the macvlan/ipvlan to (e.g. eth0, ens3)"
+          onCommit={v => commit(['spec', 'networks', idx, 'driverOptions', 'parent'], v || null)} />
+      )}
       <Field label="IPAM Driver" value={network.ipamDriver ?? ''} readOnly />
       <CheckField label="NAT" checked={!!network.nat}
         onChange={v => commit(['spec', 'networks', idx, 'nat'], v)} />
@@ -116,7 +122,16 @@ function ServiceForm({ model, service, onMutation, rawYaml }: { model: ManifestM
 
   return (
     <div>
-      <Field label="Name" value={service.name} readOnly hint="Rename not supported in v1 — would break dependsOn cross-references." />
+      <Field label="Name" value={service.name}
+        hint="Renaming updates all dependsOn references automatically."
+        onCommit={v => {
+          const trimmed = v.trim();
+          if (!trimmed || trimmed === service.name) return;
+          const { newYaml, description } = applyMutation(rawYaml, {
+            kind: 'renameService', oldName: service.name, newName: trimmed,
+          });
+          onMutation(description, newYaml);
+        }} />
       <Field label="Type" value={service.type} readOnly />
       <Field label="Replicas" value={String(service.replicas)} type="number"
         onCommit={v => commit(['spec', 'services', idx, 'replicas'], Math.max(1, Number(v)))} />
@@ -388,6 +403,11 @@ function NetworksSection({ model, onMutation, rawYaml }: { model: ManifestModel;
                   onCommit={v => commitNet(idx, ['driver'], v || null)} />
                 <Field label="IPAM Driver" value={net.ipamDriver ?? ''}
                   onCommit={v => commitNet(idx, ['ipamDriver'], v || null)} />
+                {(net.driver === 'macvlan' || net.driver === 'ipvlan') && (
+                  <Field label="Parent NIC" value={net.driverOptions?.parent ?? ''}
+                    hint="Host NIC for the macvlan/ipvlan (e.g. eth0, ens3)"
+                    onCommit={v => commitNet(idx, ['driverOptions', 'parent'], v || null)} />
+                )}
               </div>
             )}
           </div>

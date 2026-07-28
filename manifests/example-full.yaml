@@ -152,6 +152,24 @@ spec:
           ipv4: 192.168.10.1/24
           dhcpStart: 192.168.10.100
           dhcpEnd: 192.168.10.200
+    # ── Event Sink ────────────────────────────────────────────────────────────
+    # Generic XMiDT webhook consumer. Registers a Caduceus webhook via Argus
+    # and logs all matching WRP events as structured JSON to stdout.
+    # Default filter: apparmor/.* (captures AppArmor simulator events).
+    # Override WEBHOOK_EVENTS_REGEX to capture any other event type.
+    - name: event-sink
+      type: event-sink
+      replicas: 1
+      image:
+        repository: ghcr.io/gdcs-dev/event-sink
+        tag: dev
+        pullPolicy: build-if-missing
+        buildContext: services/event-sink
+        containerfile: services/event-sink/Containerfile
+      interfaces:
+        - { role: mgmt }
+      dependsOn:
+        - webpa
     - name: client
       type: generic-container
       replicas: 1
@@ -172,3 +190,12 @@ spec:
             "ip addr flush dev eth0 && udhcpc -f -i eth0 -x
               hostname:$(hostname)"
           ]
+    - name: oktopus
+      type: oktopus
+      replicas: 1
+      image:
+        repository: "ghcr.io/gdcs-dev/oktopus"
+        tag: dev
+        pullPolicy: always-pull
+      interfaces:
+        - role: mgmt

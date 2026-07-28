@@ -191,8 +191,10 @@ main() {
     if command -v iptables >/dev/null 2>&1 && [[ -n "${IFACE_WAN_DEVICE:-}" ]]; then
         iptables -t nat -A POSTROUTING -o "${IFACE_WAN_DEVICE}" -j MASQUERADE || true
     fi
-    # Point resolv.conf at BNG dnsmasq so gateway can resolve peer hostnames.
-    if [[ -n "${BNG_DNS_SERVER:-}" ]]; then
+    
+    if [[ -n "${IFACE_LAN_P1_GATEWAY4:-}" ]]; then
+        echo "nameserver ${IFACE_LAN_P1_GATEWAY4}" > /etc/resolv.conf
+    elif [[ -n "${BNG_DNS_SERVER:-}" ]]; then
         echo "nameserver ${BNG_DNS_SERVER}" > /etc/resolv.conf
     fi
     start_lan_dhcp

@@ -13,6 +13,7 @@ export type Mutation =
   | { kind: 'removeInterface'; serviceIndex: number; ifaceIndex: number }
   | { kind: 'insertBridge'; serviceIndex: number; bridge: BridgeSpec }
   | { kind: 'deleteBridge'; serviceIndex: number; bridgeIndex: number }
+  | { kind: 'renameService'; oldName: string; newName: string }
   | { kind: 'setConfig'; serviceIndex: number; configYaml: string };
 
 // ─── ApplyResult ─────────────────────────────────────────────────────────────
@@ -56,6 +57,9 @@ export function applyMutation(yamlText: string, mutation: Mutation): ApplyResult
 
     case 'deleteBridge':
       return applyDeleteBridge(doc, mutation.serviceIndex, mutation.bridgeIndex);
+
+    case 'renameService':
+      return applyRenameService(doc, mutation.oldName, mutation.newName);
 
     case 'setConfig':
       return applySetConfig(doc, mutation.serviceIndex, mutation.configYaml);
@@ -233,6 +237,46 @@ function applyDeleteService(doc: Document, name: string): ApplyResult {
   return {
     newYaml: String(doc),
     description: `delete service ${name} and clean dependsOn cross-references`,
+  };
+}
+
+/**
+ * applyRenameService updates a service's name AND rewrites all dependsOn
+ * references to that name across every other service, atomically.
+ */
+function applyRenameService(doc: Document, oldName: string, newName: string): ApplyResult {
+  if (!newName.trim() || newName === oldName) {
+    return { newYaml: String(doc), description: 'rename service (no-op)' };
+  }
+  const servicesNode = doc.getIn(['spec', 'services']);
+  if (!isSeq(servicesNode)) {
+    return { newYaml: String(doc), description: `rename service ${oldName} (not found)` };
+  }
+
+  // Rename the service itself
+  const serviceIndex = servicesNode.items.findIndex(
+    (item) => isMap(item) && item.get('name') === oldName
+  );
+  if (serviceIndex >= 0) {
+    doc.setIn(['spec', 'services', serviceIndex, 'name'], newName);
+  }
+
+  // Update dependsOn references in all services
+  servicesNode.items.forEach((svcNode, svcIdx) => {
+    if (!isMap(svcNode)) return;
+    const depsNode = svcNode.get('dependsOn', true);
+    if (!isSeq(depsNode)) return;
+    depsNode.items.forEach((d, dIdx) => {
+      const val = String((d as { value?: unknown }).value ?? d);
+      if (val === oldName) {
+        doc.setIn(['spec', 'services', svcIdx, 'dependsOn', dIdx], newName);
+      }
+    });
+  });
+
+  return {
+    newYaml: String(doc),
+    description: `rename service ${oldName} → ${newName} and update dependsOn references`,
   };
 }
 

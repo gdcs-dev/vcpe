@@ -176,6 +176,30 @@ describe('round-trip fidelity', () => {
   });
 });
 
+describe('applyMutation — renameService', () => {
+  it('renames the service and updates dependsOn references', () => {
+    const result = roundTrip(MINIMAL_MANIFEST, {
+      kind: 'renameService', oldName: 'bng', newName: 'core-bng',
+    });
+    const parsed = parse(result);
+    if ('error' in parsed) throw new Error(parsed.error);
+    // old name gone, new name present
+    expect(parsed.model.spec.services.find(s => s.name === 'bng')).toBeUndefined();
+    expect(parsed.model.spec.services.find(s => s.name === 'core-bng')).toBeDefined();
+    // gateway's dependsOn updated
+    const gateway = parsed.model.spec.services.find(s => s.name === 'gateway');
+    expect(gateway?.dependsOn ?? []).toContain('core-bng');
+    expect(gateway?.dependsOn ?? []).not.toContain('bng');
+  });
+
+  it('is a no-op when new name equals old name', () => {
+    const result = roundTrip(MINIMAL_MANIFEST, {
+      kind: 'renameService', oldName: 'bng', newName: 'bng',
+    });
+    expect(result).toBe(MINIMAL_MANIFEST);
+  });
+});
+
 describe('applyMutation — setScalar null handling', () => {
   it('deletes a key when value is null instead of writing YAML null', () => {
     const result = roundTrip(MINIMAL_MANIFEST, {
