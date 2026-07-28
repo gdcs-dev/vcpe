@@ -34,7 +34,7 @@ export function TypePalette({ types, typesError }: Props) {
           key={t.name}
           draggable
           onDragStart={(e) => {
-            e.dataTransfer.setData('application/vcpe-service-type', JSON.stringify(t));
+            e.dataTransfer.setData('text/plain', JSON.stringify(t));
             e.dataTransfer.effectAllowed = 'copy';
           }}
           style={styles.card}

@@ -63,7 +63,7 @@ func (serviceType) Renderer() render.Renderer { return renderer{} }
 
 func (serviceType) ExpectedRoles() []typeregistry.RoleRequirement {
 	return []typeregistry.RoleRequirement{
-		{Role: "wan", Required: true},
+		{Role: "wan", Required: false},
 		{Role: "cm", Required: false},
 		{Role: "lan-p1", Required: false},
 	}
@@ -71,15 +71,7 @@ func (serviceType) ExpectedRoles() []typeregistry.RoleRequirement {
 
 func (serviceType) DefaultImagePolicy() string { return "build" }
 
-func (serviceType) ValidateInterfaces(interfaces []manifest.Interface) error {
-	for _, iface := range interfaces {
-		if iface.Device == "" {
-			return fmt.Errorf("gateway interface with role %q must have a device name set; "+
-				"set device: <name> (e.g. device: erouter0) in the manifest", iface.Role)
-		}
-	}
-	return nil
-}
+func (serviceType) ValidateInterfaces(_ []manifest.Interface) error { return nil }
 
 func (serviceType) Description() string {
 	return "Cable-modem / CPE simulator with LAN bridging"
@@ -134,7 +126,17 @@ func (renderer) Render(_ context.Context, input render.Input) (render.Result, er
 	}
 
 	// Manifest-driven bridge name and LAN device list.
-	lanBridge := cfg.LAN.Bridge
+	// LAN_BRIDGE: prefer the first bridge declared in the manifest's bridges
+	// section (the one attached by LAN interfaces). Fall back to config.lan.bridge
+	// then "brlan0" so the DHCP/dnsmasq config still has a bridge name to bind to.
+	lanBridge := ""
+	for _, b := range input.Service.Bridges {
+		lanBridge = b.Name
+		break
+	}
+	if lanBridge == "" {
+		lanBridge = cfg.LAN.Bridge
+	}
 	if lanBridge == "" {
 		lanBridge = "brlan0"
 	}
@@ -152,6 +154,9 @@ func (renderer) Render(_ context.Context, input render.Input) (render.Result, er
 	}
 	env = append(env, "LAN_DEVICES="+strings.Join(lanDevices, " "))
 
+	// Emit generic BRIDGE_* env vars from the manifest's bridges section.
+	env = append(env, render.BridgeEnv(input.Service.Bridges)...)
+
 	// WAN/erouter interface vars (manifest-driven via IFACE_* — no legacy aliases).
 	wanIface := ifaceByRole[wanRole]
 	wanCIDR := ""
@@ -167,9 +172,14 @@ func (renderer) Render(_ context.Context, input render.Input) (render.Result, er
 		env = append(env, "EROUTER0_VLAN="+strconv.Itoa(cfg.Erouter.VLAN))
 	}
 
-	// LAN bridge IP/DHCP config (bridge name from LAN_BRIDGE).
-	env = append(env, "BRLAN0_IPV4="+cfg.LAN.IPv4)
-	env = append(env, "BRLAN0_IPV6="+cfg.LAN.IPv6)
+	// LAN bridge DHCP config (gateway-type-specific; bridge IP comes from BRIDGE_*_IPV4).
+	// BRLAN0_IPV4 is emitted for dnsmasq: prefer the first bridge spec's IPv4,
+	// fall back to cfg.LAN.IPv4 (old manifests without a bridges: section).
+	lanBridgeIPv4 := cfg.LAN.IPv4
+	if len(input.Service.Bridges) > 0 && input.Service.Bridges[0].IPv4 != "" {
+		lanBridgeIPv4 = input.Service.Bridges[0].IPv4
+	}
+	env = append(env, "BRLAN0_IPV4="+lanBridgeIPv4)
 	env = append(env, "BRLAN0_DHCP_START="+cfg.LAN.DHCPStart)
 	env = append(env, "BRLAN0_DHCP_END="+cfg.LAN.DHCPEnd)
 

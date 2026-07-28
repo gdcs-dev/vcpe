@@ -31,10 +31,14 @@ export function ManifestDropdown({ currentPath }: Props) {
   const handleChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const value = e.target.value;
     if (value === '__new__') {
-      const name = window.prompt('New manifest name (e.g. lab-test):')?.trim();
-      if (name) {
-        vscode?.postMessage({ type: 'CREATE_MANIFEST', name });
+      // window.prompt() is blocked in VS Code webviews — generate a unique name.
+      const existingNames = new Set(entries.map(en => en.name));
+      let name = 'new-manifest';
+      let counter = 2;
+      while (existingNames.has(name)) {
+        name = `new-manifest-${counter++}`;
       }
+      vscode?.postMessage({ type: 'CREATE_MANIFEST', name });
     } else if (value && value !== currentPath) {
       vscode?.postMessage({ type: 'OPEN_MANIFEST', path: value });
     }

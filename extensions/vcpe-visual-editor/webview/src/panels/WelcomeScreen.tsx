@@ -17,8 +17,11 @@ export function WelcomeScreen({ entries }: Props) {
   };
 
   const handleNew = () => {
-    const name = window.prompt('New manifest name (e.g. lab-test):')?.trim();
-    if (name) vscode?.postMessage({ type: 'CREATE_MANIFEST', name });
+    const existingNames = new Set(entries.map(e => e.name));
+    let name = 'new-manifest';
+    let counter = 2;
+    while (existingNames.has(name)) name = `new-manifest-${counter++}`;
+    vscode?.postMessage({ type: 'CREATE_MANIFEST', name });
   };
 
   return (

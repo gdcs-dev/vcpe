@@ -131,18 +131,65 @@ function ServiceForm({ model, service, onMutation, rawYaml }: { model: ManifestM
         <Divider label="Depends On" />
         {service.dependsOn!.map(d => <Field key={d} label="" value={d} readOnly />)}
       </>}
-      {(service.interfaces?.length ?? 0) > 0 && <>
-        <Divider label="Interfaces" />
-        {service.interfaces!.map((iface, j) => (
-          <div key={iface.role} style={{ marginBottom: 10, paddingLeft: 6, borderLeft: '2px solid #333' }}>
-            <div style={{ fontSize: 10, color: '#666', marginBottom: 4, fontWeight: 600 }}>{iface.role}</div>
-            <Field label="Device name" value={iface.device ?? ''}
-              onCommit={v => commit(['spec', 'services', idx, 'interfaces', j, 'device'], v || null)} />
-            {iface.ipv4 && <Field label="IPv4" value={iface.ipv4} readOnly />}
-            {iface.mac && <Field label="MAC" value={iface.mac} readOnly />}
-          </div>
-        ))}
-      </>}
+      <Divider label="Interfaces" />
+      {service.interfaces?.map((iface, j) => {
+        const bridgeNames = (service.bridges ?? []).map(b => b.name);
+        return (
+        <div key={iface.role} style={{ marginBottom: 8, paddingLeft: 6, borderLeft: '2px solid #333', position: 'relative' }}>
+          {/* Remove button */}
+          <button
+            onClick={() => {
+              const { newYaml, description } = applyMutation(rawYaml, {
+                kind: 'removeInterface', serviceIndex: idx, ifaceIndex: j,
+              });
+              onMutation(description, newYaml);
+            }}
+            style={{ position: 'absolute', top: 0, right: 0, background: 'none', border: 'none', color: '#666', cursor: 'pointer', fontSize: 14, padding: '0 2px', lineHeight: 1 }}
+            title="Remove interface">×</button>
+          <div style={{ fontSize: 10, color: '#666', marginBottom: 4, fontWeight: 600, paddingRight: 14 }}>{iface.role}</div>
+          <Field label="Device name" value={iface.device ?? ''}
+            onCommit={v => commit(['spec', 'services', idx, 'interfaces', j, 'device'], v || null)} />
+          {bridgeNames.length > 0 && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginBottom: 4 }}>
+              <span style={{ fontSize: 10, color: '#666', minWidth: 72 }}>Bridge</span>
+              <select
+                value={iface.bridge ?? ''}
+                onChange={e => commit(['spec', 'services', idx, 'interfaces', j, 'bridge'], e.target.value || null)}
+                style={{ flex: 1, padding: '2px 4px', background: '#1e1e1e', color: '#ccc', border: '1px solid #444', borderRadius: 3, fontSize: 11 }}>
+                <option value="">— none —</option>
+                {bridgeNames.map(b => <option key={b} value={b}>{b}</option>)}
+              </select>
+            </div>
+          )}
+          {iface.ipv4 && <Field label="IPv4" value={iface.ipv4} readOnly />}
+        </div>
+        );
+      })}
+      {/* Add interface: dropdown of available network roles */}
+      {(() => {
+        const usedRoles = new Set(service.interfaces?.map(i => i.role) ?? []);
+        const available = model.spec.networks.filter(n => !usedRoles.has(n.role));
+        if (available.length === 0) return null;
+        return (
+          <select
+            defaultValue=""
+            onChange={e => {
+              const role = e.target.value;
+              if (!role) return;
+              e.target.value = '';
+              const { newYaml, description } = applyMutation(rawYaml, {
+                kind: 'addInterface', serviceIndex: idx, iface: { role },
+              });
+              onMutation(description, newYaml);
+            }}
+            style={{ width: '100%', padding: '3px 6px', background: '#1e1e1e', color: '#777', border: '1px dashed #444', borderRadius: 3, fontSize: 11, marginBottom: 8 }}>
+            <option value="" disabled>+ connect to network…</option>
+            {available.map(n => (
+              <option key={n.role} value={n.role}>{n.role}{n.ipv4?.cidr ? ` (${n.ipv4.cidr})` : ''}</option>
+            ))}
+          </select>
+        );
+      })()}
       {configText && <>
         <Divider label="Config (YAML)" />
         <textarea
@@ -154,8 +201,76 @@ function ServiceForm({ model, service, onMutation, rawYaml }: { model: ManifestM
         />
         <div style={{ fontSize: 10, color: '#666', marginTop: 2 }}>Saved on blur</div>
       </>}
+      <BridgesSection service={service} serviceIndex={idx} onMutation={onMutation} rawYaml={rawYaml} />
     </div>
   );
+}
+
+// ─── BridgesSection ───────────────────────────────────────────────────────────
+
+function BridgesSection({ service, serviceIndex, onMutation, rawYaml }: {
+  service: Service; serviceIndex: number;
+  onMutation: Props['onMutation']; rawYaml: string;
+}) {
+  const [newName, setNewName] = useState('');
+
+  const commit = (path: (string | number)[], value: unknown) => {
+    const { newYaml, description } = applyMutation(rawYaml, { kind: 'setScalar', path, value });
+    onMutation(description, newYaml);
+  };
+
+  const addBridge = () => {
+    const name = newName.trim();
+    if (!name) return;
+    const { newYaml, description } = applyMutation(rawYaml, {
+      kind: 'insertBridge', serviceIndex, bridge: { name },
+    });
+    onMutation(description, newYaml);
+    setNewName('');
+  };
+
+  const bridges = service.bridges ?? [];
+
+  return <>
+    <Divider label="Bridges" />
+    {bridges.map((b, i) => (
+      <div key={b.name} style={{ marginBottom: 8, paddingLeft: 6, borderLeft: '2px solid #2a4a2a', position: 'relative' }}>
+        <button
+          onClick={() => {
+            const { newYaml, description } = applyMutation(rawYaml, {
+              kind: 'deleteBridge', serviceIndex, bridgeIndex: i,
+            });
+            onMutation(description, newYaml);
+          }}
+          style={{ position: 'absolute', top: 0, right: 0, background: 'none', border: 'none', color: '#666', cursor: 'pointer', fontSize: 14, padding: '0 2px', lineHeight: 1 }}
+          title="Remove bridge">×</button>
+        <div style={{ fontSize: 10, color: '#4a9a4a', marginBottom: 4, fontWeight: 600, paddingRight: 14 }}>{b.name}</div>
+        <Field label="IPv4 (CIDR)" value={b.ipv4 ?? ''}
+          onCommit={v => commit(['spec', 'services', serviceIndex, 'bridges', i, 'ipv4'], v || null)} />
+        <Field label="IPv6 (CIDR)" value={b.ipv6 ?? ''}
+          onCommit={v => commit(['spec', 'services', serviceIndex, 'bridges', i, 'ipv6'], v || null)} />
+        <Field label="DHCP start" value={b.dhcpStart ?? ''}
+          onCommit={v => commit(['spec', 'services', serviceIndex, 'bridges', i, 'dhcpStart'], v || null)} />
+        <Field label="DHCP end" value={b.dhcpEnd ?? ''}
+          onCommit={v => commit(['spec', 'services', serviceIndex, 'bridges', i, 'dhcpEnd'], v || null)} />
+      </div>
+    ))}
+    <div style={{ display: 'flex', gap: 4, marginBottom: 8 }}>
+      <input
+        value={newName}
+        onChange={e => setNewName(e.target.value)}
+        onKeyDown={e => { if (e.key === 'Enter') addBridge(); }}
+        placeholder="bridge name…"
+        style={{ flex: 1, padding: '3px 6px', background: '#1e1e1e', color: '#ccc', border: '1px dashed #444', borderRadius: 3, fontSize: 11 }}
+      />
+      <button
+        onClick={addBridge}
+        disabled={!newName.trim()}
+        style={{ padding: '3px 8px', background: '#1e1e1e', color: newName.trim() ? '#4a9a4a' : '#555', border: '1px dashed #444', borderRadius: 3, fontSize: 11, cursor: newName.trim() ? 'pointer' : 'default' }}>
+        + add
+      </button>
+    </div>
+  </>;
 }
 
 // ─── DeploymentSettingsDrawer ────────────────────────────────────────────────
@@ -185,6 +300,9 @@ function DeploymentSettingsDrawer({ model, onMutation, rawYaml }: { model: Manif
           <Field key={k} label={k} value={v} readOnly />
         ))}
       </>}
+      {onMutation && rawYaml && (
+        <NetworksSection model={model} onMutation={onMutation} rawYaml={rawYaml} />
+      )}
       {(model.spec.secrets?.length ?? 0) > 0 && <>
         <Divider label="Secrets" />
         {model.spec.secrets!.map(s => (
@@ -192,6 +310,104 @@ function DeploymentSettingsDrawer({ model, onMutation, rawYaml }: { model: Manif
         ))}
       </>}
     </div>
+  );
+}
+
+// ─── NetworksSection ──────────────────────────────────────────────────────────
+
+function NetworksSection({ model, onMutation, rawYaml }: { model: ManifestModel; onMutation: Props['onMutation']; rawYaml: string }) {
+  const [newRole, setNewRole] = useState('');
+  const [expanded, setExpanded] = useState<string | null>(null);
+
+  const addNetwork = () => {
+    const role = newRole.trim();
+    if (!role) return;
+    if (model.spec.networks.some(n => n.role === role)) return;
+    const { newYaml, description } = applyMutation(rawYaml, {
+      kind: 'insertNetwork',
+      network: { role },
+    });
+    onMutation(description, newYaml);
+    setNewRole('');
+  };
+
+  const deleteNetwork = (role: string) => {
+    const { newYaml, description } = applyMutation(rawYaml, {
+      kind: 'deleteNetwork',
+      role,
+    });
+    onMutation(description, newYaml);
+  };
+
+  const commitNet = (idx: number, path: (string | number)[], value: unknown) => {
+    const { newYaml, description } = applyMutation(rawYaml, {
+      kind: 'setScalar',
+      path: ['spec', 'networks', idx, ...path],
+      value,
+    });
+    onMutation(description, newYaml);
+  };
+
+  return (
+    <>
+      <Divider label="Networks" />
+      {model.spec.networks.map((net, idx) => {
+        const isOpen = expanded === net.role;
+        return (
+          <div key={net.role} style={{ marginBottom: 6 }}>
+            {/* Row header */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+              <button onClick={() => setExpanded(isOpen ? null : net.role)}
+                style={{ flex: 1, textAlign: 'left', background: '#2a2a2a', border: '1px solid #444', borderRadius: 3, padding: '3px 6px', color: '#ccc', fontSize: 11, cursor: 'pointer' }}>
+                {isOpen ? '▾' : '▸'} {net.role}
+                {net.ipv4?.cidr && <span style={{ color: '#666', marginLeft: 6, fontSize: 10 }}>{net.ipv4.cidr}</span>}
+                {net.nat && <span style={{ color: '#E67E22', marginLeft: 4, fontSize: 9 }}>nat</span>}
+                {net.firewall && <span style={{ color: '#E74C3C', marginLeft: 4, fontSize: 9 }}>fw</span>}
+              </button>
+              <button onClick={() => deleteNetwork(net.role)}
+                style={{ background: 'none', border: 'none', color: '#666', cursor: 'pointer', fontSize: 14, padding: '0 4px' }}
+                title="Delete network">×</button>
+            </div>
+            {/* Expanded form */}
+            {isOpen && (
+              <div style={{ marginTop: 4, paddingLeft: 8, borderLeft: '2px solid #333' }}>
+                <Field label="Role" value={net.role} readOnly hint="Role is immutable after creation" />
+                <Field label="IPv4 CIDR" value={net.ipv4?.cidr ?? ''}
+                  onCommit={v => commitNet(idx, ['ipv4', 'cidr'], v || null)} />
+                <Field label="IPv4 Gateway" value={net.ipv4?.gateway ?? ''}
+                  onCommit={v => commitNet(idx, ['ipv4', 'gateway'], v || null)} />
+                <Field label="Pool Start" value={net.ipv4?.pool?.start ?? ''}
+                  onCommit={v => commitNet(idx, ['ipv4', 'pool', 'start'], v || null)} />
+                <Field label="Pool End" value={net.ipv4?.pool?.end ?? ''}
+                  onCommit={v => commitNet(idx, ['ipv4', 'pool', 'end'], v || null)} />
+                <CheckField label="NAT" checked={!!net.nat}
+                  onChange={v => commitNet(idx, ['nat'], v || null)} />
+                <CheckField label="Firewall" checked={!!net.firewall}
+                  onChange={v => commitNet(idx, ['firewall'], v || null)} />
+                <Field label="Driver" value={net.driver ?? ''}
+                  onCommit={v => commitNet(idx, ['driver'], v || null)} />
+                <Field label="IPAM Driver" value={net.ipamDriver ?? ''}
+                  onCommit={v => commitNet(idx, ['ipamDriver'], v || null)} />
+              </div>
+            )}
+          </div>
+        );
+      })}
+      {/* Add new network */}
+      <div style={{ display: 'flex', gap: 4, marginTop: 4 }}>
+        <input
+          value={newRole}
+          onChange={e => setNewRole(e.target.value)}
+          onKeyDown={e => e.key === 'Enter' && addNetwork()}
+          placeholder="role name…"
+          style={{ flex: 1, padding: '3px 6px', background: '#1e1e1e', color: '#ddd', border: '1px solid #555', borderRadius: 3, fontSize: 11 }}
+        />
+        <button onClick={addNetwork}
+          style={{ padding: '3px 8px', background: '#4E9AF133', color: '#4E9AF1', border: '1px solid #4E9AF155', borderRadius: 3, cursor: 'pointer', fontSize: 11 }}>
+          + Add
+        </button>
+      </div>
+    </>
   );
 }
 

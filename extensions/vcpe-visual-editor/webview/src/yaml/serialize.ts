@@ -1,5 +1,5 @@
 import { Document, isSeq, isMap, parseDocument, stringify } from 'yaml';
-import type { Network, Service, Interface } from './parse';
+import type { Network, Service, Interface, BridgeSpec } from './parse';
 
 // ─── Mutation types ───────────────────────────────────────────────────────────
 
@@ -11,6 +11,8 @@ export type Mutation =
   | { kind: 'deleteService'; name: string }
   | { kind: 'addInterface'; serviceIndex: number; iface: Interface }
   | { kind: 'removeInterface'; serviceIndex: number; ifaceIndex: number }
+  | { kind: 'insertBridge'; serviceIndex: number; bridge: BridgeSpec }
+  | { kind: 'deleteBridge'; serviceIndex: number; bridgeIndex: number }
   | { kind: 'setConfig'; serviceIndex: number; configYaml: string };
 
 // ─── ApplyResult ─────────────────────────────────────────────────────────────
@@ -49,6 +51,12 @@ export function applyMutation(yamlText: string, mutation: Mutation): ApplyResult
     case 'removeInterface':
       return applyRemoveInterface(doc, mutation.serviceIndex, mutation.ifaceIndex);
 
+    case 'insertBridge':
+      return applyInsertBridge(doc, mutation.serviceIndex, mutation.bridge);
+
+    case 'deleteBridge':
+      return applyDeleteBridge(doc, mutation.serviceIndex, mutation.bridgeIndex);
+
     case 'setConfig':
       return applySetConfig(doc, mutation.serviceIndex, mutation.configYaml);
   }
@@ -57,11 +65,49 @@ export function applyMutation(yamlText: string, mutation: Mutation): ApplyResult
 // ─── Easy mutations ───────────────────────────────────────────────────────────
 
 function applySetScalar(doc: Document, path: (string | number)[], value: unknown): ApplyResult {
-  doc.setIn(path, value);
+  if (value === null || value === undefined) {
+    doc.deleteIn(path);
+    // Walk up and prune any ancestor maps that became empty after the deletion.
+    pruneEmptyAncestors(doc, path.slice(0, -1));
+  } else {
+    doc.setIn(path, value);
+  }
   return {
     newYaml: String(doc),
     description: `set ${path.join('.')} = ${JSON.stringify(value)}`,
   };
+}
+
+/**
+ * pruneEmptyAncestors removes a map node at `path` if it has no remaining
+ * keys, then recurses up the path. This keeps the YAML tidy after nullable
+ * fields (e.g. pool.start + pool.end) are cleared.
+ */
+function pruneEmptyAncestors(doc: Document, path: (string | number)[]): void {
+  if (path.length === 0) return;
+  const node = doc.getIn(path);
+  if (isMap(node) && node.items.length === 0) {
+    doc.deleteIn(path);
+    pruneEmptyAncestors(doc, path.slice(0, -1));
+  }
+}
+
+/**
+ * stripNulls recursively removes null/undefined values from a plain object
+ * so that doc.createNode() does not serialise them as YAML null.
+ */
+function stripNulls(obj: unknown): unknown {
+  if (obj === null || obj === undefined) return undefined;
+  if (Array.isArray(obj)) return obj.map(stripNulls).filter(v => v !== undefined);
+  if (typeof obj === 'object') {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(obj as Record<string, unknown>)) {
+      const cleaned = stripNulls(v);
+      if (cleaned !== undefined) out[k] = cleaned;
+    }
+    return out;
+  }
+  return obj;
 }
 
 function applyAddInterface(doc: Document, serviceIndex: number, iface: Interface): ApplyResult {
@@ -87,6 +133,27 @@ function applyRemoveInterface(doc: Document, serviceIndex: number, ifaceIndex: n
   };
 }
 
+function applyInsertBridge(doc: Document, serviceIndex: number, bridge: BridgeSpec): ApplyResult {
+  const bridgesPath = ['spec', 'services', serviceIndex, 'bridges'];
+  if (!isSeq(doc.getIn(bridgesPath))) {
+    doc.setIn(bridgesPath, doc.createNode([]));
+  }
+  doc.addIn(bridgesPath, doc.createNode(stripNulls(bridge)));
+  return {
+    newYaml: String(doc),
+    description: `add bridge ${bridge.name} to services[${serviceIndex}]`,
+  };
+}
+
+function applyDeleteBridge(doc: Document, serviceIndex: number, bridgeIndex: number): ApplyResult {
+  doc.deleteIn(['spec', 'services', serviceIndex, 'bridges', bridgeIndex]);
+  pruneEmptyAncestors(doc, ['spec', 'services', serviceIndex, 'bridges']);
+  return {
+    newYaml: String(doc),
+    description: `delete bridges[${bridgeIndex}] from services[${serviceIndex}]`,
+  };
+}
+
 function applySetConfig(doc: Document, serviceIndex: number, configYaml: string): ApplyResult {
   const configDoc = parseDocument(configYaml, { strict: false });
   doc.setIn(['spec', 'services', serviceIndex, 'config'], configDoc.contents);
@@ -105,7 +172,7 @@ function applyInsertNetwork(doc: Document, network: Network): ApplyResult {
     doc.setIn(networksPath, doc.createNode([]));
     networks = doc.getIn(networksPath);
   }
-  doc.addIn(networksPath, doc.createNode(network));
+  doc.addIn(networksPath, doc.createNode(stripNulls(network)));
   return {
     newYaml: String(doc),
     description: `insert network role=${network.role}`,
@@ -119,7 +186,7 @@ function applyInsertService(doc: Document, service: Service): ApplyResult {
     doc.setIn(servicesPath, doc.createNode([]));
     services = doc.getIn(servicesPath);
   }
-  doc.addIn(servicesPath, doc.createNode(service));
+  doc.addIn(servicesPath, doc.createNode(stripNulls(service)));
   return {
     newYaml: String(doc),
     description: `insert service name=${service.name}`,

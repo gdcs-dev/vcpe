@@ -14,13 +14,15 @@ export interface Image {
   containerfile?: string; pullPolicy?: string;
 }
 export interface Interface {
-  role: string; device?: string; mac?: string;
+  role: string; device?: string; bridge?: string; mac?: string;
   ipv4?: string; ipv6?: string; defaultRoute?: boolean;
 }
+export interface BridgeSpec { name: string; ipv4?: string; ipv6?: string; dhcpStart?: string; dhcpEnd?: string; }
 export interface SecretRef { name: string; provider: string; key: string }
 export interface Service {
   name: string; type: string; replicas: number; image: Image;
   dependsOn?: string[]; interfaces?: Interface[];
+  bridges?: BridgeSpec[];
   ports?: string[]; volumes?: string[];
   config?: unknown;
 }
@@ -161,6 +163,7 @@ function parseAddressFamily(node: YAMLMap | undefined): AddressFamily | undefine
 function parseService(node: YAMLMap): Service {
   const imageNode = node.get('image', true) as YAMLMap | undefined;
   const ifacesNode = node.get('interfaces', true);
+  const bridgesNode = node.get('bridges', true);
   const depsNode = node.get('dependsOn', true);
   const portsNode = node.get('ports', true);
   const volsNode = node.get('volumes', true);
@@ -178,9 +181,20 @@ function parseService(node: YAMLMap): Service {
     } : { repository: '' },
     dependsOn: isSeq(depsNode) ? depsNode.items.map(s => String(isScalar(s) ? s.value : s)) : [],
     interfaces: isSeq(ifacesNode) ? ifacesNode.items.filter(isMap).map(parseInterface) : [],
+    bridges: isSeq(bridgesNode) ? bridgesNode.items.filter(isMap).map(parseBridgeSpec) : [],
     ports: isSeq(portsNode) ? portsNode.items.map(s => String(isScalar(s) ? s.value : s)) : [],
     volumes: isSeq(volsNode) ? volsNode.items.map(s => String(isScalar(s) ? s.value : s)) : [],
     config: node.get('config'),
+  };
+}
+
+function parseBridgeSpec(node: YAMLMap): BridgeSpec {
+  return {
+    name: getString(node, 'name') ?? '',
+    ipv4: getString(node, 'ipv4'),
+    ipv6: getString(node, 'ipv6'),
+    dhcpStart: getString(node, 'dhcpStart'),
+    dhcpEnd: getString(node, 'dhcpEnd'),
   };
 }
 
@@ -188,6 +202,7 @@ function parseInterface(node: YAMLMap): Interface {
   return {
     role: getString(node, 'role') ?? '',
     device: getString(node, 'device'),
+    bridge: getString(node, 'bridge'),
     mac: getString(node, 'mac'),
     ipv4: getString(node, 'ipv4'),
     ipv6: getString(node, 'ipv6'),

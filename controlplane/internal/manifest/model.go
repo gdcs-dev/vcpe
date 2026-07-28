@@ -76,15 +76,16 @@ type Pool struct {
 // that validates Config and provides the renderer. Config is an opaque YAML
 // subtree decoded strictly by the per-type validator.
 type Service struct {
-	Name       string      `json:"name" yaml:"name"`
-	Type       string      `json:"type" yaml:"type"`
-	Replicas   int         `json:"replicas" yaml:"replicas"`
-	Image      Image       `json:"image" yaml:"image"`
-	DependsOn  []string    `json:"dependsOn,omitempty" yaml:"dependsOn,omitempty"`
-	Interfaces []Interface `json:"interfaces,omitempty" yaml:"interfaces,omitempty"`
-	Ports      []string    `json:"ports,omitempty" yaml:"ports,omitempty"`
-	Volumes    []string    `json:"volumes,omitempty" yaml:"volumes,omitempty"`
-	Config     yaml.Node   `json:"-" yaml:"config,omitempty"`
+	Name       string       `json:"name" yaml:"name"`
+	Type       string       `json:"type" yaml:"type"`
+	Replicas   int          `json:"replicas" yaml:"replicas"`
+	Image      Image        `json:"image" yaml:"image"`
+	DependsOn  []string     `json:"dependsOn,omitempty" yaml:"dependsOn,omitempty"`
+	Interfaces []Interface  `json:"interfaces,omitempty" yaml:"interfaces,omitempty"`
+	Bridges    []BridgeSpec `json:"bridges,omitempty" yaml:"bridges,omitempty"`
+	Ports      []string     `json:"ports,omitempty" yaml:"ports,omitempty"`
+	Volumes    []string     `json:"volumes,omitempty" yaml:"volumes,omitempty"`
+	Config     yaml.Node    `json:"-" yaml:"config,omitempty"`
 }
 
 type Image struct {
@@ -101,10 +102,26 @@ type Image struct {
 type Interface struct {
 	Role         string `json:"role" yaml:"role"`
 	Device       string `json:"device,omitempty" yaml:"device,omitempty"`
+	Bridge       string `json:"bridge,omitempty" yaml:"bridge,omitempty"`
 	MAC          string `json:"mac,omitempty" yaml:"mac,omitempty"`
 	IPv4         string `json:"ipv4,omitempty" yaml:"ipv4,omitempty"`
 	IPv6         string `json:"ipv6,omitempty" yaml:"ipv6,omitempty"`
 	DefaultRoute bool   `json:"defaultRoute,omitempty" yaml:"defaultRoute,omitempty"`
+}
+
+// BridgeSpec declares a container-internal bridge to create for a service.
+// The bridge name, IPv4, and IPv6 are manifest-driven and emitted as
+// BRIDGE_<NAME>_{NAME,IPV4,IPV6,DHCP_START,DHCP_END} env vars consumed by the
+// container entrypoint. Interfaces referencing this bridge via their bridge
+// field will be enslaved to it by the entrypoint's generic bridge-creation loop.
+// DHCPStart and DHCPEnd, when both set, cause the entrypoint to start a dnsmasq
+// DHCP server on this bridge.
+type BridgeSpec struct {
+	Name      string `json:"name" yaml:"name"`
+	IPv4      string `json:"ipv4,omitempty" yaml:"ipv4,omitempty"`
+	IPv6      string `json:"ipv6,omitempty" yaml:"ipv6,omitempty"`
+	DHCPStart string `json:"dhcpStart,omitempty" yaml:"dhcpStart,omitempty"`
+	DHCPEnd   string `json:"dhcpEnd,omitempty" yaml:"dhcpEnd,omitempty"`
 }
 
 type SecretRef struct {

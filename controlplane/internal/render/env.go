@@ -49,6 +49,7 @@ func IfaceEnv(dep plan.Deployment, svc plan.Service, inst plan.Instance) []strin
 		lines = append(lines,
 			prefix+"NETWORK="+iface.Network,
 			prefix+"DEVICE="+iface.Device,
+			prefix+"BRIDGE="+iface.Bridge,
 			prefix+"MAC="+iface.MAC,
 			prefix+"IPV4="+iface.IPv4,
 			prefix+"IPV6="+iface.IPv6,
@@ -61,4 +62,30 @@ func IfaceEnv(dep plan.Deployment, svc plan.Service, inst plan.Instance) []strin
 	tail := lines[3:]
 	sort.Strings(tail)
 	return append(head, tail...)
+}
+
+// BridgeEnv emits BRIDGE_<KEY>_{NAME,IPV4,IPV6} env vars for each BridgeSpec
+// declared in a service's `bridges` list. The container entrypoint uses these
+// to create and configure the bridges after the interface rename step.
+// KEY is the bridge name uppercased with hyphens converted to underscores.
+func BridgeEnv(bridges []manifest.BridgeSpec) []string {
+	if len(bridges) == 0 {
+		return nil
+	}
+	var lines []string
+	for _, b := range bridges {
+		key := strings.ToUpper(strings.ReplaceAll(b.Name, "-", "_"))
+		prefix := "BRIDGE_" + key + "_"
+		lines = append(lines,
+			// NAME carries the actual bridge name so entrypoints can round-trip
+			// from the KEY back to the original name (avoids hyphen/underscore ambiguity).
+			prefix+"NAME="+b.Name,
+			prefix+"IPV4="+b.IPv4,
+			prefix+"IPV6="+b.IPv6,
+			prefix+"DHCP_START="+b.DHCPStart,
+			prefix+"DHCP_END="+b.DHCPEnd,
+		)
+	}
+	sort.Strings(lines)
+	return lines
 }

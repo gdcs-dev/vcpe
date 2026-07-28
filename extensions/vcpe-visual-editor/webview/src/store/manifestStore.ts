@@ -40,7 +40,7 @@ export const useManifestStore = create<ManifestState>((set) => ({
   layout: null,
   manifestPath: null,
   selectedNodeId: null,
-  showDependsOn: true,
+  showDependsOn: false,
 
   setModel: (model) => set({ model, yamlError: null, yamlErrorLine: undefined }),
   setYamlError: (error, line) => set({ yamlError: error, yamlErrorLine: line, model: null }),

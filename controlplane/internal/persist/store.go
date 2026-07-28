@@ -364,12 +364,15 @@ func (s *Store) Metrics() (MetricsSnapshot, error) {
 	return metrics, nil
 }
 
-// ListKnownDeployments returns the deployment names (metadata.name) that
-// currently have active IPAM leases. A deployment disappears from this list
-// once vcpe down releases its leases.
+// ListKnownDeployments returns the deployment names (metadata.name) that have
+// an active desired snapshot or IPAM leases. A deployment disappears from this
+// list once vcpe down clears both records.
 func (s *Store) ListKnownDeployments() ([]string, error) {
 	rows, err := s.db.Query(`
-		SELECT DISTINCT customer_id FROM ipam_leases ORDER BY customer_id ASC
+		SELECT DISTINCT customer_id FROM ipam_leases
+		UNION
+		SELECT DISTINCT customer_id FROM desired_snapshots
+		ORDER BY customer_id ASC
 	`)
 	if err != nil {
 		return nil, fmt.Errorf("list known deployments: %w", err)

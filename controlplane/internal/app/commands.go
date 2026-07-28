@@ -263,16 +263,25 @@ func runList(opts Options) (daemon.CommandResponse, error) {
 	return daemon.CommandResponse{Message: strings.Join(names, "\n")}, nil
 }
 
-// runDown tears down a deployment selected by --name. If --name is omitted and
-// exactly one deployment exists it is selected automatically. If multiple
-// deployments exist the names are listed and the user is asked to re-run with
-// --name.
+// runDown tears down a deployment selected by --name (or --manifest, from which
+// the name is read). If neither is given and exactly one deployment exists it is
+// selected automatically. If multiple deployments exist the names are listed and
+// the user is asked to re-run with --name.
 func runDown(opts Options) (daemon.CommandResponse, error) {
 	ps, err := persist.Open(opts.StateRoot)
 	if err != nil {
 		return daemon.CommandResponse{}, err
 	}
 	defer ps.Close()
+
+	// Derive the deployment name from --manifest when --name was not given.
+	if opts.Name == "" && opts.ManifestPath != "" {
+		doc, err := manifest.Load(opts.ManifestPath)
+		if err != nil {
+			return daemon.CommandResponse{}, fmt.Errorf("read manifest: %w", err)
+		}
+		opts.Name = doc.Metadata.Name
+	}
 
 	if opts.Name == "" {
 		names, err := ps.ListKnownDeployments()

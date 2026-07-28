@@ -84,6 +84,13 @@ export class VcpeEditorProvider implements vscode.CustomTextEditorProvider {
           } finally {
             editInFlight = false;
           }
+          // onDidChangeTextDocument fired (and was blocked by editInFlight) during
+          // applyEdit. Now that the flag is cleared, explicitly notify the webview
+          // so the canvas re-renders immediately without waiting for the next save.
+          webviewPanel.webview.postMessage({
+            type: 'DOCUMENT_UPDATED',
+            yaml: document.getText(),
+          });
           break;
         }
 

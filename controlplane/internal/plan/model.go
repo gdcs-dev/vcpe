@@ -67,6 +67,7 @@ type Service struct {
 	Replicas  int
 	Image     manifest.Image
 	DependsOn []string
+	Bridges   []manifest.BridgeSpec
 	Ports     []string
 	Volumes   []string
 	Config    yaml.Node
@@ -101,6 +102,7 @@ type Interface struct {
 	Role         string
 	Network      string
 	Device       string
+	Bridge       string
 	MAC          string
 	IPv4         string
 	IPv6         string

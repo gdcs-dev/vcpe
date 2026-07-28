@@ -3,7 +3,7 @@ import {
   ReactFlow, Background, Controls, MiniMap,
   useNodesState, useEdgesState, reconnectEdge,
   type Node, type Edge, type Connection, type NodeChange, type EdgeChange,
-  MarkerType, ConnectionMode,
+  MarkerType, ConnectionMode, addEdge,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 
@@ -12,7 +12,7 @@ import { applyMutation } from './yaml/serialize';
 import { computeInitialLayout } from './layout/autoLayout';
 import { useManifestStore } from './store/manifestStore';
 
-import { ServiceNode, type ServiceNodeData } from './nodes/ServiceNode';
+import { ServiceNode, type ServiceNodeData, type BridgeGroup } from './nodes/ServiceNode';
 import { InterfaceEdge } from './edges/InterfaceEdge';
 import { DependsOnEdge } from './edges/DependsOnEdge';
 
@@ -22,8 +22,21 @@ import { ManifestDropdown } from './panels/ManifestDropdown';
 import { WelcomeScreen } from './panels/WelcomeScreen';
 
 import type { ServiceTypeDescriptor, LayoutData } from './types';
+import type { Network } from './yaml/parse';
 
 import { vscodeApi as vscode } from './vsCodeApi';
+
+// ─── Default network settings (based on example.yaml) ────────────────────────
+// Auto-created when a service is dropped and these roles don't exist yet.
+const DEFAULT_NETWORKS: Record<string, Omit<Network, 'role'>> = {
+  'mgmt':  { ipv4: { cidr: '10.10.10.0/24',  gateway: '10.10.10.1',  pool: { start: '10.10.10.10',  end: '10.10.10.250'  } } },
+  'wan':   { nat: true, firewall: true, ipamDriver: 'none', ipv4: { cidr: '10.7.200.0/24', gateway: '10.7.200.1', pool: { start: '10.7.200.10', end: '10.7.200.250' } } },
+  'cm':    { ipamDriver: 'none', ipv4: { cidr: '10.7.201.0/24', gateway: '10.7.201.1', pool: { start: '10.7.201.10', end: '10.7.201.250' } } },
+  'lan-p1':{ ipamDriver: 'none', ipv4: { cidr: '192.168.10.0/24', gateway: '192.168.10.1', pool: { start: '192.168.10.10', end: '192.168.10.250' } } },
+  'lan-p2':{ ipamDriver: 'none', ipv4: { cidr: '192.168.20.0/24', gateway: '192.168.20.1', pool: { start: '192.168.20.10', end: '192.168.20.250' } } },
+  'lan-p3':{ ipamDriver: 'none', ipv4: { cidr: '192.168.30.0/24', gateway: '192.168.30.1', pool: { start: '192.168.30.10', end: '192.168.30.250' } } },
+  'lan-p4':{ ipamDriver: 'none', ipv4: { cidr: '192.168.40.0/24', gateway: '192.168.40.1', pool: { start: '192.168.40.10', end: '192.168.40.250' } } },
+};
 
 // ─── Custom node/edge registration ───────────────────────────────────────────
 const nodeTypes = {
@@ -106,6 +119,26 @@ export default function App() {
       // ── Service nodes ──────────────────────────────────────────────────────
       for (const svc of model.spec.services) {
         const nodeId = `service:${svc.name}`;
+
+        // Separate interfaces: those with a bridge assignment vs. those without.
+        const bridgedRoles = new Set((svc.interfaces ?? []).filter(i => i.bridge).map(i => i.role));
+        const nonBridgedIfaces = (svc.interfaces ?? []).filter(i => !i.bridge);
+
+        // Build bridge groups: one per declared bridge, with member interfaces.
+        const bridgeGroups: BridgeGroup[] = (svc.bridges ?? []).map(b => ({
+          name: b.name,
+          ipv4: b.ipv4,
+          members: (svc.interfaces ?? [])
+            .filter(i => i.bridge === b.name)
+            .map(i => ({
+              role: i.role,
+              device: i.device,
+              bridge: i.bridge,
+              ipv4: i.ipv4,
+              defaultRoute: i.defaultRoute,
+            })),
+        }));
+
         nodes.push({
           id: nodeId,
           type: 'service',
@@ -114,12 +147,14 @@ export default function App() {
             name: svc.name,
             type: svc.type,
             replicas: svc.replicas,
-            networks: svc.interfaces?.map(i => ({
+            networks: nonBridgedIfaces.map(i => ({
               role: i.role,
               device: i.device,
+              bridge: i.bridge,
               ipv4: i.ipv4,
               defaultRoute: i.defaultRoute,
-            })) ?? [],
+            })),
+            bridges: bridgeGroups,
           } satisfies ServiceNodeData,
           draggable: true,
         });
@@ -139,6 +174,20 @@ export default function App() {
       }
 
       // ── Network edges: one edge per (service-pair, shared-network-role) ─────
+      // When a service's interface has bridge: brlan0, the edge connects to the
+      // bridge handle (iface-bridge-brlan0) rather than iface-{role}, so the
+      // connection visually terminates at the bridge section of the service node.
+      const svcBridgeForRole = new Map<string, string>(); // "svcName:role" → bridgeName
+      for (const svc of model.spec.services) {
+        for (const iface of svc.interfaces ?? []) {
+          if (iface.bridge) svcBridgeForRole.set(`${svc.name}:${iface.role}`, iface.bridge);
+        }
+      }
+      const resolveHandle = (svcName: string, role: string): string => {
+        const bridge = svcBridgeForRole.get(`${svcName}:${role}`);
+        return bridge ? `iface-bridge-${bridge}` : `iface-${role}`;
+      };
+
       // Build: networkRole → [service names that use it]
       const netServices: Record<string, string[]> = {};
       for (const svc of model.spec.services) {
@@ -155,8 +204,6 @@ export default function App() {
       for (const svc of model.spec.services) svcType[svc.name] = svc.type;
 
       // Infrastructure service types that "own" networks.
-      // Only draw edges where at least one end is infrastructure — this prevents
-      // peer-client edges (e.g. webpa ↔ event-sink both on mgmt).
       const infraTypes = new Set(['bng', 'gateway']);
 
       for (const [role, svcNames] of Object.entries(netServices)) {
@@ -166,14 +213,13 @@ export default function App() {
         for (let i = 0; i < svcNames.length; i++) {
           for (let j = i + 1; j < svcNames.length; j++) {
             const [a, b] = [svcNames[i], svcNames[j]].sort();
-            // Skip pure client-to-client edges
             if (!infraTypes.has(svcType[a]) && !infraTypes.has(svcType[b])) continue;
             edges.push({
               id: `net-${role}-${a}-${b}`,
               source: `service:${a}`,
               target: `service:${b}`,
-              sourceHandle: `iface-${role}`,
-              targetHandle: `iface-${role}`,
+              sourceHandle: resolveHandle(a, role),
+              targetHandle: resolveHandle(b, role),
               type: 'interface',
               data: { role, cidr },
             });
@@ -251,50 +297,98 @@ export default function App() {
 
   // ── Reconnect: drag an edge endpoint to rewire an interface ──────────────
   //
-  // An edge represents two services sharing a network (same role on both ends).
-  // The original SOURCE service is the one that gets rewired — both when dragging
-  // the target end (to a different port on the hub service) and when dragging the
-  // source end to a completely different service/network.
+  // In ConnectionMode.Loose (all handles are type="source"), React Flow may
+  // internally swap source/target, making source/target-based logic unreliable.
   //
-  //   edge: client/iface-lan-p1 ↔ gateway/iface-lan-p1
-  //   drag gateway end → gateway/iface-lan-p2  →  client: lan-p1 → lan-p2
-  //   drag gateway end → bng/iface-wan          →  client: lan-p1 → wan
-  //   drag client end  → bng/iface-wan           →  client: lan-p1 → wan
+  // Robust strategy: find which service was REMOVED from the connection — that is
+  // the service whose endpoint was dragged. Use set arithmetic, not source/target order.
+  //
+  //   bng↔webpa/mgmt: drag webpa to gateway/brlan0  → webpa: mgmt→lan-p1 ✓
+  //   client↔gateway/lan-p1: drag gateway to lan-p2  → client: lan-p1→lan-p2 ✓
   const onReconnect = useCallback(
     (oldEdge: Edge, newConnection: Connection) => {
-      // Optimistic visual update — prevents the edge snapping back while
-      // the YAML mutation round-trips through the extension host.
       setRfEdges(eds => reconnectEdge(oldEdge, newConnection, eds));
 
-      const model = store.model;
-      if (!model || !rawYamlRef.current) return;
+      if (!rawYamlRef.current) return;
+      const parsed = parse(rawYamlRef.current);
+      if ('error' in parsed) return;
+      const currentModel = parsed.model;
 
-      const extractRole = (h: string | null | undefined) =>
-        h?.replace('iface-', '') ?? '';
+      const resolveHandleRole = (handle: string | null | undefined, serviceId: string | null | undefined): string | null => {
+        if (!handle) return null;
+        if (handle.startsWith('iface-bridge-')) {
+          const bridgeName = handle.replace('iface-bridge-', '');
+          const svcName = (serviceId ?? '').replace('service:', '');
+          const svc = currentModel.spec.services.find(s => s.name === svcName);
+          return svc?.interfaces?.find(i => i.bridge === bridgeName)?.role ?? null;
+        }
+        if (handle.startsWith('iface-') && handle !== 'iface-connect') return handle.replace('iface-', '');
+        return null;
+      };
 
-      const targetMoved =
-        oldEdge.target !== newConnection.target ||
-        oldEdge.targetHandle !== newConnection.targetHandle;
-      const sourceMoved =
-        oldEdge.source !== newConnection.source ||
-        oldEdge.sourceHandle !== newConnection.sourceHandle;
+      const oldSrc = oldEdge.source;
+      const oldTgt = oldEdge.target;
+      const newSrc = newConnection.source;
+      const newTgt = newConnection.target;
 
-      if (!targetMoved && !sourceMoved) return;
+      // Service that was in the old connection but is absent from the new one.
+      const movedFromId =
+        (oldSrc !== newSrc && oldSrc !== newTgt) ? oldSrc :
+        (oldTgt !== newSrc && oldTgt !== newTgt) ? oldTgt : null;
 
-      // Always rewire the original source service. The new role is taken from
-      // whichever end moved.
-      const serviceName = (oldEdge.source ?? '').replace('service:', '');
-      const oldRole = extractRole(oldEdge.sourceHandle);
-      const newRole = targetMoved
-        ? extractRole(newConnection.targetHandle)
-        : extractRole(newConnection.sourceHandle);
+      let serviceName: string;
+      let oldRole: string | null;
+      let newRole: string | null;
+
+      // Infrastructure service types. When an infra endpoint is swapped for
+      // another infra endpoint (hub swap, e.g. bng→gateway), the CLIENT service
+      // that STAYED needs its role updated. When a client moves, it gets updated.
+      const infraSvcTypes = new Set(['bng', 'gateway']);
+
+      if (movedFromId) {
+        const newDestId = (newSrc !== oldSrc && newSrc !== oldTgt) ? newSrc
+                        : (newTgt !== oldSrc && newTgt !== oldTgt) ? newTgt : null;
+        const newHandle = (newConnection.source === newDestId) ? newConnection.sourceHandle : newConnection.targetHandle;
+        newRole = resolveHandleRole(newHandle, newDestId);
+
+        const movedSvcType = currentModel.spec.services.find(
+          s => `service:${s.name}` === movedFromId
+        )?.type ?? '';
+
+        if (infraSvcTypes.has(movedSvcType)) {
+          // Hub swap (e.g. bng→gateway): update the CLIENT service that stayed.
+          const stayedId = (oldSrc === movedFromId) ? oldTgt : oldSrc;
+          serviceName = (stayedId ?? '').replace('service:', '');
+          const stayedHandle = (oldEdge.source === stayedId) ? oldEdge.sourceHandle : oldEdge.targetHandle;
+          oldRole = resolveHandleRole(stayedHandle, stayedId);
+        } else {
+          // Client relocation: the moved client gets the new role.
+          serviceName = movedFromId.replace('service:', '');
+          const oldHandle = (oldEdge.source === movedFromId) ? oldEdge.sourceHandle : oldEdge.targetHandle;
+          oldRole = resolveHandleRole(oldHandle, movedFromId);
+        }
+      } else {
+        // Both endpoints stayed on the same nodes; only a handle changed (hub-and-spoke).
+        const srcHandleChanged = oldEdge.sourceHandle !== newConnection.sourceHandle;
+        const tgtHandleChanged = oldEdge.targetHandle !== newConnection.targetHandle;
+        if (!srcHandleChanged && !tgtHandleChanged) return;
+
+        if (tgtHandleChanged) {
+          serviceName = (oldSrc ?? '').replace('service:', '');
+          oldRole = resolveHandleRole(oldEdge.sourceHandle, oldSrc);
+          newRole = resolveHandleRole(newConnection.targetHandle, newTgt);
+        } else {
+          serviceName = (oldTgt ?? '').replace('service:', '');
+          oldRole = resolveHandleRole(oldEdge.targetHandle, oldTgt);
+          newRole = resolveHandleRole(newConnection.sourceHandle, newSrc);
+        }
+      }
 
       if (!serviceName || !oldRole || !newRole || oldRole === newRole) return;
 
-      const svcIdx = model.spec.services.findIndex(s => s.name === serviceName);
+      const svcIdx = currentModel.spec.services.findIndex(s => s.name === serviceName);
       if (svcIdx < 0) return;
-      const ifaceIdx =
-        model.spec.services[svcIdx].interfaces?.findIndex(i => i.role === oldRole) ?? -1;
+      const ifaceIdx = currentModel.spec.services[svcIdx].interfaces?.findIndex(i => i.role === oldRole) ?? -1;
       if (ifaceIdx < 0) return;
 
       const { newYaml, description } = applyMutation(rawYamlRef.current, {
@@ -302,37 +396,133 @@ export default function App() {
         path: ['spec', 'services', svcIdx, 'interfaces', ifaceIdx, 'role'],
         value: newRole,
       });
+      rawYamlRef.current = newYaml;
       vscode?.postMessage({ type: 'CANVAS_MUTATION', newYaml, description });
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [store.model, setRfEdges]
+    [setRfEdges]
+  );
+
+  // ── Connect: drawing a new edge between handles adds an interface ────────
+  const onConnect = useCallback(
+    (connection: Connection) => {
+      if (!rawYamlRef.current) return;
+      const parsed = parse(rawYamlRef.current);
+      if ('error' in parsed) return;
+      const currentModel = parsed.model;
+
+      const srcHandle = connection.sourceHandle ?? '';
+      const tgtHandle = connection.targetHandle ?? '';
+
+      // Resolve handle to network role, including bridge handles.
+      const handleToRole = (handle: string, serviceId: string): string | null => {
+        if (handle.startsWith('iface-bridge-')) {
+          const bridgeName = handle.replace('iface-bridge-', '');
+          const svcName = serviceId.replace('service:', '');
+          const svc = currentModel.spec.services.find(s => s.name === svcName);
+          return svc?.interfaces?.find(i => i.bridge === bridgeName)?.role ?? null;
+        }
+        if (handle.startsWith('iface-') && handle !== 'iface-connect') {
+          return handle.replace('iface-', '');
+        }
+        return null;
+      };
+
+      const role =
+        handleToRole(srcHandle, connection.source ?? '') ??
+        handleToRole(tgtHandle, connection.target ?? '') ??
+        null;
+
+      if (!role) return;
+
+      const srcSvcName = (connection.source ?? '').replace('service:', '');
+      const tgtSvcName = (connection.target ?? '').replace('service:', '');
+      const receivingSvc = tgtHandle === 'iface-connect' ? tgtSvcName : srcSvcName;
+
+      const svcIdx = currentModel.spec.services.findIndex(s => s.name === receivingSvc);
+      if (svcIdx < 0) return;
+
+      setRfEdges(eds => addEdge({
+        ...connection,
+        id: `net-${role}-${[srcSvcName, tgtSvcName].sort().join('-')}`,
+        type: 'interface',
+        data: { role },
+      }, eds));
+
+      if (currentModel.spec.services[svcIdx].interfaces?.some(i => i.role === role)) return;
+
+      const { newYaml, description } = applyMutation(rawYamlRef.current, {
+        kind: 'addInterface',
+        serviceIndex: svcIdx,
+        iface: { role },
+      });
+      rawYamlRef.current = newYaml;
+      vscode?.postMessage({ type: 'CANVAS_MUTATION', newYaml, description });
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [setRfEdges]
   );
 
   // ── Drop from palette ─────────────────────────────────────────────────────
+  // window.prompt() returns null in VS Code webviews, so we auto-generate a
+  // unique name from the type + count of existing services of that type.
   const onDrop = useCallback(
     (event: React.DragEvent<HTMLDivElement>) => {
       event.preventDefault();
-      const data = event.dataTransfer.getData('application/vcpe-service-type');
+      const data = event.dataTransfer.getData('text/plain');
       if (!data) return;
       const typeDesc: ServiceTypeDescriptor = JSON.parse(data);
-      const name = window.prompt(`Service name for type "${typeDesc.name}":`);
-      if (!name) return;
 
-      const mutation = applyMutation(rawYamlRef.current, {
+      // Generate a unique name: <type>-<n> where n is one above the highest existing index.
+      const model = store.model;
+      const existing = (model?.spec.services ?? [])
+        .map(s => s.name)
+        .filter(n => n === typeDesc.name || n.startsWith(`${typeDesc.name}-`));
+      const indices = existing
+        .map(n => parseInt(n.replace(`${typeDesc.name}-`, ''), 10))
+        .filter(n => !isNaN(n));
+      const next = indices.length > 0 ? Math.max(...indices) + 1 : 1;
+      const name = existing.includes(typeDesc.name) || existing.length > 0
+        ? `${typeDesc.name}-${next}`
+        : typeDesc.name;
+
+      if (!rawYamlRef.current) return;
+
+      // Parse current YAML to find existing networks
+      const preDrop = parse(rawYamlRef.current);
+      const existingRoles = new Set(
+        'error' in preDrop ? [] : preDrop.model.spec.networks.map(n => n.role)
+      );
+
+      let currentYaml = rawYamlRef.current;
+
+      // Create any missing networks for this service's expected roles using defaults
+      for (const r of typeDesc.expectedRoles) {
+        if (existingRoles.has(r.role)) continue;
+        const defaults = DEFAULT_NETWORKS[r.role];
+        if (!defaults) continue;
+        const { newYaml } = applyMutation(currentYaml, {
+          kind: 'insertNetwork',
+          network: { role: r.role, ...defaults },
+        });
+        currentYaml = newYaml;
+        existingRoles.add(r.role);
+      }
+
+      const mutation = applyMutation(currentYaml, {
         kind: 'insertService',
         service: {
           name,
           type: typeDesc.name,
           replicas: 1,
-          image: { repository: typeDesc.defaultImage },
-          interfaces: typeDesc.expectedRoles
-            .filter(r => r.required)
-            .map(r => ({ role: r.role })),
+          image: { repository: typeDesc.defaultImage, tag: 'dev', pullPolicy: 'build-if-missing' },
+          interfaces: typeDesc.expectedRoles.map(r => ({ role: r.role })),
         },
       });
+      rawYamlRef.current = mutation.newYaml;
       vscode?.postMessage({ type: 'CANVAS_MUTATION', newYaml: mutation.newYaml, description: mutation.description });
     },
-    []
+    [store.model]
   );
 
   // ── Render ────────────────────────────────────────────────────────────────
@@ -380,11 +570,7 @@ export default function App() {
             </div>
           </div>
         ) : (
-          <div
-            style={{ flex: 1 }}
-            onDrop={onDrop}
-            onDragOver={(e) => e.preventDefault()}
-          >
+          <div style={{ flex: 1 }}>
             <ReactFlow
               nodes={rfNodes}
               edges={rfEdges}
@@ -396,8 +582,11 @@ export default function App() {
               onPaneClick={() => store.selectNode(null)}
               onNodeDragStop={onNodeDragStop}
               onReconnect={onReconnect}
+              onConnect={onConnect}
               reconnectRadius={20}
               connectionMode={ConnectionMode.Loose}
+              onDrop={onDrop}
+              onDragOver={(e) => e.preventDefault()}
               fitView
             >
               <Background />

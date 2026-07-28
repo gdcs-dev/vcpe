@@ -5,7 +5,8 @@ metadata:
   labels:
     scenario: example
   annotations:
-    description: "Full vCPE lab — BNG, WebPA, Gateway, event-sink, and Alpine client over a bridge WAN network."
+    description: "Full vCPE lab — BNG, WebPA, Gateway, event-sink, and Alpine client
+      over a bridge WAN network."
 
 spec:
   maxReplicasPerService: 3
@@ -81,9 +82,9 @@ spec:
         pullPolicy: build-if-missing
         buildContext: services/bng
       interfaces:
-        - { role: mgmt, device: eth0 }
-        - { role: wan, device: eth1, defaultRoute: true, ipv4: "10.7.200.1" }
-        - { role: cm, device: eth2, ipv4: "10.7.201.1" }
+        - { role: mgmt, device: mgmt }
+        - { role: wan, device: wan, defaultRoute: true, ipv4: "10.7.200.1" }
+        - { role: cm, device: cm, ipv4: "10.7.201.1" }
       config:
         access:
           - role: wan
@@ -131,17 +132,26 @@ spec:
       interfaces:
         - { role: wan, device: erouter0, ipv4: "10.7.200.10" }
         - { role: cm, device: wan0, ipv4: "10.7.201.10" }
-        - { role: lan-p1, device: eth0 }
-        - { role: lan-p2, device: eth1 }
-        - { role: lan-p3, device: eth2 }
-        - { role: lan-p4, device: eth3 }
+        - { role: lan-p1, device: eth0, bridge: brlan0 }
+        - { role: lan-p2, device: eth1, bridge: brlan0 }
+        - { role: lan-p3, device: eth2, bridge: brlan0 }
+        - { role: lan-p4, device: eth3, bridge: brlan0 }
       config:
-        lan:
+        {
+          "lan":
+            {
+              "ipv4": "192.168.10.1/24",
+              "dhcpStart": "192.168.10.100",
+              "dhcpEnd": "192.168.10.200"
+            }
+        }
+      dependsOn:
+        - bng
+      bridges:
+        - name: brlan0
           ipv4: 192.168.10.1/24
           dhcpStart: 192.168.10.100
           dhcpEnd: 192.168.10.200
-      dependsOn:
-        - bng
     # ── Event Sink ────────────────────────────────────────────────────────────
     # Generic XMiDT webhook consumer. Registers a Caduceus webhook via Argus
     # and logs all matching WRP events as structured JSON to stdout.
@@ -173,5 +183,4 @@ spec:
         - role: lan-p1
           defaultRoute: true
       config:
-        command:
-          ["/bin/sh", "-c", "ip addr flush dev eth0 && udhcpc -f -i eth0"]
+        command: [ "/bin/sh", "-c", "ip addr flush dev eth0 && udhcpc -f -i eth0" ]

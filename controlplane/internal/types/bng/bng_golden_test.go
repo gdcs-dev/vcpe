@@ -99,6 +99,7 @@ func TestBNGGoldenComposeEnv(t *testing.T) {
 		"DEPLOYMENT_NAME=edge",
 		"SERVICE_NAME=bng",
 		"IMAGE=ghcr.io/gdcs-dev/bng:dev",
+		"IFACE_WAN_BRIDGE=",
 		"IFACE_WAN_DEVICE=eth0",
 		"IFACE_WAN_GATEWAY4=10.200.0.1",
 		"IFACE_WAN_GATEWAY6=",

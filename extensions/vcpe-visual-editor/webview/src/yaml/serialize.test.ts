@@ -175,3 +175,44 @@ describe('round-trip fidelity', () => {
     expect(result).toContain('kind: Deployment');
   });
 });
+
+describe('applyMutation — setScalar null handling', () => {
+  it('deletes a key when value is null instead of writing YAML null', () => {
+    const result = roundTrip(MINIMAL_MANIFEST, {
+      kind: 'setScalar',
+      path: ['spec', 'networks', 0, 'nat'],
+      value: null,
+    });
+    expect(result).not.toContain('nat: null');
+    expect(result).not.toMatch(/nat:\s*null/);
+  });
+
+  it('prunes empty pool object when both start and end are cleared', () => {
+    // First insert a network with a pool
+    const withPool = roundTrip(MINIMAL_MANIFEST, {
+      kind: 'insertNetwork',
+      network: { role: 'test-pool', ipv4: { cidr: '10.99.0.0/24', gateway: '10.99.0.1', pool: { start: '10.99.0.10', end: '10.99.0.250' } } },
+    });
+    const netIdx = parse(withPool);
+    if ('error' in netIdx) throw new Error(netIdx.error);
+    const idx = netIdx.model.spec.networks.findIndex(n => n.role === 'test-pool');
+
+    // Clear both pool fields
+    const cleared = roundTrip(withPool,
+      { kind: 'setScalar', path: ['spec', 'networks', idx, 'ipv4', 'pool', 'start'], value: null },
+      { kind: 'setScalar', path: ['spec', 'networks', idx, 'ipv4', 'pool', 'end'], value: null },
+    );
+    // pool key itself should be gone — not { start: null, end: null }
+    expect(cleared).not.toContain('pool:');
+    expect(cleared).not.toContain('null');
+  });
+
+  it('does not serialise null fields from insertNetwork', () => {
+    const result = roundTrip(MINIMAL_MANIFEST, {
+      kind: 'insertNetwork',
+      network: { role: 'nullish', nat: undefined, firewall: undefined, ipv4: { cidr: '10.1.0.0/24' } },
+    });
+    expect(result).not.toContain('nat: null');
+    expect(result).not.toContain('firewall: null');
+  });
+});

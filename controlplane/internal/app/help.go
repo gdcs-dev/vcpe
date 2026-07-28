@@ -71,15 +71,15 @@ var commandHelp = map[string]CommandHelp{
 	"down": {
 		Synopsis:    "Tear down a named deployment",
 		Description: "Stops compose services and releases all IPAM leases for the named deployment. Alias: destroy (destroy also requires --force).",
-		RequiredFlags: []FlagHelp{
-			{Name: "--name", Arg: "<deployment>", Description: "Name of the deployment to tear down (metadata.name from the manifest)"},
-		},
 		OptionalFlags: []FlagHelp{
+			{Name: "--name", Arg: "<deployment>", Description: "Name of the deployment to tear down (metadata.name from the manifest)"},
+			{Name: "--manifest", Arg: "<path>", Description: "Path to the manifest file; metadata.name is used as the deployment name"},
 			{Name: "--state-root", Arg: "<path>", Description: "Override the default state root directory"},
 			{Name: "--socket", Arg: "<path>", Description: "Override the daemon socket path"},
 		},
 		Examples: []string{
 			"vcpe down --name bng-7",
+			"vcpe down --manifest manifests/example.yaml",
 		},
 	},
 	"status": {

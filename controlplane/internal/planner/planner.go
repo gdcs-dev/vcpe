@@ -97,6 +97,11 @@ func resolveNetworks(doc manifest.Document) []plan.Network {
 			// DNS in container resolv.conf. The gateway's brlan0 dnsmasq
 			// listens there and forwards queries upstream to BNG.
 			out[i].PodmanDNS = n.IPv4.Gateway
+		} else if n.IPv4 != nil && n.IPAMDriver != "none" && n.IPv4.Gateway != "" {
+			// Non-LAN plain bridge: pass the manifest gateway to podman network
+			// create so the actual network gateway matches EROUTER0_IPV4_GATEWAY
+			// and the entrypoint's default-route setup is correct.
+			out[i].HostBridgeGateway = n.IPv4.Gateway
 		}
 	}
 	return out
@@ -179,6 +184,7 @@ func resolveService(deployment string, svc manifest.Service, prev int, netByRole
 		Replicas:             replicas,
 		Image:                svc.Image,
 		DependsOn:            append([]string(nil), svc.DependsOn...),
+		Bridges:              append([]manifest.BridgeSpec(nil), svc.Bridges...),
 		Ports:                append([]string(nil), svc.Ports...),
 		Volumes:              append([]string(nil), svc.Volumes...),
 		Config:               svc.Config,
@@ -226,6 +232,7 @@ func resolveInstance(deployment string, svc manifest.Service, index, replicas in
 			Role:         iface.Role,
 			Network:      net.Bridge,
 			Device:       device,
+			Bridge:       iface.Bridge,
 			MAC:          mac,
 			IPv4:         ipv4,
 			IPv6:         ipv6,
