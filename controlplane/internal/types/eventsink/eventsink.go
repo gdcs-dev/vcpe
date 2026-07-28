@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/gdcs-dev/vcpe/controlplane/internal/manifest"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/render"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/typeregistry"
 	"gopkg.in/yaml.v3"
@@ -37,6 +38,14 @@ func (serviceType) ExpectedRoles() []typeregistry.RoleRequirement {
 }
 
 func (serviceType) DefaultImagePolicy() string { return "build" }
+
+func (serviceType) ValidateInterfaces(_ []manifest.Interface) error { return nil }
+
+func (serviceType) Description() string {
+	return "Generic XMiDT webhook consumer and event logger"
+}
+
+func (serviceType) DefaultImage() string { return "ghcr.io/gdcs-dev/event-sink" }
 
 type renderer struct{}
 

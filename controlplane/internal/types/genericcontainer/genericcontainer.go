@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/gdcs-dev/vcpe/controlplane/internal/manifest"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/render"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/typeregistry"
 	"gopkg.in/yaml.v3"
@@ -41,6 +42,14 @@ func (serviceType) Renderer() render.Renderer { return renderer{} }
 func (serviceType) ExpectedRoles() []typeregistry.RoleRequirement { return nil }
 
 func (serviceType) DefaultImagePolicy() string { return "build" }
+
+func (serviceType) ValidateInterfaces(_ []manifest.Interface) error { return nil }
+
+func (serviceType) Description() string {
+	return "Catch-all generic container workload"
+}
+
+func (serviceType) DefaultImage() string { return "" }
 
 type renderer struct{}
 
@@ -202,7 +211,13 @@ func generateCompose(input render.Input, cfg Config, lanDNS []string) (string, e
 		// Pin the MAC address only for single-replica services, where the IPAM
 		// MAC is stable. Multi-replica services let Podman assign unique MACs.
 		pinMAC := replicas == 1
-		services[fmt.Sprintf("%s-%d", input.Service.Name, i+1)] = buildSvcEntry(pinMAC)
+		entry := buildSvcEntry(pinMAC)
+		// Set an explicit container_name and hostname, always indexed (e.g.
+		// example-client-1) so names are stable and unambiguous regardless of
+		// replica count.
+		entry["container_name"] = fmt.Sprintf("${DEPLOYMENT_NAME}-${SERVICE_NAME}-%d", i+1)
+		entry["hostname"] = fmt.Sprintf("${SERVICE_NAME}-%d", i+1)
+		services[fmt.Sprintf("%s-%d", input.Service.Name, i+1)] = entry
 	}
 
 	doc := map[string]any{"services": services}

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/gdcs-dev/vcpe/controlplane/internal/manifest"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/plan"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/render"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/typeregistry"
@@ -27,6 +28,9 @@ type Config struct {
 }
 
 type LANConfig struct {
+	// Bridge is the name of the LAN bridge created inside the container.
+	// Defaults to "brlan0" when empty.
+	Bridge    string `yaml:"bridge,omitempty"`
 	IPv4      string `yaml:"ipv4,omitempty"`
 	IPv6      string `yaml:"ipv6,omitempty"`
 	DHCPStart string `yaml:"dhcpStart,omitempty"`
@@ -59,12 +63,21 @@ func (serviceType) Renderer() render.Renderer { return renderer{} }
 
 func (serviceType) ExpectedRoles() []typeregistry.RoleRequirement {
 	return []typeregistry.RoleRequirement{
-		{Role: "lan", Required: false},
-		{Role: "erouter", Required: false},
+		{Role: "wan", Required: false},
+		{Role: "cm", Required: false},
+		{Role: "lan-p1", Required: false},
 	}
 }
 
 func (serviceType) DefaultImagePolicy() string { return "build" }
+
+func (serviceType) ValidateInterfaces(_ []manifest.Interface) error { return nil }
+
+func (serviceType) Description() string {
+	return "Cable-modem / CPE simulator with LAN bridging"
+}
+
+func (serviceType) DefaultImage() string { return "ghcr.io/gdcs-dev/gateway" }
 
 type renderer struct{}
 
@@ -112,23 +125,40 @@ func (renderer) Render(_ context.Context, input render.Input) (render.Result, er
 		ifaceByRole[iface.Role] = iface
 	}
 
-	// LAN port MACs: roles matching lanPrefix+{1-4} → LAN{1-4}_MAC
-	for i := 1; i <= 4; i++ {
-		mac := ""
-		if iface, ok := ifaceByRole[fmt.Sprintf("%s%d", lanPrefix, i)]; ok {
-			mac = iface.MAC
-		}
-		env = append(env, fmt.Sprintf("LAN%d_MAC=%s", i, mac))
+	// Manifest-driven bridge name and LAN device list.
+	// LAN_BRIDGE: prefer the first bridge declared in the manifest's bridges
+	// section (the one attached by LAN interfaces). Fall back to config.lan.bridge
+	// then "brlan0" so the DHCP/dnsmasq config still has a bridge name to bind to.
+	lanBridge := ""
+	for _, b := range input.Service.Bridges {
+		lanBridge = b.Name
+		break
 	}
+	if lanBridge == "" {
+		lanBridge = cfg.LAN.Bridge
+	}
+	if lanBridge == "" {
+		lanBridge = "brlan0"
+	}
+	env = append(env, "LAN_BRIDGE="+lanBridge)
 
-	// cmRole → wan0 (physical cable-modem line interface)
-	env = append(env, "WAN0_MAC="+ifaceByRole[cmRole].MAC)
+	// LAN_DEVICES: space-delimited device names for all interfaces whose role
+	// matches lanPrefix, in port order. The entrypoint iterates this list to
+	// determine which interfaces to bridge.
+	var lanDevices []string
+	for i := 1; i <= 4; i++ {
+		role := fmt.Sprintf("%s%d", lanPrefix, i)
+		if iface, ok := ifaceByRole[role]; ok && iface.Device != "" {
+			lanDevices = append(lanDevices, iface.Device)
+		}
+	}
+	env = append(env, "LAN_DEVICES="+strings.Join(lanDevices, " "))
 
-	// wanRole → erouter0 (the erouter/WAN IP interface)
+	// Emit generic BRIDGE_* env vars from the manifest's bridges section.
+	env = append(env, render.BridgeEnv(input.Service.Bridges)...)
+
+	// WAN/erouter interface vars (manifest-driven via IFACE_* — no legacy aliases).
 	wanIface := ifaceByRole[wanRole]
-	env = append(env, "EROUTER0_MAC="+wanIface.MAC)
-
-	// EROUTER0_IPV4 must be in CIDR notation for `ip addr add`
 	wanCIDR := ""
 	if n := input.Deployment.Network(wanRole); n != nil && n.IPv4 != nil {
 		wanCIDR = n.IPv4.CIDR
@@ -142,9 +172,14 @@ func (renderer) Render(_ context.Context, input render.Input) (render.Result, er
 		env = append(env, "EROUTER0_VLAN="+strconv.Itoa(cfg.Erouter.VLAN))
 	}
 
-	// BRLAN0 gets the LAN IP/prefix for `ip addr add` on the bridge
-	env = append(env, "BRLAN0_IPV4="+cfg.LAN.IPv4)
-	env = append(env, "BRLAN0_IPV6="+cfg.LAN.IPv6)
+	// LAN bridge DHCP config (gateway-type-specific; bridge IP comes from BRIDGE_*_IPV4).
+	// BRLAN0_IPV4 is emitted for dnsmasq: prefer the first bridge spec's IPv4,
+	// fall back to cfg.LAN.IPv4 (old manifests without a bridges: section).
+	lanBridgeIPv4 := cfg.LAN.IPv4
+	if len(input.Service.Bridges) > 0 && input.Service.Bridges[0].IPv4 != "" {
+		lanBridgeIPv4 = input.Service.Bridges[0].IPv4
+	}
+	env = append(env, "BRLAN0_IPV4="+lanBridgeIPv4)
 	env = append(env, "BRLAN0_DHCP_START="+cfg.LAN.DHCPStart)
 	env = append(env, "BRLAN0_DHCP_END="+cfg.LAN.DHCPEnd)
 

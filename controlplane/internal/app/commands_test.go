@@ -327,3 +327,45 @@ func TestLogsWithNameShowsDeployment(t *testing.T) {
 		t.Fatalf("expected deployment=edge in logs output, got %q", resp.Message)
 	}
 }
+
+func TestServiceTypesTable(t *testing.T) {
+	stateRoot := t.TempDir()
+	resp, err := executeLocal(Options{Command: "service", CommandArgs: []string{"types"}, StateRoot: stateRoot})
+	if err != nil {
+		t.Fatalf("service types: %v", err)
+	}
+	for _, want := range []string{"NAME", "PULL_POLICY", "DESCRIPTION", "bng", "gateway", "webpa"} {
+		if !strings.Contains(resp.Message, want) {
+			t.Errorf("expected %q in service types table, got:\n%s", want, resp.Message)
+		}
+	}
+}
+
+func TestServiceTypesJSON(t *testing.T) {
+	stateRoot := t.TempDir()
+	resp, err := executeLocal(Options{Command: "service", CommandArgs: []string{"types"}, StateRoot: stateRoot, OutputJSON: true})
+	if err != nil {
+		t.Fatalf("service types --json: %v", err)
+	}
+	for _, want := range []string{`"types"`, `"name"`, `"description"`, `"defaultPullPolicy"`, `"defaultImage"`, `"expectedRoles"`, `"bng"`} {
+		if !strings.Contains(resp.Message, want) {
+			t.Errorf("expected %q in service types JSON, got:\n%s", want, resp.Message)
+		}
+	}
+}
+
+func TestServiceUnknownSubcommandErrors(t *testing.T) {
+	stateRoot := t.TempDir()
+	_, err := executeLocal(Options{Command: "service", CommandArgs: []string{"frobnicate"}, StateRoot: stateRoot})
+	if err == nil || !strings.Contains(err.Error(), "unknown service subcommand") {
+		t.Fatalf("expected unknown subcommand error, got %v", err)
+	}
+}
+
+func TestServiceNoSubcommandErrors(t *testing.T) {
+	stateRoot := t.TempDir()
+	_, err := executeLocal(Options{Command: "service", StateRoot: stateRoot})
+	if err == nil || !strings.Contains(err.Error(), "service requires a subcommand") {
+		t.Fatalf("expected missing subcommand error, got %v", err)
+	}
+}

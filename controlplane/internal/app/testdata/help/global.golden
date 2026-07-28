@@ -10,6 +10,7 @@ Commands:
   down      Tear down a named deployment
   list      List known deployments
   manifest  Manage and discover manifest files
+  service   Inspect registered service types
   status    Show control-plane status
   logs      Show operation timeline and deployment logs
   config    Show effective configuration

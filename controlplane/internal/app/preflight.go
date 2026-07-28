@@ -42,6 +42,9 @@ func Preflight(doc manifest.Document) error {
 		if err := assertExpectedRoles(svc.Name, st.ExpectedRoles(), ifaceRoles); err != nil {
 			return err
 		}
+		if err := st.ValidateInterfaces(svc.Interfaces); err != nil {
+			return fmt.Errorf("service %q interfaces: %w", svc.Name, err)
+		}
 	}
 
 	for _, w := range UnusedNetworkWarnings(doc) {

@@ -44,9 +44,16 @@ func writeV1ManifestWithServices(t *testing.T, name string, services []string) s
 		b.WriteString("      replicas: 1\n")
 		b.WriteString("      image: { repository: ghcr.io/gdcs-dev/" + svc + ", tag: dev }\n")
 		b.WriteString("      interfaces:\n")
-		b.WriteString("        - { role: mgmt }\n")
-		b.WriteString("        - { role: wan, defaultRoute: true }\n")
-		b.WriteString("        - { role: cm }\n")
+		if svc == "gateway" {
+			// Gateway requires explicit device names on all interfaces.
+			b.WriteString("        - { role: mgmt, device: eth0 }\n")
+			b.WriteString("        - { role: wan, device: erouter0, defaultRoute: true }\n")
+			b.WriteString("        - { role: cm, device: wan0 }\n")
+		} else {
+			b.WriteString("        - { role: mgmt }\n")
+			b.WriteString("        - { role: wan, defaultRoute: true }\n")
+			b.WriteString("        - { role: cm }\n")
+		}
 	}
 
 	if err := os.WriteFile(path, []byte(b.String()), 0o644); err != nil {

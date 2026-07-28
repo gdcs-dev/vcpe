@@ -5,7 +5,8 @@ metadata:
   labels:
     scenario: example-macvlan
   annotations:
-    description: "Full vCPE lab using macvlan WAN — BNG, WebPA, Gateway, event-sink, and Alpine client"
+    description: "Full vCPE lab using macvlan WAN — BNG, WebPA, Gateway, event-sink,
+      and Alpine client"
 
 spec:
   maxReplicasPerService: 3
@@ -41,14 +42,14 @@ spec:
     # WAN — macvlan network so BNG appears directly on the physical LAN.
     # nat and firewall are not applicable to macvlan networks.
     - role: wan
-      driver: macvlan
       ipamDriver: none
       driverOptions:
-        parent: eth0 # ← change to your physical NIC name
+        parent: eth1 # ← change to your physical NIC name
       ipv4:
         cidr: 10.7.200.0/24
         gateway: 10.7.200.1
         pool: { start: 10.7.200.10, end: 10.7.200.20 }
+      driver: macvlan
 
     - role: cm
       ipamDriver: none
@@ -97,12 +98,12 @@ spec:
       image:
         repository: ghcr.io/gdcs-dev/bng
         tag: dev
-        pullPolicy: always-pull
+        pullPolicy: build-if-missing
         buildContext: services/bng
       interfaces:
-        - { role: mgmt }
-        - { role: wan, defaultRoute: true, ipv4: "10.7.200.1" }
-        - { role: cm, ipv4: "10.7.201.1" }
+        - { role: mgmt, device: mgmt }
+        - { role: wan, device: wan, defaultRoute: true, ipv4: "10.7.200.1" }
+        - { role: cm, device: cm, ipv4: "10.7.201.1" }
       config:
         access:
           - role: wan
@@ -121,7 +122,6 @@ spec:
               options:
                 routers: 10.7.201.1
               leaseSeconds: 3600
-
     # ── WebPA / WebConfig ────────────────────────────────────────────────────
     - name: webpa
       type: webpa
@@ -129,7 +129,7 @@ spec:
       image:
         repository: ghcr.io/gdcs-dev/webpa
         tag: dev
-        pullPolicy: always-pull
+        pullPolicy: build-if-missing
         buildContext: services/webpa
       interfaces:
         - { role: mgmt }
@@ -143,34 +143,28 @@ spec:
       image:
         repository: ghcr.io/gdcs-dev/gateway
         tag: dev
-        pullPolicy: always-pull
+        pullPolicy: build-if-missing
         buildContext: services/gateway
       interfaces:
-        - { role: wan, ipv4: "10.7.200.10" }
-        - { role: cm, ipv4: "10.7.201.10" }
-        - { role: lan-p1 }
-        - { role: lan-p2 }
-        - { role: lan-p3 }
-        - { role: lan-p4 }
+        - { role: wan, device: erouter0, ipv4: "10.7.200.10" }
+        - { role: cm, device: wan0, ipv4: "10.7.201.10" }
+        - { role: lan-p1, device: eth0, bridge: brlan0 }
+        - { role: lan-p2, device: eth1, bridge: brlan0 }
+        - { role: lan-p3, device: eth2, bridge: brlan0 }
+        - { role: lan-p4, device: eth3, bridge: brlan0 }
       config:
-        lan:
+        {
+          "lan":
+            {
+              "ipv4": "192.168.10.1/24",
+              "dhcpStart": "192.168.10.100",
+              "dhcpEnd": "192.168.10.200"
+            }
+        }
+      bridges:
+        - name: brlan0
           ipv4: 192.168.10.1/24
           dhcpStart: 192.168.10.100
           dhcpEnd: 192.168.10.200
       dependsOn:
         - bng
-
-    # ── Event Sink ────────────────────────────────────────────────────────────
-    - name: event-sink
-      type: event-sink
-      replicas: 1
-      image:
-        repository: ghcr.io/gdcs-dev/event-sink
-        tag: dev
-        pullPolicy: always-pull
-        buildContext: services/event-sink
-        containerfile: services/event-sink/Containerfile
-      interfaces:
-        - { role: mgmt }
-      dependsOn:
-        - webpa

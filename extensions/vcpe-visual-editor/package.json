@@ -1,0 +1,75 @@
+{
+  "name": "vcpe-visual-editor",
+  "displayName": "vCPE Visual Manifest Editor",
+  "description": "Visual drag-and-drop editor for vcpe.dev/v1 deployment manifests",
+  "version": "0.1.0",
+  "publisher": "gdcs-dev",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/gdcs-dev/vcpe"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": ["Other"],
+  "activationEvents": [],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "customEditors": [
+      {
+        "viewType": "vcpe.manifestEditor",
+        "displayName": "vCPE Visual Manifest Editor",
+        "selector": [
+          { "filenamePattern": "**/manifests/*.yaml" }
+        ],
+        "priority": "option"
+      }
+    ],
+    "configuration": {
+      "title": "vCPE Visual Manifest Editor",
+      "properties": {
+        "vcpe.binaryPath": {
+          "type": "string",
+          "default": "",
+          "description": "Absolute path to the vcpe binary. If empty, the extension falls back to PATH lookup.",
+          "scope": "machine-overridable"
+        }
+      }
+    },
+    "commands": [
+      {
+        "command": "vcpe.openVisualEditor",
+        "title": "Open with vCPE Visual Manifest Editor",
+        "category": "vCPE"
+      }
+    ]
+  },
+  "scripts": {
+    "build": "node esbuild.js && vite build --config webview/vite.config.ts",
+    "watch": "node esbuild.js --watch",
+    "package": "vsce package --allow-missing-repository --allow-star-activation",
+    "test": "vitest run --config webview/vite.config.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^2.24.0",
+    "esbuild": "^0.20.0",
+    "typescript": "^5.3.0",
+    "vite": "^5.0.0",
+    "vitest": "^1.3.0",
+    "@vitejs/plugin-react": "^4.2.0",
+    "@types/react": "^18.2.0",
+    "@types/react-dom": "^18.2.0"
+  },
+  "dependencies": {
+    "@dagrejs/dagre": "^1.1.4",
+    "@xyflow/react": "^12.0.0",
+    "lucide-react": "^0.400.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "yaml": "^2.4.0",
+    "zustand": "^4.5.0"
+  }
+}

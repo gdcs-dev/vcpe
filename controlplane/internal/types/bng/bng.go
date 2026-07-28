@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/gdcs-dev/vcpe/controlplane/internal/manifest"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/plan"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/render"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/typeregistry"
@@ -80,9 +81,23 @@ func (serviceType) ValidateConfig(node yaml.Node) error {
 
 func (serviceType) Renderer() render.Renderer { return renderer{} }
 
-func (serviceType) ExpectedRoles() []typeregistry.RoleRequirement { return nil }
+func (serviceType) ExpectedRoles() []typeregistry.RoleRequirement {
+	return []typeregistry.RoleRequirement{
+		{Role: "wan", Required: false},
+		{Role: "cm", Required: false},
+		{Role: "mgmt", Required: false},
+	}
+}
 
 func (serviceType) DefaultImagePolicy() string { return "build" }
+
+func (serviceType) ValidateInterfaces(_ []manifest.Interface) error { return nil }
+
+func (serviceType) Description() string {
+	return "Broadband Network Gateway — DHCP4/RADVD/DNS on WAN and CM segments"
+}
+
+func (serviceType) DefaultImage() string { return "ghcr.io/gdcs-dev/bng" }
 
 type renderer struct{}
 
@@ -110,12 +125,10 @@ func (renderer) Render(_ context.Context, input render.Input) (render.Result, er
 	}
 
 	env := render.IfaceEnv(input.Deployment, input.Service, inst)
-	// The BNG entrypoint renames interfaces by MGMT_MAC/WAN_MAC/CM_MAC.
-	// Append legacy aliases so the rename logic uses the IPAM-assigned MACs.
-	for _, iface := range inst.Interfaces {
-		key := strings.ToUpper(strings.ReplaceAll(iface.Role, "-", "_")) + "_MAC"
-		env = append(env, key+"="+iface.MAC)
-	}
+	// IFACE_*_MAC / IFACE_*_DEVICE are the canonical env var contract.
+	// Legacy role-specific aliases (MGMT_MAC=, WAN_MAC=, CM_MAC=) are no
+	// longer emitted; the entrypoint uses IFACE_*_MAC + IFACE_*_DEVICE.
+	env = append(env, render.BridgeEnv(input.Service.Bridges)...)
 
 	// For container-managed (ipamDriver: none) networks, the BNG must assign
 	// its own IPs. Add <ROLE>_IPV4_CIDR env vars so network-startup.sh can
@@ -509,32 +522,57 @@ server 2.pool.ntp.org iburst
 driftfile /var/lib/ntp/ntp.drift
 `
 
-// bngNetworkStartup brings up all ethernet interfaces after the entrypoint's
-// rename pass and, when ipamDriver:none is used, assigns IPs from the
-// <ROLE>_IPV4_CIDR env vars set by the renderer.
+// bngNetworkStartup brings up all interfaces after the entrypoint's rename
+// pass, handles manifest-declared bridges, and assigns IPs on ipamDriver:none
+// networks. All names are driven by IFACE_*_DEVICE env vars — no eth* globbing.
 const bngNetworkStartup = `#!/bin/bash
 set -euo pipefail
-# Bring up all ethernet interfaces. The entrypoint's rename pass leaves them
-# in DOWN state.
-for iface in /sys/class/net/eth*; do
-    name=$(basename "$iface")
-    ip link set "$name" up || true
-done
-# Assign IPs on container-managed networks (ipamDriver:none). When Podman
-# manages IPAM the variables are absent and these lines are no-ops.
-# <ROLE>_IPV4_CIDR is set by the bng-renderer for non-mgmt interfaces.
+# ── 1. Create and IP-configure manifest-declared bridges ───────────────────
+# BRIDGE_*_NAME = actual bridge name (avoids hyphen/underscore ambiguity)
+# BRIDGE_*_IPV4 = CIDR to assign on the bridge
+while IFS='=' read -r var bridge_name; do
+    [[ "$var" == BRIDGE_*_NAME ]] || continue
+    [[ -n "$bridge_name" ]] || continue
+    ip link add "$bridge_name" type bridge 2>/dev/null || true
+    ip link set "$bridge_name" up || true
+done < <(env)
+while IFS='=' read -r var cidr; do
+    [[ "$var" == BRIDGE_*_IPV4 ]] || continue
+    [[ -n "$cidr" ]] || continue
+    key="${var%_IPV4}"
+    name_var="${key}_NAME"
+    bridge_name="${!name_var:-}"
+    [[ -n "$bridge_name" ]] || continue
+    ip addr show "$bridge_name" | grep -qF "${cidr%%/*}" || ip addr add "$cidr" dev "$bridge_name" || true
+done < <(env)
+# ── 2. Enslave interfaces to their declared bridge ─────────────────────────
+while IFS='=' read -r var bridge_name; do
+    [[ "$var" == IFACE_*_BRIDGE ]] || continue
+    [[ -n "$bridge_name" ]] || continue
+    role_key="${var%_BRIDGE}"; role_key="${role_key#IFACE_}"
+    dev_var="IFACE_${role_key}_DEVICE"
+    dev="${!dev_var:-}"
+    [[ -n "$dev" ]] || continue
+    ip link set "$dev" master "$bridge_name" || true
+done < <(env)
+# ── 3. Bring up all declared interfaces ────────────────────────────────────
+while IFS='=' read -r var dev; do
+    [[ "$var" == IFACE_*_DEVICE ]] || continue
+    [[ -n "$dev" ]] || continue
+    ip link set "$dev" up || true
+done < <(env)
+# ── 4. Assign IPs on container-managed (ipamDriver:none) networks ──────────
+# <ROLE>_IPV4_CIDR is set by the bng-renderer for non-Podman-IPAM interfaces.
 for var in $(compgen -v | grep '_IPV4_CIDR$' 2>/dev/null || env | grep -o '^[A-Z_]*_IPV4_CIDR' || true); do
     cidr="${!var:-}"
     [[ -n "$cidr" ]] || continue
-    # Derive role name: WAN_IPV4_CIDR → WAN → look up device via IFACE_WAN_DEVICE
     role="${var%_IPV4_CIDR}"
     dev_var="IFACE_${role}_DEVICE"
     dev="${!dev_var:-}"
     [[ -n "$dev" ]] || continue
     ip addr show "$dev" | grep -qF "${cidr%%/*}" || ip addr add "$cidr" dev "$dev" || true
 done
-# The interface rename removes Podman's default route. Restore it via the
-# mgmt gateway so the BNG can reach the internet and peer containers.
+# ── 5. Restore default route removed by the interface rename ───────────────
 if ! ip route show default | grep -q .; then
     mgmt_gw="${IFACE_MGMT_GATEWAY4:-}"
     mgmt_dev="${IFACE_MGMT_DEVICE:-}"

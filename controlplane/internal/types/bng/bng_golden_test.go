@@ -99,6 +99,7 @@ func TestBNGGoldenComposeEnv(t *testing.T) {
 		"DEPLOYMENT_NAME=edge",
 		"SERVICE_NAME=bng",
 		"IMAGE=ghcr.io/gdcs-dev/bng:dev",
+		"IFACE_WAN_BRIDGE=",
 		"IFACE_WAN_DEVICE=eth0",
 		"IFACE_WAN_GATEWAY4=10.200.0.1",
 		"IFACE_WAN_GATEWAY6=",
@@ -106,7 +107,6 @@ func TestBNGGoldenComposeEnv(t *testing.T) {
 		"IFACE_WAN_IPV6=",
 		"IFACE_WAN_MAC=02:aa:bb:cc:dd:ee",
 		"IFACE_WAN_NETWORK=edge-wan",
-		"WAN_MAC=02:aa:bb:cc:dd:ee",
 		"WAN_IPV4_CIDR=10.200.0.2/24",
 	}, "\n") + "\n"
 	if got != want {

@@ -71,15 +71,15 @@ var commandHelp = map[string]CommandHelp{
 	"down": {
 		Synopsis:    "Tear down a named deployment",
 		Description: "Stops compose services and releases all IPAM leases for the named deployment. Alias: destroy (destroy also requires --force).",
-		RequiredFlags: []FlagHelp{
-			{Name: "--name", Arg: "<deployment>", Description: "Name of the deployment to tear down (metadata.name from the manifest)"},
-		},
 		OptionalFlags: []FlagHelp{
+			{Name: "--name", Arg: "<deployment>", Description: "Name of the deployment to tear down (metadata.name from the manifest)"},
+			{Name: "--manifest", Arg: "<path>", Description: "Path to the manifest file; metadata.name is used as the deployment name"},
 			{Name: "--state-root", Arg: "<path>", Description: "Override the default state root directory"},
 			{Name: "--socket", Arg: "<path>", Description: "Override the daemon socket path"},
 		},
 		Examples: []string{
 			"vcpe down --name bng-7",
+			"vcpe down --manifest manifests/example.yaml",
 		},
 	},
 	"status": {
@@ -162,6 +162,17 @@ var commandHelp = map[string]CommandHelp{
 			"vcpe manifest build --manifest existing.yaml --output new.yaml",
 		},
 	},
+	"service": {
+		Synopsis:      "Inspect registered service types",
+		Description:   "Subcommands for querying the registered service type catalog. `types` lists all built-in types with their descriptions, default pull policy, default image, and expected network roles.",
+		Positionals:   []string{"<subcommand>"},
+		RequiredFlags: []FlagHelp{},
+		OptionalFlags: []FlagHelp{},
+		Examples: []string{
+			"vcpe service types",
+			"vcpe service types --json",
+		},
+	},
 	"version": {
 		Synopsis:      "Print the vcpe version",
 		Description:   "Prints the embedded version string and exits. Builds without -ldflags override report \"dev\".",
@@ -188,7 +199,7 @@ func GlobalHelp() string {
 	const synopsisCol = 10
 	// Developer commands (build, push, release) are registered via init() in
 	// developer_commands.go and prepended to the order here.
-	combined := append(developerCommandOrder, "up", "plan", "down", "list", "manifest", "status", "logs", "config", "state", "version")
+	combined := append(developerCommandOrder, "up", "plan", "down", "list", "manifest", "service", "status", "logs", "config", "state", "version")
 	order := append([]string{"init"}, combined...)
 	for _, cmd := range order {
 		h := commandHelp[cmd]
