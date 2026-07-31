@@ -109,13 +109,17 @@ func (m *Manager) BuildWithOptions(ctx context.Context, doc manifest.Document, o
 	for _, service := range services {
 		imageRef := imageReference(service.Image)
 		policy := resolvePolicy(service)
+		effectivePlatforms := opts.Platforms
+		if len(service.Image.Platforms) > 0 {
+			effectivePlatforms = service.Image.Platforms
+		}
 		action := Action{Service: service.Name, Type: service.Type, Image: imageRef, Policy: policy, Action: "noop"}
 		// When ForceBuild is set, bypass pullPolicy: build anything that has a
 		// buildContext, pull anything that doesn't.
 		if opts.ForceBuild {
 			if service.Image.BuildContext != "" {
 				action.Action = "build"
-				if err := m.backend.BuildImage(ctx, BuildRequest{Tags: []string{imageRef}, Context: service.Image.BuildContext, File: service.Image.Containerfile, NoCache: opts.NoCache, Platforms: opts.Platforms}); err != nil {
+				if err := m.backend.BuildImage(ctx, BuildRequest{Tags: []string{imageRef}, Context: service.Image.BuildContext, File: service.Image.Containerfile, NoCache: opts.NoCache, Platforms: effectivePlatforms}); err != nil {
 					return summary, &LifecycleError{Service: action.Service, Image: action.Image, Action: action.Action, Reason: "build command failed", Err: err}
 				}
 			} else if imageRef != "" {
@@ -143,7 +147,7 @@ func (m *Manager) BuildWithOptions(ctx context.Context, doc manifest.Document, o
 			}
 		default:
 			action.Action = "build"
-			if err := m.backend.BuildImage(ctx, BuildRequest{Tags: []string{imageRef}, Context: service.Image.BuildContext, File: service.Image.Containerfile, NoCache: opts.NoCache, Platforms: opts.Platforms}); err != nil {
+			if err := m.backend.BuildImage(ctx, BuildRequest{Tags: []string{imageRef}, Context: service.Image.BuildContext, File: service.Image.Containerfile, NoCache: opts.NoCache, Platforms: effectivePlatforms}); err != nil {
 				return summary, &LifecycleError{Service: action.Service, Image: action.Image, Action: action.Action, Reason: "build command failed", Err: err}
 			}
 		}

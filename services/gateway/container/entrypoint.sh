@@ -163,6 +163,7 @@ EOF
             echo "interface=${bridge_name}"
             echo "dhcp-range=${dhcp_start},${dhcp_end},12h"
             echo "dhcp-option=tag:${bridge_name},3,${gw}"
+            echo "dhcp-option=tag:${bridge_name},6,${gw}"
         } >> "$conf"
         has_config=1
     done < <(env)
@@ -176,6 +177,7 @@ EOF
             echo "interface=${lan_bridge}"
             echo "dhcp-range=${BRLAN0_DHCP_START},${BRLAN0_DHCP_END},12h"
             echo "dhcp-option=3,${gw}"
+            echo "dhcp-option=6,${gw}"
         } >> "$conf"
         has_config=1
     fi

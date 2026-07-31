@@ -13,6 +13,7 @@ export interface NodePosition { x: number; y: number }
 export interface LayoutData {
   version: 1;
   nodes: Record<string, NodePosition>;
+  edgeHandles?: Record<string, { sourceHandle: string | null; targetHandle: string | null }>;
 }
 
 export interface ManifestEntry {

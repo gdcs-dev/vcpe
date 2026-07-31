@@ -9,6 +9,7 @@ export interface NodePosition {
 export interface LayoutData {
   version: 1;
   nodes: Record<string, NodePosition>;
+  edgeHandles?: Record<string, { sourceHandle: string | null; targetHandle: string | null }>;
 }
 
 /**

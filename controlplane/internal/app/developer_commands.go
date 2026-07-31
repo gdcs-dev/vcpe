@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
+	"sort"
 	"strings"
 
 	"github.com/gdcs-dev/vcpe/controlplane/internal/daemon"
@@ -221,10 +222,11 @@ func runRelease(opts Options) (daemon.CommandResponse, error) {
 	}
 
 	// Coherence check: every first-party service in each manifest must be stamped to version.
-	type buildKey struct{ repo, context string }
+	type buildKey struct{ repo, context, platforms string }
 	seen := map[buildKey]bool{}
 	type buildTarget struct {
 		name, repo, ctx, containerfile string
+		platforms                      []string
 	}
 	var builds []buildTarget
 	var deploymentNames []string
@@ -245,7 +247,13 @@ func runRelease(opts Options) (daemon.CommandResponse, error) {
 						"run `vcpe stamp --version %s --manifest %s` first",
 					path, svc.Name, svc.Image.Tag, version, version, path)
 			}
-			k := buildKey{svc.Image.Repository, svc.Image.BuildContext}
+			svcPlatforms := platforms
+			if len(svc.Image.Platforms) > 0 {
+				svcPlatforms = svc.Image.Platforms
+			}
+			sorted := append([]string(nil), svcPlatforms...)
+			sort.Strings(sorted)
+			k := buildKey{svc.Image.Repository, svc.Image.BuildContext, strings.Join(sorted, ",")}
 			if !seen[k] {
 				seen[k] = true
 				builds = append(builds, buildTarget{
@@ -253,6 +261,7 @@ func runRelease(opts Options) (daemon.CommandResponse, error) {
 					repo:          svc.Image.Repository,
 					ctx:           svc.Image.BuildContext,
 					containerfile: svc.Image.Containerfile,
+					platforms:     svcPlatforms,
 				})
 			}
 		}
@@ -275,7 +284,7 @@ func runRelease(opts Options) (daemon.CommandResponse, error) {
 			Tags:      []string{versionedRef, latestRef},
 			Context:   t.ctx,
 			File:      t.containerfile,
-			Platforms: platforms,
+			Platforms: t.platforms,
 		}); err != nil {
 			return daemon.CommandResponse{}, fmt.Errorf("release build %s (%s): %w", t.name, versionedRef, err)
 		}

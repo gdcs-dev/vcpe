@@ -1,7 +1,4 @@
-## Purpose
-Define the versioned image release workflow for vcpe: building, tagging, and pushing first-party container images with an explicit version tag, and stamping deployment manifests with the pinned version.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Release command builds, tags, and stamps a versioned release
 The system SHALL provide a `vcpe release` command that requires an explicit `--version <vX.Y.Z>` flag. The command SHALL execute the following sequence: (1) validate git state (must be on `main`, tag must not exist); (2) collect the manifest set — from explicit `--manifest` flags (with glob expansion) if provided, or by running `git diff --name-only -- manifests/` to auto-detect modified YAML files when `--manifest` is omitted; (3) verify coherence: for each manifest in the set, every first-party service (`image.buildContext` non-empty) MUST have `image.tag` already equal to `--version` — fail with a clear error naming the offending manifest and service if not; (4) stage all manifest files in the set (`git add`), commit (`git commit -m "release: pin images to <version>"`), create a lightweight git tag, push commit and tag to `origin`; (5) build and push all first-party images deduplicated by `(repository, buildContext, effectivePlatforms)` across all manifests, where `effectivePlatforms` is `image.platforms` if non-empty, otherwise the global `--platform` default. Each deduplicated build target is built as an OCI manifest tagged with both `:<version>` and `:latest` for its effective platform set. Third-party images SHALL be left unchanged. The command SHALL always use the Docker backend by default.
@@ -51,10 +48,3 @@ The system SHALL provide a `vcpe release` command that requires an explicit `--v
 #### Scenario: --version omitted fails immediately
 - **WHEN** an operator runs `vcpe release` without `--version`
 - **THEN** the command fails with a clear error explaining that `--version` is required
-
-### Requirement: BuildRequest supports multiple tags
-The image backend's `BuildRequest` SHALL accept a `Tags []string` field (replacing the single `Tag string`). For multi-arch `buildx build --push`, each entry in `Tags` SHALL be emitted as a separate `--tag` flag so the registry receives all tags in one build operation. Single-arch builds SHALL also respect `Tags`, emitting each as `--tag`.
-
-#### Scenario: Multi-arch release emits both versioned and latest tags
-- **WHEN** `vcpe release` issues a `BuildRequest` with `Tags: ["repo:v0.1.0", "repo:latest"]` and `Platforms: ["linux/amd64", "linux/arm64"]`
-- **THEN** the Docker adapter runs `docker buildx build --push --platform linux/amd64,linux/arm64 --tag repo:v0.1.0 --tag repo:latest ...` in a single invocation

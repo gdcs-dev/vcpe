@@ -26,7 +26,8 @@ RUN systemctl mask \
    erouter-rename.service \
    ethwan-static-apply.service \
    ethwan-static-capture.service \
-   coredump-upload.service
+   coredump-upload.service \
+   minidump-on-bootup-upload.service
 
 RUN mkdir -p /data_bak /data_bak /nvram/secure/oemdata
 
@@ -50,6 +51,11 @@ RUN rm /etc/snmp/snmpd.conf && \
 RUN sed -i \
    '/dmcli eRT retv Device.X_CISCO_COM_CableModem.MACAddress/a\        if [ -z "$mac" ]; then mac=`cat /sys/class/net/erouter0/address 2>/dev/null | tr '"'"'[a-f]'"'"' '"'"'[A-F]'"'"'`; fi' \
    /lib/rdk/utils.sh
+
+RUN sed -i 's/sleep 300/sleep 5/g' /lib/systemd/system/rfc.service
+RUN sed -i 's/sleep 60/sleep 5/g' /lib/systemd/system/ulogd.service
+RUN sed -i 's/sleep 30/sleep 5/g' /lib/systemd/system/CcspXdnsSsp.service
+RUN sed -i 's/sleep 300/sleep 5/g' /lib/systemd/system/CcspXconf.service
 
 ENTRYPOINT ["/usr/local/bin/runtime-init-xb10"]
 CMD ["/usr/local/bin/xb10-legacy-entrypoint.sh", "/sbin/init"]

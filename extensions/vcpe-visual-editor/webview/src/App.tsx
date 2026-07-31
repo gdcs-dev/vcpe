@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef } from 'react';
 import {
-  ReactFlow, Background, Controls, MiniMap,
+  ReactFlow, Background, Controls,
   useNodesState, useEdgesState, reconnectEdge,
   type Node, type Edge, type Connection, type NodeChange, type EdgeChange,
   MarkerType, ConnectionMode, addEdge,
@@ -12,7 +12,7 @@ import { applyMutation } from './yaml/serialize';
 import { computeInitialLayout } from './layout/autoLayout';
 import { useManifestStore } from './store/manifestStore';
 
-import { ServiceNode, type ServiceNodeData, type BridgeGroup } from './nodes/ServiceNode';
+import { ServiceNode, type ServiceNodeData, type ServiceItem } from './nodes/ServiceNode';
 import { InterfaceEdge } from './edges/InterfaceEdge';
 import { DependsOnEdge } from './edges/DependsOnEdge';
 
@@ -56,6 +56,8 @@ export default function App() {
   // layoutRef always holds the latest layout so the stale-closure message
   // handler can read the positions the user has dragged nodes to.
   const layoutRef = useRef<LayoutData | null>(null);
+  // edgeHandleOverridesRef persists user-set handle positions (left vs right) across canvas rebuilds.
+  const edgeHandleOverridesRef = useRef<Map<string, { sourceHandle: string | null; targetHandle: string | null }>>(new Map());
 
   // ── Extension message handler ──────────────────────────────────────────────
   useEffect(() => {
@@ -71,6 +73,10 @@ export default function App() {
           if (msg.layout) {
             layoutRef.current = msg.layout as LayoutData;
             store.setLayout(msg.layout as LayoutData);
+            const savedHandles = (msg.layout as LayoutData).edgeHandles;
+            if (savedHandles) {
+              edgeHandleOverridesRef.current = new Map(Object.entries(savedHandles));
+            }
           }
           updateCanvas(msg.yaml, layoutRef.current);
           break;
@@ -121,23 +127,29 @@ export default function App() {
         const nodeId = `service:${svc.name}`;
 
         // Separate interfaces: those with a bridge assignment vs. those without.
-        const bridgedRoles = new Set((svc.interfaces ?? []).filter(i => i.bridge).map(i => i.role));
         const nonBridgedIfaces = (svc.interfaces ?? []).filter(i => !i.bridge);
 
-        // Build bridge groups: one per declared bridge, with member interfaces.
-        const bridgeGroups: BridgeGroup[] = (svc.bridges ?? []).map(b => ({
-          name: b.name,
-          ipv4: b.ipv4,
-          members: (svc.interfaces ?? [])
-            .filter(i => i.bridge === b.name)
-            .map(i => ({
-              role: i.role,
-              device: i.device,
-              bridge: i.bridge,
-              ipv4: i.ipv4,
-              defaultRoute: i.defaultRoute,
-            })),
-        }));
+        // Build the unified sorted items list (non-bridged interfaces + bridge groups).
+        const items: ServiceItem[] = [
+          ...nonBridgedIfaces.map(i => ({
+            kind: 'interface' as const,
+            role: i.role, device: i.device, bridge: i.bridge, ipv4: i.ipv4, defaultRoute: i.defaultRoute,
+          })),
+          ...(svc.bridges ?? []).map(b => ({
+            kind: 'bridge' as const,
+            name: b.name,
+            ipv4: b.ipv4,
+            members: (svc.interfaces ?? [])
+              .filter(i => i.bridge === b.name)
+              .map(i => ({ role: i.role, device: i.device, ipv4: i.ipv4, defaultRoute: i.defaultRoute }))
+              .sort((a, b) => (a.device || a.role).localeCompare(b.device || b.role)),
+          })),
+        ];
+        items.sort((a, b) => {
+          const nameA = a.kind === 'bridge' ? a.name : (a.device || a.role);
+          const nameB = b.kind === 'bridge' ? b.name : (b.device || b.role);
+          return nameA.localeCompare(nameB);
+        });
 
         nodes.push({
           id: nodeId,
@@ -147,14 +159,7 @@ export default function App() {
             name: svc.name,
             type: svc.type,
             replicas: svc.replicas,
-            networks: nonBridgedIfaces.map(i => ({
-              role: i.role,
-              device: i.device,
-              bridge: i.bridge,
-              ipv4: i.ipv4,
-              defaultRoute: i.defaultRoute,
-            })),
-            bridges: bridgeGroups,
+            items,
           } satisfies ServiceNodeData,
           draggable: true,
         });
@@ -174,19 +179,6 @@ export default function App() {
       }
 
       // ── Network edges: one edge per (service-pair, shared-network-role) ─────
-      // When a service's interface has bridge: brlan0, the edge connects to the
-      // bridge handle (iface-bridge-brlan0) rather than iface-{role}, so the
-      // connection visually terminates at the bridge section of the service node.
-      const svcBridgeForRole = new Map<string, string>(); // "svcName:role" → bridgeName
-      for (const svc of model.spec.services) {
-        for (const iface of svc.interfaces ?? []) {
-          if (iface.bridge) svcBridgeForRole.set(`${svc.name}:${iface.role}`, iface.bridge);
-        }
-      }
-      const resolveHandle = (svcName: string, role: string): string => {
-        const bridge = svcBridgeForRole.get(`${svcName}:${role}`);
-        return bridge ? `iface-bridge-${bridge}` : `iface-${role}`;
-      };
 
       // Build: networkRole → [service names that use it]
       const netServices: Record<string, string[]> = {};
@@ -214,12 +206,14 @@ export default function App() {
           for (let j = i + 1; j < svcNames.length; j++) {
             const [a, b] = [svcNames[i], svcNames[j]].sort();
             if (!infraTypes.has(svcType[a]) && !infraTypes.has(svcType[b])) continue;
+            const edgeId = `net-${role}-${a}-${b}`;
+            const savedHandles = edgeHandleOverridesRef.current.get(edgeId);
             edges.push({
-              id: `net-${role}-${a}-${b}`,
+              id: edgeId,
               source: `service:${a}`,
               target: `service:${b}`,
-              sourceHandle: resolveHandle(a, role),
-              targetHandle: resolveHandle(b, role),
+              sourceHandle: savedHandles?.sourceHandle ?? `iface-${role}`,
+              targetHandle: savedHandles?.targetHandle ?? `iface-${role}`,
               type: 'interface',
               data: { role, cidr },
             });
@@ -248,6 +242,7 @@ export default function App() {
       const updated: LayoutData = {
         version: 1,
         nodes: { ...current.nodes, [node.id]: { x: node.position.x, y: node.position.y } },
+        edgeHandles: Object.fromEntries(edgeHandleOverridesRef.current),
       };
       layoutRef.current = updated;  // update ref immediately so DOCUMENT_UPDATED sees it
       store.setLayout(updated);
@@ -308,21 +303,25 @@ export default function App() {
   const onReconnect = useCallback(
     (oldEdge: Edge, newConnection: Connection) => {
       setRfEdges(eds => reconnectEdge(oldEdge, newConnection, eds));
+      edgeHandleOverridesRef.current.set(oldEdge.id, {
+        sourceHandle: newConnection.sourceHandle ?? oldEdge.sourceHandle,
+        targetHandle: newConnection.targetHandle ?? oldEdge.targetHandle,
+      });
+      vscode?.postMessage({ type: 'SAVE_LAYOUT', layout: {
+        version: 1,
+        nodes: layoutRef.current?.nodes ?? {},
+        edgeHandles: Object.fromEntries(edgeHandleOverridesRef.current),
+      } });
 
       if (!rawYamlRef.current) return;
       const parsed = parse(rawYamlRef.current);
       if ('error' in parsed) return;
       const currentModel = parsed.model;
 
-      const resolveHandleRole = (handle: string | null | undefined, serviceId: string | null | undefined): string | null => {
+      const resolveHandleRole = (handle: string | null | undefined): string | null => {
         if (!handle) return null;
-        if (handle.startsWith('iface-bridge-')) {
-          const bridgeName = handle.replace('iface-bridge-', '');
-          const svcName = (serviceId ?? '').replace('service:', '');
-          const svc = currentModel.spec.services.find(s => s.name === svcName);
-          return svc?.interfaces?.find(i => i.bridge === bridgeName)?.role ?? null;
-        }
-        if (handle.startsWith('iface-') && handle !== 'iface-connect') return handle.replace('iface-', '');
+        if (handle.startsWith('iface-') && handle !== 'iface-connect')
+          return handle.replace('iface-', '').replace(/-left$/, '');
         return null;
       };
 
@@ -349,7 +348,7 @@ export default function App() {
         const newDestId = (newSrc !== oldSrc && newSrc !== oldTgt) ? newSrc
                         : (newTgt !== oldSrc && newTgt !== oldTgt) ? newTgt : null;
         const newHandle = (newConnection.source === newDestId) ? newConnection.sourceHandle : newConnection.targetHandle;
-        newRole = resolveHandleRole(newHandle, newDestId);
+        newRole = resolveHandleRole(newHandle);
 
         const movedSvcType = currentModel.spec.services.find(
           s => `service:${s.name}` === movedFromId
@@ -360,12 +359,12 @@ export default function App() {
           const stayedId = (oldSrc === movedFromId) ? oldTgt : oldSrc;
           serviceName = (stayedId ?? '').replace('service:', '');
           const stayedHandle = (oldEdge.source === stayedId) ? oldEdge.sourceHandle : oldEdge.targetHandle;
-          oldRole = resolveHandleRole(stayedHandle, stayedId);
+          oldRole = resolveHandleRole(stayedHandle);
         } else {
           // Client relocation: the moved client gets the new role.
           serviceName = movedFromId.replace('service:', '');
           const oldHandle = (oldEdge.source === movedFromId) ? oldEdge.sourceHandle : oldEdge.targetHandle;
-          oldRole = resolveHandleRole(oldHandle, movedFromId);
+          oldRole = resolveHandleRole(oldHandle);
         }
       } else {
         // Both endpoints stayed on the same nodes; only a handle changed (hub-and-spoke).
@@ -375,12 +374,12 @@ export default function App() {
 
         if (tgtHandleChanged) {
           serviceName = (oldSrc ?? '').replace('service:', '');
-          oldRole = resolveHandleRole(oldEdge.sourceHandle, oldSrc);
-          newRole = resolveHandleRole(newConnection.targetHandle, newTgt);
+          oldRole = resolveHandleRole(oldEdge.sourceHandle);
+          newRole = resolveHandleRole(newConnection.targetHandle);
         } else {
           serviceName = (oldTgt ?? '').replace('service:', '');
-          oldRole = resolveHandleRole(oldEdge.targetHandle, oldTgt);
-          newRole = resolveHandleRole(newConnection.sourceHandle, newSrc);
+          oldRole = resolveHandleRole(oldEdge.targetHandle);
+          newRole = resolveHandleRole(newConnection.sourceHandle);
         }
       }
 
@@ -414,23 +413,15 @@ export default function App() {
       const srcHandle = connection.sourceHandle ?? '';
       const tgtHandle = connection.targetHandle ?? '';
 
-      // Resolve handle to network role, including bridge handles.
-      const handleToRole = (handle: string, serviceId: string): string | null => {
-        if (handle.startsWith('iface-bridge-')) {
-          const bridgeName = handle.replace('iface-bridge-', '');
-          const svcName = serviceId.replace('service:', '');
-          const svc = currentModel.spec.services.find(s => s.name === svcName);
-          return svc?.interfaces?.find(i => i.bridge === bridgeName)?.role ?? null;
-        }
-        if (handle.startsWith('iface-') && handle !== 'iface-connect') {
-          return handle.replace('iface-', '');
-        }
+      const handleToRole = (handle: string): string | null => {
+        if (handle.startsWith('iface-') && handle !== 'iface-connect')
+          return handle.replace('iface-', '').replace(/-left$/, '');
         return null;
       };
 
       const role =
-        handleToRole(srcHandle, connection.source ?? '') ??
-        handleToRole(tgtHandle, connection.target ?? '') ??
+        handleToRole(srcHandle) ??
+        handleToRole(tgtHandle) ??
         null;
 
       if (!role) return;
@@ -442,9 +433,19 @@ export default function App() {
       const svcIdx = currentModel.spec.services.findIndex(s => s.name === receivingSvc);
       if (svcIdx < 0) return;
 
+      const edgeId = `net-${role}-${[srcSvcName, tgtSvcName].sort().join('-')}`;
+      edgeHandleOverridesRef.current.set(edgeId, {
+        sourceHandle: connection.sourceHandle ?? null,
+        targetHandle: connection.targetHandle ?? null,
+      });
+      vscode?.postMessage({ type: 'SAVE_LAYOUT', layout: {
+        version: 1,
+        nodes: layoutRef.current?.nodes ?? {},
+        edgeHandles: Object.fromEntries(edgeHandleOverridesRef.current),
+      } });
       setRfEdges(eds => addEdge({
         ...connection,
-        id: `net-${role}-${[srcSvcName, tgtSvcName].sort().join('-')}`,
+        id: edgeId,
         type: 'interface',
         data: { role },
       }, eds));
@@ -587,11 +588,11 @@ export default function App() {
               connectionMode={ConnectionMode.Loose}
               onDrop={onDrop}
               onDragOver={(e) => e.preventDefault()}
+              proOptions={{ hideAttribution: true }}
               fitView
             >
               <Background />
               <Controls />
-              <MiniMap />
             </ReactFlow>
           </div>
         )}

@@ -89,11 +89,12 @@ type Service struct {
 }
 
 type Image struct {
-	Repository    string `json:"repository" yaml:"repository"`
-	Tag           string `json:"tag,omitempty" yaml:"tag,omitempty"`
-	BuildContext  string `json:"buildContext,omitempty" yaml:"buildContext,omitempty"`
-	Containerfile string `json:"containerfile,omitempty" yaml:"containerfile,omitempty"`
-	PullPolicy    string `json:"pullPolicy,omitempty" yaml:"pullPolicy,omitempty"`
+	Repository    string   `json:"repository" yaml:"repository"`
+	Tag           string   `json:"tag,omitempty" yaml:"tag,omitempty"`
+	BuildContext  string   `json:"buildContext,omitempty" yaml:"buildContext,omitempty"`
+	Containerfile string   `json:"containerfile,omitempty" yaml:"containerfile,omitempty"`
+	PullPolicy    string   `json:"pullPolicy,omitempty" yaml:"pullPolicy,omitempty"`
+	Platforms     []string `json:"platforms,omitempty" yaml:"platforms,omitempty"`
 }
 
 // Interface attaches a service to a network role. Device/MAC/addresses are

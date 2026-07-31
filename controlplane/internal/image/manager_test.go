@@ -130,6 +130,48 @@ func TestBuildWithOptionsNoCacheForcesNoCacheBuildRequest(t *testing.T) {
 	}
 }
 
+func TestBuildWithOptionsPerServicePlatformsOverridesGlobal(t *testing.T) {
+	backend := &fakeBackend{existsByRef: map[string]bool{"ghcr.io/gdcs-dev/bng:dev": true}}
+	mgr := New(backend)
+
+	doc := bngManifest(PolicyBuildIfMissing)
+	doc.Spec.Services[0].Image.Platforms = []string{"linux/arm64"}
+
+	if _, err := mgr.BuildWithOptions(context.Background(), doc, BuildOptions{
+		Platforms:  []string{"linux/amd64", "linux/arm64"},
+		ForceBuild: true,
+	}); err != nil {
+		t.Fatalf("build with options: %v", err)
+	}
+	if len(backend.builds) != 1 {
+		t.Fatalf("expected one build, got %#v", backend.builds)
+	}
+	got := backend.builds[0].Platforms
+	if len(got) != 1 || got[0] != "linux/arm64" {
+		t.Fatalf("expected platforms [linux/arm64] from service override, got %v", got)
+	}
+}
+
+func TestBuildWithOptionsNoServicePlatformsUsesGlobal(t *testing.T) {
+	backend := &fakeBackend{existsByRef: map[string]bool{"ghcr.io/gdcs-dev/bng:dev": true}}
+	mgr := New(backend)
+
+	globalPlatforms := []string{"linux/amd64", "linux/arm64"}
+	if _, err := mgr.BuildWithOptions(context.Background(), bngManifest(PolicyBuildIfMissing), BuildOptions{
+		Platforms:  globalPlatforms,
+		ForceBuild: true,
+	}); err != nil {
+		t.Fatalf("build with options: %v", err)
+	}
+	if len(backend.builds) != 1 {
+		t.Fatalf("expected one build, got %#v", backend.builds)
+	}
+	got := backend.builds[0].Platforms
+	if len(got) != 2 || got[0] != "linux/amd64" || got[1] != "linux/arm64" {
+		t.Fatalf("expected global platforms %v, got %v", globalPlatforms, got)
+	}
+}
+
 func bngManifest(policy string) manifest.Document {
 	return manifest.Document{
 		APIVersion: manifest.APIVersion,

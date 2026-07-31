@@ -85,6 +85,7 @@ func resolveNetworks(doc manifest.Document) []plan.Network {
 	// HostBridgeGateway/PodmanDNS are bridge-specific. Skip derivation for
 	// non-bridge drivers (macvlan/ipvlan have no host bridge to configure).
 	lanRoles := gatewayLANRoles(doc)
+	lanBridgeDNS := gatewayLANBridgeDNS(doc)
 	for i, n := range out {
 		if n.Driver != "" && n.Driver != "bridge" {
 			continue // non-bridge driver — no host bridge to configure
@@ -97,6 +98,14 @@ func resolveNetworks(doc manifest.Document) []plan.Network {
 			// DNS in container resolv.conf. The gateway's brlan0 dnsmasq
 			// listens there and forwards queries upstream to BNG.
 			out[i].PodmanDNS = n.IPv4.Gateway
+		} else if lanRoles[n.Role] && n.IPv4 == nil {
+			// ipamDriver:none LAN network — no network-level IPv4, but the
+			// gateway may have a container-internal bridge for this role.
+			// Use that bridge's IP as PodmanDNS so clients get a static
+			// resolv.conf pointing to the gateway dnsmasq.
+			if dns, ok := lanBridgeDNS[n.Role]; ok {
+				out[i].PodmanDNS = dns
+			}
 		} else if n.IPv4 != nil && n.IPAMDriver != "none" && n.IPv4.Gateway != "" {
 			// Non-LAN plain bridge: pass the manifest gateway to podman network
 			// create so the actual network gateway matches EROUTER0_IPV4_GATEWAY
@@ -138,6 +147,42 @@ func gatewayLANRoles(doc manifest.Document) map[string]bool {
 		}
 	}
 	return roles
+}
+
+// gatewayLANBridgeDNS returns a map of LAN network role → gateway bridge IP
+// for roles whose interfaces are enslaved to a container-internal bridge on a
+// gateway service. Used to set PodmanDNS for ipamDriver:none LAN networks so
+// clients receive a static resolv.conf pointing to the gateway dnsmasq.
+func gatewayLANBridgeDNS(doc manifest.Document) map[string]string {
+	result := map[string]string{}
+	for _, svc := range doc.Spec.Services {
+		if svc.Type != "gateway" {
+			continue
+		}
+		// bridge name → gateway IP (host part of the CIDR, e.g. "10.0.10.1")
+		bridgeGW := map[string]string{}
+		for _, b := range svc.Bridges {
+			if b.IPv4 == "" {
+				continue
+			}
+			host, _, err := net.ParseCIDR(b.IPv4)
+			if err != nil {
+				host = net.ParseIP(b.IPv4)
+			}
+			if host != nil {
+				bridgeGW[b.Name] = host.String()
+			}
+		}
+		for _, iface := range svc.Interfaces {
+			if iface.Bridge == "" {
+				continue
+			}
+			if gw, ok := bridgeGW[iface.Bridge]; ok {
+				result[iface.Role] = gw
+			}
+		}
+	}
+	return result
 }
 
 // lastUsableIP returns the last usable host address in a CIDR (broadcast - 1).
