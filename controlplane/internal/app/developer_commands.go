@@ -188,8 +188,8 @@ func runStamp(opts Options) (daemon.CommandResponse, error) {
 //  1. Validate git state (main branch, tag absent).
 //  2. Collect manifest set: ManifestPaths if provided, else auto-detect via git diff.
 //  3. Verify coherence: every first-party service tag == version.
-//  4. git add → commit → tag → push (via runGitRelease).
-//  5. Build and push images (deduplicated across all manifests).
+//  4. Build and push images (deduplicated across all manifests).
+//  5. git add → commit → tag → push (via runGitRelease).
 func runRelease(opts Options) (daemon.CommandResponse, error) {
 	version := opts.Version // validated non-empty by CLI
 
@@ -271,11 +271,6 @@ func runRelease(opts Options) (daemon.CommandResponse, error) {
 	fmt.Fprintf(&b, "release %s for deployments: %s (platforms: %s)\n",
 		version, strings.Join(deploymentNames, ", "), strings.Join(platforms, ","))
 
-	if err := runGitRelease(manifestPaths, version); err != nil {
-		return daemon.CommandResponse{}, err
-	}
-	fmt.Fprintf(&b, "git: committed, tagged %s, and pushed to origin\n", version)
-
 	backend := newImageBackend(backendName)
 	for _, t := range builds {
 		versionedRef := fmt.Sprintf("%s:%s", t.repo, version)
@@ -288,8 +283,21 @@ func runRelease(opts Options) (daemon.CommandResponse, error) {
 		}); err != nil {
 			return daemon.CommandResponse{}, fmt.Errorf("release build %s (%s): %w", t.name, versionedRef, err)
 		}
+		// Multi-platform builds push via buildx --push; single-platform builds need an explicit push.
+		if len(t.platforms) <= 1 {
+			for _, ref := range []string{versionedRef, latestRef} {
+				if err := backend.PushImage(context.Background(), image.PushRequest{Reference: ref}); err != nil {
+					return daemon.CommandResponse{}, fmt.Errorf("release push %s (%s): %w", t.name, ref, err)
+				}
+			}
+		}
 		fmt.Fprintf(&b, "  %s: pushed as %s, %s\n", t.name, versionedRef, latestRef)
 	}
+
+	if err := runGitRelease(manifestPaths, version); err != nil {
+		return daemon.CommandResponse{}, err
+	}
+	fmt.Fprintf(&b, "git: committed, tagged %s, and pushed to origin\n", version)
 
 	fmt.Fprintf(&b, "release %s complete", version)
 	return daemon.CommandResponse{Message: strings.TrimRight(b.String(), "\n")}, nil
