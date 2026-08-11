@@ -24,7 +24,8 @@ const TypeName = "bng"
 
 // Config is the typed configuration for a BNG service.
 type Config struct {
-	Access []AccessSegment `yaml:"access"`
+	Access []AccessSegment   `yaml:"access"`
+	Env    map[string]string `yaml:"env,omitempty"`
 }
 
 // AccessSegment configures DHCP/RADVD service on one access role. The role must
@@ -157,6 +158,15 @@ func (renderer) Render(_ context.Context, input render.Input) (render.Result, er
 		}
 	}
 	composeYAML := renderBNGCompose(input.Service.Name, inst.Interfaces, input.Service.Volumes, ipamNone)
+
+	if len(cfg.Env) > 0 {
+		extra := make([]string, 0, len(cfg.Env))
+		for k, v := range cfg.Env {
+			extra = append(extra, k+"="+v)
+		}
+		sort.Strings(extra)
+		env = append(env, extra...)
+	}
 
 	return render.Result{
 		Renderer: "bng-renderer",

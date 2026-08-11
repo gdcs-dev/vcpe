@@ -21,7 +21,7 @@ import { PropertyPanel } from './panels/PropertyPanel';
 import { ManifestDropdown } from './panels/ManifestDropdown';
 import { WelcomeScreen } from './panels/WelcomeScreen';
 
-import type { ServiceTypeDescriptor, LayoutData } from './types';
+import type { ServiceTypeDescriptor, LayoutData, DropTemplate, PaletteVariant } from './types';
 import type { Network } from './yaml/parse';
 
 import { vscodeApi as vscode } from './vsCodeApi';
@@ -32,16 +32,50 @@ const DEFAULT_NETWORKS: Record<string, Omit<Network, 'role'>> = {
   'mgmt':  { ipv4: { cidr: '10.10.10.0/24',  gateway: '10.10.10.1',  pool: { start: '10.10.10.10',  end: '10.10.10.250'  } } },
   'wan':   { nat: true, firewall: true, ipamDriver: 'none', ipv4: { cidr: '10.7.200.0/24', gateway: '10.7.200.1', pool: { start: '10.7.200.10', end: '10.7.200.250' } } },
   'cm':    { ipamDriver: 'none', ipv4: { cidr: '10.7.201.0/24', gateway: '10.7.201.1', pool: { start: '10.7.201.10', end: '10.7.201.250' } } },
-  'lan-p1':{ ipamDriver: 'none', ipv4: { cidr: '192.168.10.0/24', gateway: '192.168.10.1', pool: { start: '192.168.10.10', end: '192.168.10.250' } } },
-  'lan-p2':{ ipamDriver: 'none', ipv4: { cidr: '192.168.20.0/24', gateway: '192.168.20.1', pool: { start: '192.168.20.10', end: '192.168.20.250' } } },
-  'lan-p3':{ ipamDriver: 'none', ipv4: { cidr: '192.168.30.0/24', gateway: '192.168.30.1', pool: { start: '192.168.30.10', end: '192.168.30.250' } } },
-  'lan-p4':{ ipamDriver: 'none', ipv4: { cidr: '192.168.40.0/24', gateway: '192.168.40.1', pool: { start: '192.168.40.10', end: '192.168.40.250' } } },
+  'lan-p1':{ ipamDriver: 'none' },
+  'lan-p2':{ ipamDriver: 'none' },
+  'lan-p3':{ ipamDriver: 'none' },
+  'lan-p4':{ ipamDriver: 'none' },
+};
+
+// Built-in drop templates; applied when no vcpe.serviceDropDefaults entry is set for the type.
+const DEFAULT_SERVICE_TEMPLATES: Record<string, DropTemplate> = {
+  bng: {
+    interfaces: [
+      { role: 'mgmt', device: 'mgmt', sharing: 'unique' },
+      { role: 'wan',  device: 'wan',  sharing: 'unique' },
+      { role: 'cm',   device: 'cm',   sharing: 'unique' },
+    ],
+  },
+  gateway: {
+    interfaces: [
+      { role: 'wan',    device: 'wan0',    sharing: 'shared' },
+      { role: 'cm',     device: 'erouter0', sharing: 'shared' },
+      { role: 'lan-p1', device: 'eth0', bridge: 'brlan0', sharing: 'unique' },
+      { role: 'lan-p2', device: 'eth1', bridge: 'brlan1', sharing: 'unique' },
+    ],
+    bridges: [
+      { name: 'brlan0', ipv4: '10.0.0.1/24' },
+      { name: 'brlan1', ipv4: '10.0.10.1/24' },
+    ],
+  },
+  xb10: {
+    interfaces: [
+      { role: 'wan',   device: 'wan0', sharing: 'shared' },
+      { role: 'cm',    device: 'cm0',  sharing: 'shared' },
+      { role: 'lan-p1', device: 'eth0', sharing: 'unique' },
+      { role: 'lan-p2', device: 'eth1', sharing: 'unique' },
+      { role: 'lan-p3', device: 'eth2', sharing: 'unique' },
+      { role: 'lan-p4', device: 'eth3', sharing: 'unique' },
+    ],
+  },
 };
 
 // ─── Custom node/edge registration ───────────────────────────────────────────
 const nodeTypes = {
   service: ServiceNode,
 };
+
 const edgeTypes = {
   interface: InterfaceEdge,
   dependsOn: DependsOnEdge,
@@ -69,6 +103,8 @@ export default function App() {
         case 'INIT': {
           rawYamlRef.current = msg.yaml ?? '';
           store.setTypes(msg.types ?? [], msg.typesError ?? null);
+          store.setDropDefaults(msg.dropDefaults ?? {});
+          store.setPaletteVariants((msg.paletteVariants ?? []).map((v: PaletteVariant) => ({ ...v, _variant: true as const })));
           store.setManifestPath(msg.manifestPath ?? null);
           if (msg.layout) {
             layoutRef.current = msg.layout as LayoutData;
@@ -196,7 +232,9 @@ export default function App() {
       for (const svc of model.spec.services) svcType[svc.name] = svc.type;
 
       // Infrastructure service types that "own" networks.
-      const infraTypes = new Set(['bng', 'gateway']);
+      // rootInfraTypes (bng) connect to all peers; non-root infra (gateway, xb10) connect only to clients.
+      const infraTypes = new Set(['bng', 'gateway', 'xb10']);
+      const rootInfraTypes = new Set(['bng']);
 
       for (const [role, svcNames] of Object.entries(netServices)) {
         if (svcNames.length < 2) continue;
@@ -205,7 +243,11 @@ export default function App() {
         for (let i = 0; i < svcNames.length; i++) {
           for (let j = i + 1; j < svcNames.length; j++) {
             const [a, b] = [svcNames[i], svcNames[j]].sort();
-            if (!infraTypes.has(svcType[a]) && !infraTypes.has(svcType[b])) continue;
+            const aIsInfra = infraTypes.has(svcType[a]);
+            const bIsInfra = infraTypes.has(svcType[b]);
+            // Skip client↔client and CPE↔CPE (gateway/xb10 peer) pairs.
+            if (!aIsInfra && !bIsInfra) continue;
+            if (aIsInfra && bIsInfra && !rootInfraTypes.has(svcType[a]) && !rootInfraTypes.has(svcType[b])) continue;
             const edgeId = `net-${role}-${a}-${b}`;
             const savedHandles = edgeHandleOverridesRef.current.get(edgeId);
             edges.push({
@@ -272,10 +314,29 @@ export default function App() {
       for (const r of removals) {
         const serviceName = r.id.replace('service:', '');
         if (!rawYamlRef.current) continue;
-        const { newYaml, description } = applyMutation(rawYamlRef.current, {
+
+        // Find network roles that will be orphaned after this service is removed.
+        const preDel = parse(rawYamlRef.current);
+        const orphanedRoles: string[] = [];
+        if (!('error' in preDel)) {
+          const deletedIfaces = preDel.model.spec.services
+            .find(s => s.name === serviceName)?.interfaces ?? [];
+          const otherServices = preDel.model.spec.services.filter(s => s.name !== serviceName);
+          for (const iface of deletedIfaces) {
+            const usedElsewhere = otherServices.some(s => (s.interfaces ?? []).some(i => i.role === iface.role));
+            if (!usedElsewhere) orphanedRoles.push(iface.role);
+          }
+        }
+
+        let { newYaml, description } = applyMutation(rawYamlRef.current, {
           kind: 'deleteService',
           name: serviceName,
         });
+
+        for (const role of orphanedRoles) {
+          ({ newYaml, description } = applyMutation(newYaml, { kind: 'deleteNetwork', role }));
+        }
+
         rawYamlRef.current = newYaml;
         vscode?.postMessage({ type: 'CANVAS_MUTATION', newYaml, description });
       }
@@ -472,58 +533,165 @@ export default function App() {
       event.preventDefault();
       const data = event.dataTransfer.getData('text/plain');
       if (!data) return;
-      const typeDesc: ServiceTypeDescriptor = JSON.parse(data);
+      const payload = JSON.parse(data) as (ServiceTypeDescriptor | PaletteVariant);
 
-      // Generate a unique name: <type>-<n> where n is one above the highest existing index.
+      // Resolve the base type name and drop template.
+      // Precedence: variant template → serviceDropDefaults override → ExpectedRoles() fallback.
+      const isVariant = (payload as PaletteVariant)._variant === true;
+      const baseType = isVariant ? (payload as PaletteVariant).type : (payload as ServiceTypeDescriptor).name;
+      const typeDesc = store.types.find(t => t.name === baseType);
+
+      type TemplateIface = { role: string; device?: string; bridge?: string; sharing?: 'shared' | 'unique' };
+      type Template = { interfaces: TemplateIface[]; bridges?: Array<{ name: string; ipv4?: string }> };
+
+      let template: Template | null = null;
+      if (isVariant) {
+        const v = payload as PaletteVariant;
+        template = { interfaces: v.interfaces, bridges: v.bridges };
+      } else if (store.dropDefaults[baseType]) {
+        template = store.dropDefaults[baseType];
+      } else if (DEFAULT_SERVICE_TEMPLATES[baseType]) {
+        template = DEFAULT_SERVICE_TEMPLATES[baseType];
+      }
+
+      // Generate a unique name using the base type stem.
       const model = store.model;
       const existing = (model?.spec.services ?? [])
         .map(s => s.name)
-        .filter(n => n === typeDesc.name || n.startsWith(`${typeDesc.name}-`));
+        .filter(n => n === baseType || n.startsWith(`${baseType}-`));
       const indices = existing
-        .map(n => parseInt(n.replace(`${typeDesc.name}-`, ''), 10))
+        .map(n => parseInt(n.replace(`${baseType}-`, ''), 10))
         .filter(n => !isNaN(n));
       const next = indices.length > 0 ? Math.max(...indices) + 1 : 1;
-      const name = existing.includes(typeDesc.name) || existing.length > 0
-        ? `${typeDesc.name}-${next}`
-        : typeDesc.name;
+      const name = existing.includes(baseType) || existing.length > 0
+        ? `${baseType}-${next}`
+        : baseType;
 
       if (!rawYamlRef.current) return;
 
-      // Parse current YAML to find existing networks
       const preDrop = parse(rawYamlRef.current);
       const existingRoles = new Set(
         'error' in preDrop ? [] : preDrop.model.spec.networks.map(n => n.role)
       );
 
+      // Suffix for unique roles: find the smallest N where all unique roles are available,
+      // independent of same-type service count (e.g. first xb10 still needs a suffix when
+      // lan-p1 already exists from a gateway).
+      const suffix = existing.length === 0 ? '' : `-${next}`;
+
       let currentYaml = rawYamlRef.current;
 
-      // Create any missing networks for this service's expected roles using defaults
-      for (const r of typeDesc.expectedRoles) {
-        if (existingRoles.has(r.role)) continue;
-        const defaults = DEFAULT_NETWORKS[r.role];
-        if (!defaults) continue;
-        const { newYaml } = applyMutation(currentYaml, {
-          kind: 'insertNetwork',
-          network: { role: r.role, ...defaults },
-        });
-        currentYaml = newYaml;
-        existingRoles.add(r.role);
-      }
+      if (template) {
+        // ── Template path: explicit interface definitions ─────────────────────
+        // Compute a role suffix that guarantees all unique roles are free.
+        const uniqueRoles = template.interfaces
+          .filter(i => (i.sharing ?? 'shared') === 'unique')
+          .map(i => i.role);
+        let roleSuffix = '';
+        if (uniqueRoles.some(r => existingRoles.has(r))) {
+          for (let n = 1; ; n++) {
+            const candidate = `-${n}`;
+            if (uniqueRoles.every(r => !existingRoles.has(`${r}${candidate}`))) {
+              roleSuffix = candidate;
+              break;
+            }
+          }
+        }
 
-      const mutation = applyMutation(currentYaml, {
-        kind: 'insertService',
-        service: {
-          name,
-          type: typeDesc.name,
-          replicas: 1,
-          image: { repository: typeDesc.defaultImage, tag: 'dev', pullPolicy: 'build-if-missing' },
-          interfaces: typeDesc.expectedRoles.map(r => ({ role: r.role })),
-        },
-      });
-      rawYamlRef.current = mutation.newYaml;
-      vscode?.postMessage({ type: 'CANVAS_MUTATION', newYaml: mutation.newYaml, description: mutation.description });
+        // Map each template interface to its actual role/bridge name.
+        const ifaceMap = template.interfaces.map(iface => {
+          const sharing = iface.sharing ?? 'shared';
+          const actualRole = sharing === 'unique' ? `${iface.role}${roleSuffix}` : iface.role;
+          const actualBridge = (iface.bridge && sharing === 'unique') ? `${iface.bridge}${roleSuffix}` : iface.bridge;
+          return { ...iface, actualRole, actualBridge };
+        });
+
+        // Create any missing networks for the actual roles.
+        for (const iface of ifaceMap) {
+          if (existingRoles.has(iface.actualRole)) continue;
+          const defaults = DEFAULT_NETWORKS[iface.role];
+          if (!defaults) continue;
+          // Strip ipv4 from suffixed unique networks to avoid CIDR conflicts.
+          const networkConfig = roleSuffix ? { ...defaults, ipv4: undefined } : defaults;
+          const { newYaml } = applyMutation(currentYaml, {
+            kind: 'insertNetwork',
+            network: { role: iface.actualRole, ...networkConfig },
+          });
+          currentYaml = newYaml;
+          existingRoles.add(iface.actualRole);
+        }
+
+        // Resolve bridges: apply roleSuffix to any bridge referenced by a unique interface.
+        const resolvedBridges = (template.bridges ?? []).map(b => {
+          const isUniqueBridge = template!.interfaces.some(
+            i => i.bridge === b.name && (i.sharing ?? 'shared') === 'unique'
+          );
+          return { ...b, name: isUniqueBridge ? `${b.name}${roleSuffix}` : b.name };
+        });
+
+        const mutation = applyMutation(currentYaml, {
+          kind: 'insertService',
+          service: {
+            name,
+            type: baseType,
+            replicas: 1,
+            image: { repository: typeDesc?.defaultImage ?? '', tag: 'dev', pullPolicy: 'build-if-missing' },
+            interfaces: ifaceMap.map(i => ({
+              role: i.actualRole,
+              ...(i.device ? { device: i.device } : {}),
+              ...(i.actualBridge ? { bridge: i.actualBridge } : {}),
+            })),
+            ...(resolvedBridges.length > 0 ? { bridges: resolvedBridges } : {}),
+          },
+        });
+        rawYamlRef.current = mutation.newYaml;
+        vscode?.postMessage({ type: 'CANVAS_MUTATION', newYaml: mutation.newYaml, description: mutation.description });
+      } else {
+        // ── Fallback path: derive from ExpectedRoles() ────────────────────────
+        if (!typeDesc) return;
+
+        // Roles used by bng are upstream shared networks; all others are per-CPE LAN networks.
+        const bngRoles = new Set(
+          'error' in preDrop ? [] :
+          preDrop.model.spec.services
+            .filter(s => s.type === 'bng')
+            .flatMap(s => (s.interfaces ?? []).map(i => i.role))
+        );
+
+        const roleMap: Record<string, string> = {};
+        for (const r of typeDesc.expectedRoles) {
+          const isShared = bngRoles.has(r.role) || !existingRoles.has(r.role) || suffix === '';
+          roleMap[r.role] = isShared ? r.role : `${r.role}${suffix}`;
+        }
+
+        for (const r of typeDesc.expectedRoles) {
+          const actualRole = roleMap[r.role];
+          if (existingRoles.has(actualRole)) continue;
+          const defaults = DEFAULT_NETWORKS[r.role];
+          if (!defaults) continue;
+          const { newYaml } = applyMutation(currentYaml, {
+            kind: 'insertNetwork',
+            network: { role: actualRole, ...defaults },
+          });
+          currentYaml = newYaml;
+          existingRoles.add(actualRole);
+        }
+
+        const mutation = applyMutation(currentYaml, {
+          kind: 'insertService',
+          service: {
+            name,
+            type: baseType,
+            replicas: 1,
+            image: { repository: typeDesc.defaultImage, tag: 'dev', pullPolicy: 'build-if-missing' },
+            interfaces: typeDesc.expectedRoles.map(r => ({ role: roleMap[r.role] })),
+          },
+        });
+        rawYamlRef.current = mutation.newYaml;
+        vscode?.postMessage({ type: 'CANVAS_MUTATION', newYaml: mutation.newYaml, description: mutation.description });
+      }
     },
-    [store.model]
+    [store.model, store.types, store.dropDefaults]
   );
 
   // ── Render ────────────────────────────────────────────────────────────────
@@ -551,7 +719,7 @@ export default function App() {
 
       {/* Canvas area */}
       <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
-        <TypePalette types={store.types} typesError={store.typesError} />
+        <TypePalette types={store.types} typesError={store.typesError} paletteVariants={store.paletteVariants} />
 
         {/* Error overlay */}
         {store.yamlError ? (

@@ -1,7 +1,6 @@
 import { create } from 'zustand';
 import type { ManifestModel } from './yaml/parse';
-import type { ServiceTypeDescriptor } from './types';
-import type { LayoutData } from './types';
+import type { ServiceTypeDescriptor, LayoutData, DropTemplate, PaletteVariant } from './types';
 
 interface ManifestState {
   // Manifest state
@@ -12,6 +11,8 @@ interface ManifestState {
   // Type palette
   types: ServiceTypeDescriptor[];
   typesError: string | null;
+  dropDefaults: Record<string, DropTemplate>;
+  paletteVariants: PaletteVariant[];
 
   // Layout
   layout: LayoutData | null;
@@ -25,6 +26,8 @@ interface ManifestState {
   setModel: (model: ManifestModel, yaml: string) => void;
   setYamlError: (error: string, line?: number) => void;
   setTypes: (types: ServiceTypeDescriptor[], error: string | null) => void;
+  setDropDefaults: (defaults: Record<string, DropTemplate>) => void;
+  setPaletteVariants: (variants: PaletteVariant[]) => void;
   setLayout: (layout: LayoutData) => void;
   setManifestPath: (path: string) => void;
   selectNode: (id: string | null) => void;
@@ -37,6 +40,8 @@ export const useManifestStore = create<ManifestState>((set) => ({
   yamlErrorLine: undefined,
   types: [],
   typesError: null,
+  dropDefaults: {},
+  paletteVariants: [],
   layout: null,
   manifestPath: null,
   selectedNodeId: null,
@@ -45,6 +50,8 @@ export const useManifestStore = create<ManifestState>((set) => ({
   setModel: (model) => set({ model, yamlError: null, yamlErrorLine: undefined }),
   setYamlError: (error, line) => set({ yamlError: error, yamlErrorLine: line, model: null }),
   setTypes: (types, typesError) => set({ types, typesError }),
+  setDropDefaults: (dropDefaults) => set({ dropDefaults }),
+  setPaletteVariants: (paletteVariants) => set({ paletteVariants }),
   setLayout: (layout) => set({ layout }),
   setManifestPath: (manifestPath) => set({ manifestPath }),
   selectNode: (selectedNodeId) => set({ selectedNodeId }),

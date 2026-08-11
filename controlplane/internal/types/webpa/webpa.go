@@ -6,6 +6,7 @@ package webpa
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 
@@ -23,12 +24,18 @@ type serviceType struct{}
 
 func (serviceType) Type() string { return TypeName }
 
-// ValidateConfig rejects any config: WebPA takes none.
+// Config is the optional configuration for a webpa service.
+type Config struct {
+	Env map[string]string `yaml:"env,omitempty"`
+}
+
+// ValidateConfig accepts an optional env map; all other config is rejected.
 func (serviceType) ValidateConfig(node yaml.Node) error {
-	if node.Kind != 0 {
-		return fmt.Errorf("webpa does not accept config")
+	if node.Kind == 0 {
+		return nil
 	}
-	return nil
+	var cfg Config
+	return typeregistry.StrictDecode(node, &cfg)
 }
 
 func (serviceType) Renderer() render.Renderer { return renderer{} }
@@ -57,6 +64,17 @@ func (renderer) Render(_ context.Context, input render.Input) (render.Result, er
 	}
 	inst := input.Service.Instances[0]
 	env := render.IfaceEnv(input.Deployment, input.Service, inst)
+
+	var cfg Config
+	_ = typeregistry.StrictDecode(input.Service.Config, &cfg)
+	if len(cfg.Env) > 0 {
+		extra := make([]string, 0, len(cfg.Env))
+		for k, v := range cfg.Env {
+			extra = append(extra, k+"="+v)
+		}
+		sort.Strings(extra)
+		env = append(env, extra...)
+	}
 
 	ipamNone := map[string]bool{}
 	for _, n := range input.Deployment.Networks {

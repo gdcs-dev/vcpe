@@ -101,10 +101,10 @@ start_dhcp_client() {
     log "starting DHCP client on $iface"
     ip link set "$iface" up || true
     # udhcpc -q -b -i "$iface" -p "/tmp/udhcpc.${iface}.pid" -s /etc/udhcpc.script -x "hostname:$(hostname)"
-    log "writing resolv.conf: nameserver ${EROUTER0_IPV4_GATEWAY}"
-    cat > /etc/resolv.conf <<EOF
-nameserver ${EROUTER0_IPV4_GATEWAY}
-EOF
+    # Write BNG gateway as dnsmasq's upstream; keep /etc/resolv.conf on local dnsmasq.
+    log "writing upstream resolver: nameserver ${EROUTER0_IPV4_GATEWAY}"
+    printf 'nameserver %s\n' "${EROUTER0_IPV4_GATEWAY}" > /etc/upstream-resolv.conf
+    printf 'nameserver %s\n' "${LAN_DNS:-10.0.0.1}" > /etc/resolv.conf
 }
 
 log "xb10 entrypoint starting (CM device: ${IFACE_CM_DEVICE:-cm0})"

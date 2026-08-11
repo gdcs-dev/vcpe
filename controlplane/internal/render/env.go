@@ -56,6 +56,9 @@ func IfaceEnv(dep plan.Deployment, svc plan.Service, inst plan.Instance) []strin
 			prefix+"GATEWAY4="+iface.Gateway4,
 			prefix+"GATEWAY6="+iface.Gateway6,
 		)
+		if iface.DefaultRoute {
+			lines = append(lines, prefix+"DEFAULT_ROUTE=1")
+		}
 	}
 
 	head := lines[:3]

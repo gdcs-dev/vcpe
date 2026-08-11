@@ -1,16 +1,13 @@
 import React from 'react';
-import type { ServiceTypeDescriptor } from '../types';
+import type { ServiceTypeDescriptor, PaletteVariant } from '../types';
 
 interface Props {
   types: ServiceTypeDescriptor[];
   typesError: string | null;
-  onDrop?: (type: ServiceTypeDescriptor, position: { x: number; y: number }) => void;
+  paletteVariants: PaletteVariant[];
 }
 
-/**
- * TypePalette renders draggable service type cards populated from vcpe service types --json.
- */
-export function TypePalette({ types, typesError }: Props) {
+export function TypePalette({ types, typesError, paletteVariants }: Props) {
   if (typesError) {
     return (
       <div style={styles.container}>
@@ -55,6 +52,34 @@ export function TypePalette({ types, typesError }: Props) {
       ))}
       {types.length === 0 && (
         <div style={{ padding: 12, color: '#666', fontSize: 11 }}>Loading…</div>
+      )}
+
+      {paletteVariants.length > 0 && (
+        <>
+          <div style={{ ...styles.header, marginTop: 8, borderTop: '1px solid #333', paddingTop: 12 }}>Variants</div>
+          {paletteVariants.map((v, i) => (
+            <div
+              key={`variant-${i}`}
+              draggable
+              onDragStart={(e) => {
+                e.dataTransfer.setData('text/plain', JSON.stringify(v));
+                e.dataTransfer.effectAllowed = 'copy';
+              }}
+              style={{ ...styles.card, borderColor: '#9B59B622', background: '#9B59B611' }}
+              title={v.description ?? v.label}
+            >
+              <div style={styles.cardName}>{v.label}</div>
+              <div style={styles.cardDesc}>{v.description ?? `${v.type} variant`}</div>
+              {v.interfaces.length > 0 && (
+                <div style={styles.cardRoles}>
+                  {v.interfaces.map(iface => (
+                    <span key={iface.role} style={styles.roleTag}>{iface.role}</span>
+                  ))}
+                </div>
+              )}
+            </div>
+          ))}
+        </>
       )}
     </div>
   );

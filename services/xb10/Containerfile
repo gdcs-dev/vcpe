@@ -36,7 +36,9 @@ RUN ln -s /bin/ifconfig /sbin/ifconfig
 ENV SDKTARGETSYSROOT=/
 ENV TARGET_ARCH=${TARGET_ARCH}
 
-RUN echo 'MODEL_NAME=xb10-simulator' >> /etc/device.properties
+#RUN echo 'MODEL_NAME=xb10-simulator' >> /etc/device.properties
+RUN echo 'MODEL_NAME=SG417DBCT' >> /etc/device.properties
+
 RUN echo 'PS1="[\u@xb10-dev \W]\\$ "' >> /home/root/.bashrc
 
 COPY container/runtime-init-xb10 /usr/local/bin/runtime-init-xb10
@@ -52,10 +54,16 @@ RUN sed -i \
    '/dmcli eRT retv Device.X_CISCO_COM_CableModem.MACAddress/a\        if [ -z "$mac" ]; then mac=`cat /sys/class/net/erouter0/address 2>/dev/null | tr '"'"'[a-f]'"'"' '"'"'[A-F]'"'"'`; fi' \
    /lib/rdk/utils.sh
 
+RUN sed -i 's|https://webpa.rdkcentral.com:8080|http://talaria:6200|g' /etc/partners_defaults.json
+RUN sed -i 's|https://webpa-token.com|http://themis:6501|g' /etc/partners_defaults.json
+RUN sed -i 's|webpa.rdkcentral.com|webpa|g' /etc/partners_defaults.json
 RUN sed -i 's/sleep 300/sleep 5/g' /lib/systemd/system/rfc.service
 RUN sed -i 's/sleep 60/sleep 5/g' /lib/systemd/system/ulogd.service
 RUN sed -i 's/sleep 30/sleep 5/g' /lib/systemd/system/CcspXdnsSsp.service
 RUN sed -i 's/sleep 300/sleep 5/g' /lib/systemd/system/CcspXconf.service
+RUN sed -i 's/sleep 30/sleep 5/g' /lib/systemd/system/CcspAdvSecuritySsp.service
+RUN sed -i 's/CaptivePortal_Enable=true/CaptivePortal_Enable=false/g' /etc/utopia/system_defaults
+
 
 ENTRYPOINT ["/usr/local/bin/runtime-init-xb10"]
 CMD ["/usr/local/bin/xb10-legacy-entrypoint.sh", "/sbin/init"]

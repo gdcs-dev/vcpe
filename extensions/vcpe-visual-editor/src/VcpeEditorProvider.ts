@@ -50,6 +50,7 @@ export class VcpeEditorProvider implements vscode.CustomTextEditorProvider {
 
     // Send initial data once the webview signals it is ready
     const sendInitialState = () => {
+      const cfg = vscode.workspace.getConfiguration('vcpe');
       webviewPanel.webview.postMessage({
         type: 'INIT',
         yaml: document.getText(),
@@ -57,6 +58,8 @@ export class VcpeEditorProvider implements vscode.CustomTextEditorProvider {
         typesError: types instanceof Error ? types.message : null,
         layout,
         manifestPath,
+        dropDefaults: cfg.get('serviceDropDefaults') ?? {},
+        paletteVariants: cfg.get('paletteVariants') ?? [],
       });
     };
 

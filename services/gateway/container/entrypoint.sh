@@ -194,7 +194,9 @@ main() {
         iptables -t nat -A POSTROUTING -o "${IFACE_WAN_DEVICE}" -j MASQUERADE || true
     fi
     
-    if [[ -n "${IFACE_LAN_P1_GATEWAY4:-}" ]]; then
+    if [[ -n "${LAN_DNS:-}" ]]; then
+        echo "nameserver ${LAN_DNS}" > /etc/resolv.conf
+    elif [[ -n "${IFACE_LAN_P1_GATEWAY4:-}" ]]; then
         echo "nameserver ${IFACE_LAN_P1_GATEWAY4}" > /etc/resolv.conf
     elif [[ -n "${BNG_DNS_SERVER:-}" ]]; then
         echo "nameserver ${BNG_DNS_SERVER}" > /etc/resolv.conf

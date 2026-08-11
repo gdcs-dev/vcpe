@@ -28,6 +28,84 @@ type Config struct {
 	Volumes []string          `yaml:"volumes,omitempty"`
 }
 
+// entrypointSH is the init script embedded in every generic-container render.
+// It reads VCPE_INIT_* vars to perform identity → network → dns → exec.
+const entrypointSH = `#!/bin/sh
+set -e
+
+# ── Identity ─────────────────────────────────────────────────────────────────
+
+_vcpe_hostname="${VCPE_INIT_HOSTNAME:-}"
+if [ -n "$_vcpe_hostname" ]; then
+    hostname "$_vcpe_hostname"
+fi
+
+if [ -n "${VCPE_INIT_MAC_ROLE:-}" ]; then
+    _mac_key=$(printf '%s' "$VCPE_INIT_MAC_ROLE" | tr 'a-z-' 'A-Z_')
+    _mac_dev=$(eval "printf '%s' \"\${IFACE_${_mac_key}_DEVICE:-}\"")
+    _mac_val=$(eval "printf '%s' \"\${IFACE_${_mac_key}_MAC:-}\"")
+    if [ -n "$_mac_dev" ] && [ -n "$_mac_val" ]; then
+        ip link set "$_mac_dev" down
+        ip link set "$_mac_dev" address "$_mac_val"
+        ip link set "$_mac_dev" up
+    fi
+fi
+
+# ── Network ───────────────────────────────────────────────────────────────────
+
+_dr_prefix=$(env | awk -F= '$1 ~ /^IFACE_.*_DEFAULT_ROUTE$/ && $2 == "1" {
+    sub(/_DEFAULT_ROUTE$/, "", $1); print $1; exit }')
+
+if [ -n "$_dr_prefix" ]; then
+    _dr_dev=$(eval "printf '%s' \"\${${_dr_prefix}_DEVICE:-}\"")
+    _dr_key="${_dr_prefix#IFACE_}"
+    _dr_role=$(printf '%s' "$_dr_key" | tr 'A-Z_' 'a-z-')
+    ip link set "$_dr_dev" up 2>/dev/null || true
+
+    if [ "${VCPE_INIT_STATIC_ROLE:-}" = "$_dr_role" ]; then
+        _s_ipv4=$(eval "printf '%s' \"\${${_dr_prefix}_IPV4:-}\"")
+        _s_gw4=$(eval  "printf '%s' \"\${${_dr_prefix}_GATEWAY4:-}\"")
+        [ -n "$_s_ipv4" ] && ip addr add "$_s_ipv4" dev "$_dr_dev"
+        [ -n "$_s_gw4"  ] && ip route replace default via "$_s_gw4" dev "$_dr_dev"
+    else
+        _dhcp_host="${_vcpe_hostname:-$(hostname)}"
+        _n=0
+        until udhcpc -n -q -i "$_dr_dev" -x "hostname:${_dhcp_host}" 2>/dev/null; do
+            _n=$((_n + 1))
+            [ "$_n" -ge 100 ] && break
+            sleep 3
+        done
+    fi
+fi
+
+# ── DNS override ─────────────────────────────────────────────────────────────
+
+if [ -n "${VCPE_INIT_NAMESERVER_FROM:-}" ]; then
+    _ns_key=$(printf '%s' "$VCPE_INIT_NAMESERVER_FROM" | tr 'a-z-' 'A-Z_')
+    _ns_val=$(eval "printf '%s' \"\${IFACE_${_ns_key}_GATEWAY4:-}\"")
+    [ -n "$_ns_val" ] && printf 'nameserver %s\n' "$_ns_val" > /etc/resolv.conf
+elif [ "${VCPE_INIT_NAMESERVER_FROM_ROUTE:-}" = "1" ]; then
+    # Wait separately for the default route — udhcpc sets it just after the IP.
+    _n=0
+    _ns_val=""
+    while [ "$_n" -lt 10 ]; do
+        _ns_val=$(ip route show default 2>/dev/null | awk '/default via/{print $3; exit}')
+        [ -n "$_ns_val" ] && break
+        sleep 0.5
+        _n=$((_n + 1))
+    done
+    [ -n "$_ns_val" ] && printf 'nameserver %s\n' "$_ns_val" > /etc/resolv.conf
+elif [ -n "${VCPE_INIT_NAMESERVER:-}" ]; then
+    printf 'nameserver %s\n' "$VCPE_INIT_NAMESERVER" > /etc/resolv.conf
+fi
+
+# ── Settle delay ─────────────────────────────────────────────────────────────
+
+[ -n "${VCPE_INIT_SLEEP:-}" ] && sleep "$VCPE_INIT_SLEEP"
+
+exec "$@"
+`
+
 type serviceType struct{}
 
 func (serviceType) Type() string { return TypeName }
@@ -95,7 +173,7 @@ func (renderer) Render(_ context.Context, input render.Input) (render.Result, er
 	sort.Strings(extra)
 	env = append(env, extra...)
 
-	composeYAML, err := generateCompose(input, cfg, lanDNS)
+	composeYAML, err := generateCompose(input, cfg)
 	if err != nil {
 		return render.Result{}, err
 	}
@@ -103,20 +181,7 @@ func (renderer) Render(_ context.Context, input render.Input) (render.Result, er
 	artifacts := []render.Artifact{
 		{Key: "compose.env", Content: strings.Join(env, "\n") + "\n"},
 		{Key: "compose.yaml", Content: composeYAML},
-	}
-
-	// When any interface connects to a gateway LAN network, emit a static
-	// resolv.conf and mount it over /etc/resolv.conf. This overrides
-	// Podman's aardvark-dns injection (which uses the LAN bridge .254) with
-	// the gateway brlan0 IP (.1). udhcpc's mv-based resolv.conf update will
-	// fail silently (bind-mount is read-only) leaving our nameserver intact.
-	if len(lanDNS) > 0 {
-		var rb strings.Builder
-		rb.WriteString("search dns.podman\n")
-		for _, ns := range lanDNS {
-			fmt.Fprintf(&rb, "nameserver %s\n", ns)
-		}
-		artifacts = append(artifacts, render.Artifact{Key: "resolv.conf", Content: rb.String()})
+		{Key: "entrypoint.sh", Content: entrypointSH},
 	}
 
 	return render.Result{
@@ -125,7 +190,7 @@ func (renderer) Render(_ context.Context, input render.Input) (render.Result, er
 	}, nil
 }
 
-func generateCompose(input render.Input, cfg Config, lanDNS []string) (string, error) {
+func generateCompose(input render.Input, cfg Config) (string, error) {
 	inst := input.Service.Instances[0]
 	replicas := input.Service.Replicas
 	if replicas <= 0 {
@@ -172,19 +237,10 @@ func generateCompose(input render.Input, cfg Config, lanDNS []string) (string, e
 		if len(svcNetworks) > 0 {
 			svc["networks"] = svcNetworks
 		}
-		// For services connected to gateway LAN networks, mount a static
-		// resolv.conf that points to the gateway's brlan0 dnsmasq (.1).
-		// Podman's aardvark-dns always injects .254 as the nameserver;
-		// the explicit volume mount overrides that, and udhcpc's mv-based
-		// update will fail silently against the read-only bind mount —
-		// leaving our nameserver in place.
 		volumes := append(append([]string(nil), input.Service.Volumes...), cfg.Volumes...)
-		if len(lanDNS) > 0 {
-			volumes = append(volumes, "./resolv.conf:/etc/resolv.conf:ro")
-		}
-		if len(volumes) > 0 {
-			svc["volumes"] = volumes
-		}
+		volumes = append(volumes, "./entrypoint.sh:/run/vcpe/entrypoint.sh:ro")
+		svc["volumes"] = volumes
+		svc["entrypoint"] = []string{"/bin/sh", "/run/vcpe/entrypoint.sh"}
 		if len(cfg.Command) > 0 {
 			svc["command"] = cfg.Command
 		}

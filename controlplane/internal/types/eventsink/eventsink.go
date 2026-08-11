@@ -6,6 +6,7 @@ package eventsink
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 
@@ -22,13 +23,18 @@ type serviceType struct{}
 
 func (serviceType) Type() string { return TypeName }
 
-// ValidateConfig rejects any config: event-sink takes none; all configuration
-// is supplied as environment variables in the curated compose.yaml.
+// Config is the optional configuration for an event-sink service.
+type Config struct {
+	Env map[string]string `yaml:"env,omitempty"`
+}
+
+// ValidateConfig accepts an optional env map; all other config is rejected.
 func (serviceType) ValidateConfig(node yaml.Node) error {
-	if node.Kind != 0 {
-		return fmt.Errorf("event-sink does not accept config")
+	if node.Kind == 0 {
+		return nil
 	}
-	return nil
+	var cfg Config
+	return typeregistry.StrictDecode(node, &cfg)
 }
 
 func (serviceType) Renderer() render.Renderer { return renderer{} }
@@ -56,6 +62,17 @@ func (renderer) Render(_ context.Context, input render.Input) (render.Result, er
 		return render.Result{}, fmt.Errorf("event-sink %q has no instances", input.Service.Name)
 	}
 	env := render.IfaceEnv(input.Deployment, input.Service, input.Service.Instances[0])
+
+	var cfg Config
+	_ = typeregistry.StrictDecode(input.Service.Config, &cfg)
+	if len(cfg.Env) > 0 {
+		extra := make([]string, 0, len(cfg.Env))
+		for k, v := range cfg.Env {
+			extra = append(extra, k+"="+v)
+		}
+		sort.Strings(extra)
+		env = append(env, extra...)
+	}
 	return render.Result{
 		Renderer: "event-sink-renderer",
 		Artifacts: []render.Artifact{

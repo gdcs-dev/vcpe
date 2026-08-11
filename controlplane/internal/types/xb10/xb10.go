@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"sort"
 	"strings"
 	"sync"
 
@@ -24,7 +25,8 @@ const TypeName = "xb10"
 
 // Config is the typed configuration for an xb10 service.
 type Config struct {
-	Erouter ErouterConfig `yaml:"erouter,omitempty"`
+	Erouter ErouterConfig     `yaml:"erouter,omitempty"`
+	Env     map[string]string `yaml:"env,omitempty"`
 }
 
 // ErouterConfig controls the role-to-interface mapping. Defaults match the
@@ -131,6 +133,15 @@ func (renderer) Render(_ context.Context, input render.Input) (render.Result, er
 
 	if cfg.Erouter.VLAN != 0 {
 		env = append(env, fmt.Sprintf("EROUTER0_VLAN=%d", cfg.Erouter.VLAN))
+	}
+
+	if len(cfg.Env) > 0 {
+		extra := make([]string, 0, len(cfg.Env))
+		for k, v := range cfg.Env {
+			extra = append(extra, k+"="+v)
+		}
+		sort.Strings(extra)
+		env = append(env, extra...)
 	}
 
 	// CM interface network vars (used by some xb10 services internally).

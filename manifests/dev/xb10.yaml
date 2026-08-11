@@ -1,12 +1,9 @@
 apiVersion: vcpe.dev/v1
 kind: Deployment
 metadata:
-  name: example
+  name: xb10
   labels:
-    scenario: example
-  annotations:
-    description: "Full vCPE lab — BNG, WebPA, Gateway, event-sink, and Alpine client
-      over a bridge WAN network."
+    scenario: xb10
 spec:
   maxReplicasPerService: 3
   maxActiveDeployments: 10
@@ -19,10 +16,6 @@ spec:
   #        |                              GATEWAY wan (DHCP client, erouter0)
   #   cm-bridge   (10.7.201.0/24)  ── BNG eth2 (DHCP server)
   #        |                              GATEWAY cm
-  #   lan-p1-bridge (192.168.10.0/24) ── GATEWAY brlan0, client eth0
-  #   lan-p2-bridge (192.168.20.0/24) ── GATEWAY (unused port)
-  #   lan-p3-bridge (192.168.30.0/24) ── GATEWAY (unused port)
-  #   lan-p4-bridge (192.168.40.0/24) ── GATEWAY (unused port)
   networks:
     - role: mgmt
       ipv4:
@@ -61,13 +54,14 @@ spec:
       replicas: 1
       image:
         repository: ghcr.io/gdcs-dev/bng
-        tag: v0.2.8
-        pullPolicy: always-pull
+        tag: dev
+        pullPolicy: build-if-missing
         buildContext: services/bng
+        containerfile: services/bng/Containerfile
       interfaces:
-        - { role: mgmt, device: mgmt }
-        - { role: wan, device: wan, defaultRoute: true, ipv4: "10.7.200.1" }
-        - { role: cm, device: cm, ipv4: "10.7.201.1" }
+        - { role: mgmt, device: mgmt0 }
+        - { role: wan, device: wan0, defaultRoute: true, ipv4: "10.7.200.1" }
+        - { role: cm, device: cm0, ipv4: "10.7.201.1" }
       config:
         access:
           - role: wan
@@ -93,43 +87,54 @@ spec:
       replicas: 1
       image:
         repository: ghcr.io/gdcs-dev/webpa
-        tag: v0.2.8
-        pullPolicy: always-pull
+        tag: dev
+        pullPolicy: build-if-missing
         buildContext: services/webpa
+        containerfile: services/webpa/Containerfile
       interfaces:
         - { role: mgmt }
       dependsOn:
         - bng
-    # ── GATEWAY ─────────────────────────────────────────────────────────────────
-    # Cable-modem / CPE simulator. Gets a DHCP lease from BNG on WAN (erouter0),
-    # bridges LAN ports for attached clients. LAN gateway IP is statically
-    # configured via the lan.ipv4 option.
-    - name: gateway
-      type: gateway
+    # ── XB10 ─────────────────────────────────────────────────────────────────
+    # RDK-B gateway simulator. Gets a DHCP lease from BNG on WAN (erouter0),
+    # bridges LAN ports for attached clients.
+    - name: xb10
+      type: xb10
       replicas: 1
       image:
-        repository: ghcr.io/gdcs-dev/gateway
-        tag: v0.2.8
-        pullPolicy: always-pull
-        buildContext: services/gateway
+        repository: ghcr.io/gdcs-dev/xb10
+        tag: dev
+        pullPolicy: build-if-missing
+        buildContext: services/xb10
+        containerfile: services/xb10/Containerfile
+        platforms: [linux/arm64]
       interfaces:
-        - { role: wan, device: wan0, ipv4: "10.7.200.10" }
-        - { role: cm, device: erouter0, ipv4: "10.7.201.10" }
-        - { role: lan-p1, device: eth0, bridge: brlan0 }
-        - { role: lan-p2, device: eth1, bridge: brlan1 }
+        - { role: wan, ipv4: "10.7.200.20", device: cm0 }
+        - { role: cm, ipv4: "10.7.201.20", device: wan0 }
+        - { role: lan-p1, device: eth0 }
+        - { role: lan-p2, device: eth1 }
         - { role: lan-p3, device: eth2 }
         - { role: lan-p4, device: eth3 }
+      config:
+        env:
+          LAN_DNS: "10.0.0.1"
+      volumes:
+        - /mnt/docker_disk/shared/xb10-dev:/home/root/xb10-dev:rw
+        - /mnt/docker_disk/shared/downloads:/home/root/shared/downloads:rw
       dependsOn:
         - bng
-      bridges:
-        - name: brlan0
-          ipv4: 10.0.0.1/24
-          dhcpStart: 10.0.0.100
-          dhcpEnd: 10.0.0.200
-        - name: brlan1
-          ipv4: 10.0.10.1/24
-          dhcpStart: 10.0.10.100
-          dhcpEnd: 10.0.10.200
+    - name: oktopus
+      type: oktopus
+      replicas: 1
+      image:
+        repository: "ghcr.io/gdcs-dev/oktopus"
+        tag: dev
+        pullPolicy: build-if-missing
+        buildContext: services/oktopus
+      interfaces:
+        - role: mgmt
+      dependsOn:
+        - bng
     - name: client
       type: generic-container
       replicas: 1
@@ -137,16 +142,12 @@ spec:
         repository: docker.io/library/alpine
         tag: "3.19"
         pullPolicy: always-pull
-      dependsOn:
-        - gateway
       interfaces:
         - role: lan-p1
           defaultRoute: true
       config:
-        command:
-          [
-            "/bin/sh",
-            "-c",
-            "ip addr flush dev eth0 && udhcpc -f -i eth0 -x
-              hostname:$(hostname)"
-          ]
+        env:
+          VCPE_INIT_NAMESERVER_FROM_ROUTE: "1"
+        command: ["sleep", "infinity"]
+      dependsOn:
+        - xb10

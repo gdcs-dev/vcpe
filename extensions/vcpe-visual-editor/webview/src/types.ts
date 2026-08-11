@@ -8,6 +8,27 @@ export interface ServiceTypeDescriptor {
   expectedRoles: Array<{ role: string; required: boolean }>;
 }
 
+export interface DropTemplateInterface {
+  role: string;
+  device?: string;
+  bridge?: string;
+  sharing?: 'shared' | 'unique';
+}
+
+export interface DropTemplate {
+  interfaces: DropTemplateInterface[];
+  bridges?: Array<{ name: string; ipv4?: string }>;
+}
+
+export interface PaletteVariant {
+  _variant: true;
+  label: string;
+  type: string;
+  description?: string;
+  interfaces: DropTemplateInterface[];
+  bridges?: Array<{ name: string; ipv4?: string }>;
+}
+
 export interface NodePosition { x: number; y: number }
 
 export interface LayoutData {

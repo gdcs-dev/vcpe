@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -23,8 +24,9 @@ const TypeName = "gateway"
 
 // Config is the typed configuration for an gateway service.
 type Config struct {
-	LAN     LANConfig     `yaml:"lan,omitempty"`
-	Erouter ErouterConfig `yaml:"erouter,omitempty"`
+	LAN     LANConfig         `yaml:"lan,omitempty"`
+	Erouter ErouterConfig     `yaml:"erouter,omitempty"`
+	Env     map[string]string `yaml:"env,omitempty"`
 }
 
 type LANConfig struct {
@@ -207,6 +209,15 @@ func (renderer) Render(_ context.Context, input render.Input) (render.Result, er
 		break
 	}
 	env = append(env, "BNG_DNS_SERVER="+bngDNS)
+
+	if len(cfg.Env) > 0 {
+		extra := make([]string, 0, len(cfg.Env))
+		for k, v := range cfg.Env {
+			extra = append(extra, k+"="+v)
+		}
+		sort.Strings(extra)
+		env = append(env, extra...)
+	}
 
 	composeYAML := renderGatewayCompose(input.Service.Name, inst.Interfaces, input.Service.Volumes, input.Service.Ports)
 

@@ -34,6 +34,80 @@
           "default": "",
           "description": "Absolute path to the vcpe binary. If empty, the extension falls back to PATH lookup.",
           "scope": "machine-overridable"
+        },
+        "vcpe.serviceDropDefaults": {
+          "type": "object",
+          "default": {},
+          "description": "Per-type drop templates applied when a service is dragged from the palette. Keys are service type names (e.g. \"gateway\"). Each value defines interfaces (with optional device, bridge, and sharing semantics) and optional bridge declarations.",
+          "scope": "resource",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "interfaces": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": ["role"],
+                  "properties": {
+                    "role":    { "type": "string" },
+                    "device":  { "type": "string" },
+                    "bridge":  { "type": "string" },
+                    "sharing": { "type": "string", "enum": ["shared", "unique"] }
+                  }
+                }
+              },
+              "bridges": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": ["name"],
+                  "properties": {
+                    "name": { "type": "string" },
+                    "ipv4": { "type": "string" }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "vcpe.paletteVariants": {
+          "type": "array",
+          "default": [],
+          "description": "Additional palette entries backed by existing service types. Each entry defines a display label, a base type, an optional description, and a drop template.",
+          "scope": "resource",
+          "items": {
+            "type": "object",
+            "required": ["label", "type", "interfaces"],
+            "properties": {
+              "label":       { "type": "string", "description": "Display name shown in the palette." },
+              "type":        { "type": "string", "description": "Base service type (must be a registered vcpe type)." },
+              "description": { "type": "string" },
+              "interfaces": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": ["role"],
+                  "properties": {
+                    "role":    { "type": "string" },
+                    "device":  { "type": "string" },
+                    "bridge":  { "type": "string" },
+                    "sharing": { "type": "string", "enum": ["shared", "unique"] }
+                  }
+                }
+              },
+              "bridges": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": ["name"],
+                  "properties": {
+                    "name": { "type": "string" },
+                    "ipv4": { "type": "string" }
+                  }
+                }
+              }
+            }
+          }
         }
       }
     },

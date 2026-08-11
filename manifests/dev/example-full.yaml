@@ -1,12 +1,11 @@
 apiVersion: vcpe.dev/v1
 kind: Deployment
 metadata:
-  name: example
+  name: example-full
   labels:
-    scenario: example
+    scenario: example-full
   annotations:
-    description: "Full vCPE lab — BNG, WebPA, Gateway, event-sink, and Alpine client
-      over a bridge WAN network."
+    description: "Full vCPE lab — BNG, WebPA, Gateway, event-sink, and Alpine client over a bridge WAN network."
 spec:
   maxReplicasPerService: 3
   maxActiveDeployments: 10
@@ -19,10 +18,10 @@ spec:
   #        |                              GATEWAY wan (DHCP client, erouter0)
   #   cm-bridge   (10.7.201.0/24)  ── BNG eth2 (DHCP server)
   #        |                              GATEWAY cm
-  #   lan-p1-bridge (192.168.10.0/24) ── GATEWAY brlan0, client eth0
-  #   lan-p2-bridge (192.168.20.0/24) ── GATEWAY (unused port)
-  #   lan-p3-bridge (192.168.30.0/24) ── GATEWAY (unused port)
-  #   lan-p4-bridge (192.168.40.0/24) ── GATEWAY (unused port)
+  #   lan-p1-bridge -- GATEWAY (eth0)
+  #   lan-p2-bridge -- GATEWAY (eth1)
+  #   lan-p3-bridge -- GATEWAY (eth2)
+  #   lan-p4-bridge -- GATEWAY (eth3)
   networks:
     - role: mgmt
       ipv4:
@@ -61,13 +60,14 @@ spec:
       replicas: 1
       image:
         repository: ghcr.io/gdcs-dev/bng
-        tag: v0.2.8
-        pullPolicy: always-pull
+        tag: dev
+        pullPolicy: build-if-missing
         buildContext: services/bng
+        containerfile: services/bng/Containerfile
       interfaces:
-        - { role: mgmt, device: mgmt }
-        - { role: wan, device: wan, defaultRoute: true, ipv4: "10.7.200.1" }
-        - { role: cm, device: cm, ipv4: "10.7.201.1" }
+        - { role: mgmt, device: mgmt0 }
+        - { role: wan, device: wan0, defaultRoute: true, ipv4: "10.7.200.1" }
+        - { role: cm, device: cm0, ipv4: "10.7.201.1" }
       config:
         access:
           - role: wan
@@ -93,9 +93,10 @@ spec:
       replicas: 1
       image:
         repository: ghcr.io/gdcs-dev/webpa
-        tag: v0.2.8
-        pullPolicy: always-pull
+        tag: dev
+        pullPolicy: build-if-missing
         buildContext: services/webpa
+        containerfile: services/webpa/Containerfile
       interfaces:
         - { role: mgmt }
       dependsOn:
@@ -109,27 +110,58 @@ spec:
       replicas: 1
       image:
         repository: ghcr.io/gdcs-dev/gateway
-        tag: v0.2.8
-        pullPolicy: always-pull
+        tag: dev
+        pullPolicy: build-if-missing
         buildContext: services/gateway
       interfaces:
-        - { role: wan, device: wan0, ipv4: "10.7.200.10" }
-        - { role: cm, device: erouter0, ipv4: "10.7.201.10" }
+        - { role: wan, device: erouter0, ipv4: "10.7.200.10" }
+        - { role: cm, device: wan0, ipv4: "10.7.201.10" }
         - { role: lan-p1, device: eth0, bridge: brlan0 }
-        - { role: lan-p2, device: eth1, bridge: brlan1 }
-        - { role: lan-p3, device: eth2 }
-        - { role: lan-p4, device: eth3 }
-      dependsOn:
-        - bng
+        - { role: lan-p2, device: eth1, bridge: brlan0 }
+        - { role: lan-p3, device: eth2, bridge: brlan0 }
+        - { role: lan-p4, device: eth3, bridge: brlan0 }
       bridges:
         - name: brlan0
           ipv4: 10.0.0.1/24
           dhcpStart: 10.0.0.100
           dhcpEnd: 10.0.0.200
-        - name: brlan1
-          ipv4: 10.0.10.1/24
-          dhcpStart: 10.0.10.100
-          dhcpEnd: 10.0.10.200
+      config:
+        env:
+          LAN_DNS: "10.0.0.1"
+      dependsOn:
+        - bng
+
+
+    # ── Event Sink ────────────────────────────────────────────────────────────
+    # Generic XMiDT webhook consumer. Registers a Caduceus webhook via Argus
+    # and logs all matching WRP events as structured JSON to stdout.
+    # Default filter: apparmor/.* (captures AppArmor simulator events).
+    # Override WEBHOOK_EVENTS_REGEX to capture any other event type.
+    - name: event-sink
+      type: event-sink
+      replicas: 1
+      image:
+        repository: ghcr.io/gdcs-dev/event-sink
+        tag: dev
+        pullPolicy: build-if-missing
+        buildContext: services/event-sink
+        containerfile: services/event-sink/Containerfile
+      interfaces:
+        - { role: mgmt }
+      dependsOn:
+        - bng
+    - name: oktopus
+      type: oktopus
+      replicas: 1
+      image:
+        repository: "ghcr.io/gdcs-dev/oktopus"
+        tag: dev
+        pullPolicy: build-if-missing
+        buildContext: services/oktopus
+      interfaces:
+        - role: mgmt
+      dependsOn:
+        - bng
     - name: client
       type: generic-container
       replicas: 1
@@ -137,16 +169,12 @@ spec:
         repository: docker.io/library/alpine
         tag: "3.19"
         pullPolicy: always-pull
-      dependsOn:
-        - gateway
       interfaces:
         - role: lan-p1
           defaultRoute: true
       config:
-        command:
-          [
-            "/bin/sh",
-            "-c",
-            "ip addr flush dev eth0 && udhcpc -f -i eth0 -x
-              hostname:$(hostname)"
-          ]
+        env:
+          VCPE_INIT_NAMESERVER_FROM_ROUTE: "1"
+        command: ["sleep", "infinity"]
+      dependsOn:
+        - gateway
