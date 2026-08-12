@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/gdcs-dev/vcpe/controlplane/internal/manifest"
+	"github.com/gdcs-dev/vcpe/controlplane/internal/typeregistry"
 	bngtype "github.com/gdcs-dev/vcpe/controlplane/internal/types/bng"
 	gatewaytype "github.com/gdcs-dev/vcpe/controlplane/internal/types/gateway"
 	generictype "github.com/gdcs-dev/vcpe/controlplane/internal/types/genericcontainer"
@@ -123,18 +124,11 @@ func askImage(r io.Reader, w io.Writer, def manifest.Image, svcType string) mani
 }
 
 func defaultRepo(svcType string) string {
-	switch svcType {
-	case "bng":
-		return "ghcr.io/gdcs-dev/bng"
-	case "gateway":
-		return "ghcr.io/gdcs-dev/gateway"
-	case "webpa":
-		return "ghcr.io/gdcs-dev/webpa"
-	case "event-sink":
-		return "ghcr.io/gdcs-dev/event-sink"
-	default:
+	registered, ok := typeregistry.Lookup(svcType)
+	if !ok {
 		return ""
 	}
+	return registered.DefaultImage()
 }
 
 func askInterfaces(r io.Reader, w io.Writer, existing []manifest.Interface, nets map[string]NetworkEntry) []manifest.Interface {

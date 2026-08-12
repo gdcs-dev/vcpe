@@ -3,11 +3,13 @@ package docker
 import (
 	"reflect"
 	"testing"
+
+	"github.com/gdcs-dev/vcpe/controlplane/internal/image"
 )
 
 func TestBuildImageArgs(t *testing.T) {
 	// No platforms: plain docker build
-	args, err := buildImageArgs(ImageBuildRequest{Tags: []string{"ghcr.io/gdcs-dev/bng:dev"}, Context: "services/bng"})
+	args, err := buildImageArgs(image.BuildRequest{Tags: []string{"ghcr.io/gdcs-dev/bng:dev"}, Context: "services/bng"})
 	if err != nil {
 		t.Fatalf("build args: %v", err)
 	}
@@ -16,7 +18,7 @@ func TestBuildImageArgs(t *testing.T) {
 	}
 
 	// No platforms with file
-	withFile, err := buildImageArgs(ImageBuildRequest{Tags: []string{"ghcr.io/gdcs-dev/bng:dev"}, Context: "services/bng", File: "services/bng/Containerfile"})
+	withFile, err := buildImageArgs(image.BuildRequest{Tags: []string{"ghcr.io/gdcs-dev/bng:dev"}, Context: "services/bng", File: "services/bng/Containerfile"})
 	if err != nil {
 		t.Fatalf("build args with file: %v", err)
 	}
@@ -25,7 +27,7 @@ func TestBuildImageArgs(t *testing.T) {
 	}
 
 	// Single platform: docker build --platform
-	single, err := buildImageArgs(ImageBuildRequest{Tags: []string{"ghcr.io/gdcs-dev/bng:dev"}, Context: "services/bng", Platforms: []string{"linux/arm64"}})
+	single, err := buildImageArgs(image.BuildRequest{Tags: []string{"ghcr.io/gdcs-dev/bng:dev"}, Context: "services/bng", Platforms: []string{"linux/arm64"}})
 	if err != nil {
 		t.Fatalf("build args single platform: %v", err)
 	}
@@ -34,7 +36,7 @@ func TestBuildImageArgs(t *testing.T) {
 	}
 
 	// Multi-platform: buildx --push with single tag
-	multi, err := buildImageArgs(ImageBuildRequest{Tags: []string{"ghcr.io/gdcs-dev/bng:dev"}, Context: "services/bng", Platforms: []string{"linux/amd64", "linux/arm64"}})
+	multi, err := buildImageArgs(image.BuildRequest{Tags: []string{"ghcr.io/gdcs-dev/bng:dev"}, Context: "services/bng", Platforms: []string{"linux/amd64", "linux/arm64"}})
 	if err != nil {
 		t.Fatalf("build args multi platform: %v", err)
 	}
@@ -43,7 +45,7 @@ func TestBuildImageArgs(t *testing.T) {
 	}
 
 	// Multi-platform with two tags (release path: versioned + latest)
-	multiTags, err := buildImageArgs(ImageBuildRequest{Tags: []string{"ghcr.io/gdcs-dev/bng:v0.1.0", "ghcr.io/gdcs-dev/bng:latest"}, Context: "services/bng", Platforms: []string{"linux/amd64", "linux/arm64"}})
+	multiTags, err := buildImageArgs(image.BuildRequest{Tags: []string{"ghcr.io/gdcs-dev/bng:v0.1.0", "ghcr.io/gdcs-dev/bng:latest"}, Context: "services/bng", Platforms: []string{"linux/amd64", "linux/arm64"}})
 	if err != nil {
 		t.Fatalf("build args multi-tag: %v", err)
 	}
@@ -52,7 +54,7 @@ func TestBuildImageArgs(t *testing.T) {
 	}
 
 	// No-cache
-	noCache, err := buildImageArgs(ImageBuildRequest{Tags: []string{"ghcr.io/gdcs-dev/bng:dev"}, Context: "services/bng", NoCache: true})
+	noCache, err := buildImageArgs(image.BuildRequest{Tags: []string{"ghcr.io/gdcs-dev/bng:dev"}, Context: "services/bng", NoCache: true})
 	if err != nil {
 		t.Fatalf("build args no-cache: %v", err)
 	}
@@ -62,19 +64,48 @@ func TestBuildImageArgs(t *testing.T) {
 }
 
 func TestBuildImageArgsValidation(t *testing.T) {
-	if _, err := buildImageArgs(ImageBuildRequest{Tags: []string{"x"}}); err == nil {
+	if _, err := buildImageArgs(image.BuildRequest{Tags: []string{"x"}}); err == nil {
 		t.Fatalf("expected context validation failure")
 	}
-	if _, err := buildImageArgs(ImageBuildRequest{Context: "services/bng"}); err == nil {
+	if _, err := buildImageArgs(image.BuildRequest{Context: "services/bng"}); err == nil {
 		t.Fatalf("expected tag validation failure")
 	}
-	if _, err := pullImageArgs(ImagePullRequest{}); err == nil {
+	if _, err := pullImageArgs(image.PullRequest{}); err == nil {
 		t.Fatalf("expected pull validation failure")
 	}
-	if _, err := pushImageArgs(ImagePushRequest{}); err == nil {
+	if _, err := pushImageArgs(image.PushRequest{}); err == nil {
 		t.Fatalf("expected push validation failure")
 	}
-	if _, err := tagImageArgs(ImageTagRequest{Source: "x"}); err == nil {
+	if _, err := tagImageArgs(image.TagRequest{Source: "x"}); err == nil {
 		t.Fatalf("expected tag validation failure")
+	}
+	if _, err := tagImageArgs(image.TagRequest{Target: "y"}); err == nil {
+		t.Fatalf("expected tag source validation failure")
+	}
+}
+
+func TestPullPushTagImageArgs(t *testing.T) {
+	pull, err := pullImageArgs(image.PullRequest{Reference: "ghcr.io/gdcs-dev/bng:dev"})
+	if err != nil {
+		t.Fatalf("pull args: %v", err)
+	}
+	if want := []string{"pull", "ghcr.io/gdcs-dev/bng:dev"}; !reflect.DeepEqual(pull, want) {
+		t.Errorf("pull args = %#v, want %#v", pull, want)
+	}
+
+	push, err := pushImageArgs(image.PushRequest{Reference: "ghcr.io/gdcs-dev/bng:dev"})
+	if err != nil {
+		t.Fatalf("push args: %v", err)
+	}
+	if want := []string{"push", "ghcr.io/gdcs-dev/bng:dev"}; !reflect.DeepEqual(push, want) {
+		t.Errorf("push args = %#v, want %#v", push, want)
+	}
+
+	tag, err := tagImageArgs(image.TagRequest{Source: "ghcr.io/gdcs-dev/bng:dev", Target: "localhost/bng:test"})
+	if err != nil {
+		t.Fatalf("tag args: %v", err)
+	}
+	if want := []string{"tag", "ghcr.io/gdcs-dev/bng:dev", "localhost/bng:test"}; !reflect.DeepEqual(tag, want) {
+		t.Errorf("tag args = %#v, want %#v", tag, want)
 	}
 }

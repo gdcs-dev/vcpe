@@ -9,18 +9,6 @@ import (
 	"github.com/gdcs-dev/vcpe/controlplane/internal/image"
 )
 
-// podmanImageBackend adapts the podman backend's request types to the
-// image.Backend interface the image.Manager consumes. It is the single seam
-// between the image lifecycle policy and the concrete container runtime.
-type podmanImageBackend struct {
-	adapter *podman.Adapter
-}
-
-// dockerImageBackend adapts the docker backend's request types to image.Backend.
-type dockerImageBackend struct {
-	adapter *docker.Adapter
-}
-
 // newImageBackend returns the image.Backend for the given backend name.
 // backend must be "podman" (default) or "docker".
 func newImageBackend(backend string) image.Backend {
@@ -28,9 +16,9 @@ func newImageBackend(backend string) image.Backend {
 		return noopImageBackend{}
 	}
 	if backend == "docker" {
-		return dockerImageBackend{adapter: docker.New()}
+		return docker.New()
 	}
-	return podmanImageBackend{adapter: podman.New()}
+	return podman.New()
 }
 
 // noopImageBackend is a test-only image backend that satisfies image.Backend
@@ -45,55 +33,3 @@ func (noopImageBackend) BuildImage(_ context.Context, _ image.BuildRequest) erro
 func (noopImageBackend) PullImage(_ context.Context, _ image.PullRequest) error   { return nil }
 func (noopImageBackend) PushImage(_ context.Context, _ image.PushRequest) error   { return nil }
 func (noopImageBackend) TagImage(_ context.Context, _ image.TagRequest) error     { return nil }
-
-func (b podmanImageBackend) ImageExists(ctx context.Context, reference string) (bool, error) {
-	return b.adapter.ImageExists(ctx, reference)
-}
-
-func (b podmanImageBackend) BuildImage(ctx context.Context, req image.BuildRequest) error {
-	return b.adapter.BuildImage(ctx, podman.ImageBuildRequest{
-		Tags:      req.Tags,
-		Context:   req.Context,
-		File:      req.File,
-		NoCache:   req.NoCache,
-		Platforms: req.Platforms,
-	})
-}
-
-func (b podmanImageBackend) PullImage(ctx context.Context, req image.PullRequest) error {
-	return b.adapter.PullImage(ctx, podman.ImagePullRequest{Reference: req.Reference})
-}
-
-func (b podmanImageBackend) PushImage(ctx context.Context, req image.PushRequest) error {
-	return b.adapter.PushImage(ctx, podman.ImagePushRequest{Reference: req.Reference})
-}
-
-func (b podmanImageBackend) TagImage(ctx context.Context, req image.TagRequest) error {
-	return b.adapter.TagImage(ctx, podman.ImageTagRequest{Source: req.Source, Target: req.Target})
-}
-
-func (b dockerImageBackend) ImageExists(ctx context.Context, reference string) (bool, error) {
-	return b.adapter.ImageExists(ctx, reference)
-}
-
-func (b dockerImageBackend) BuildImage(ctx context.Context, req image.BuildRequest) error {
-	return b.adapter.BuildImage(ctx, docker.ImageBuildRequest{
-		Tags:      req.Tags,
-		Context:   req.Context,
-		File:      req.File,
-		NoCache:   req.NoCache,
-		Platforms: req.Platforms,
-	})
-}
-
-func (b dockerImageBackend) PullImage(ctx context.Context, req image.PullRequest) error {
-	return b.adapter.PullImage(ctx, docker.ImagePullRequest{Reference: req.Reference})
-}
-
-func (b dockerImageBackend) PushImage(ctx context.Context, req image.PushRequest) error {
-	return b.adapter.PushImage(ctx, docker.ImagePushRequest{Reference: req.Reference})
-}
-
-func (b dockerImageBackend) TagImage(ctx context.Context, req image.TagRequest) error {
-	return b.adapter.TagImage(ctx, docker.ImageTagRequest{Source: req.Source, Target: req.Target})
-}

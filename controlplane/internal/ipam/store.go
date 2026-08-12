@@ -42,8 +42,8 @@ func networkCIDRs(n manifest.Network) []string {
 	return out
 }
 
-// primaryCIDR returns the CIDR persisted for a role (IPv4 preferred).
-func primaryCIDR(n manifest.Network) string {
+// PrimaryCIDR returns the CIDR persisted for a role (IPv4 preferred).
+func PrimaryCIDR(n manifest.Network) string {
 	if n.IPv4 != nil && n.IPv4.CIDR != "" {
 		return n.IPv4.CIDR
 	}
@@ -110,7 +110,7 @@ func (s *Store) CheckConflicts(deployment string, networks []manifest.Network) (
 func (s *Store) Apply(deployment string, networks []manifest.Network) error {
 	leases := make([]persist.IPAMLease, 0, len(networks))
 	for _, n := range networks {
-		cidr := primaryCIDR(n)
+		cidr := PrimaryCIDR(n)
 		if cidr == "" {
 			continue
 		}

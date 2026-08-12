@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 
+	"github.com/gdcs-dev/vcpe/controlplane/internal/imageref"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/manifest"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/typeregistry"
 )
@@ -212,14 +213,7 @@ func imageReference(img manifest.Image) string {
 // ImageReference returns the fully-qualified image reference (repository:tag)
 // for a manifest image spec. Tag defaults to "latest" when unset.
 func ImageReference(img manifest.Image) string {
-	if img.Repository == "" {
-		return ""
-	}
-	tag := img.Tag
-	if tag == "" {
-		tag = "latest"
-	}
-	return fmt.Sprintf("%s:%s", img.Repository, tag)
+	return imageref.Format(img)
 }
 
 func resolvePolicy(service manifest.Service) string {

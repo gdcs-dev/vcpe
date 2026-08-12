@@ -30,6 +30,26 @@ func (f *fakeBackend) PullImage(_ context.Context, req PullRequest) error {
 func (f *fakeBackend) PushImage(_ context.Context, _ PushRequest) error { return nil }
 func (f *fakeBackend) TagImage(_ context.Context, _ TagRequest) error   { return nil }
 
+func TestImageReference(t *testing.T) {
+	tests := []struct {
+		name  string
+		image manifest.Image
+		want  string
+	}{
+		{name: "empty repository", image: manifest.Image{}, want: ""},
+		{name: "omitted tag", image: manifest.Image{Repository: "example.test/workload"}, want: "example.test/workload:latest"},
+		{name: "whitespace-only tag", image: manifest.Image{Repository: "example.test/workload", Tag: " \t "}, want: "example.test/workload:latest"},
+		{name: "explicit tag", image: manifest.Image{Repository: "example.test/workload", Tag: "v2"}, want: "example.test/workload:v2"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := ImageReference(test.image); got != test.want {
+				t.Errorf("ImageReference(%#v) = %q, want %q", test.image, got, test.want)
+			}
+		})
+	}
+}
+
 func TestEnsureForApplyBuildIfMissingPolicy(t *testing.T) {
 	backend := &fakeBackend{existsByRef: map[string]bool{"ghcr.io/gdcs-dev/bng:dev": false}}
 	mgr := New(backend)

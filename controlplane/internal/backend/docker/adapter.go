@@ -7,6 +7,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/gdcs-dev/vcpe/controlplane/internal/image"
 )
 
 // Adapter provides image operations against the Docker CLI.
@@ -14,26 +16,7 @@ import (
 // Networking and compose operations remain Podman-owned.
 type Adapter struct{}
 
-type ImageBuildRequest struct {
-	Tags      []string // one or more repo:tag values; at least one required
-	Context   string
-	File      string
-	NoCache   bool
-	Platforms []string
-}
-
-type ImagePullRequest struct {
-	Reference string
-}
-
-type ImagePushRequest struct {
-	Reference string
-}
-
-type ImageTagRequest struct {
-	Source string
-	Target string
-}
+var _ image.Backend = (*Adapter)(nil)
 
 func New() *Adapter {
 	return &Adapter{}
@@ -47,7 +30,7 @@ func (a *Adapter) ImageExists(ctx context.Context, reference string) (bool, erro
 	return true, nil
 }
 
-func (a *Adapter) BuildImage(ctx context.Context, req ImageBuildRequest) error {
+func (a *Adapter) BuildImage(ctx context.Context, req image.BuildRequest) error {
 	// Auto-detect Containerfile when no explicit file is given.
 	// Docker defaults to "Dockerfile" but the vcpe services use "Containerfile".
 	if req.File == "" && req.Context != "" {
@@ -73,7 +56,7 @@ func (a *Adapter) BuildImage(ctx context.Context, req ImageBuildRequest) error {
 	return nil
 }
 
-func (a *Adapter) PullImage(ctx context.Context, req ImagePullRequest) error {
+func (a *Adapter) PullImage(ctx context.Context, req image.PullRequest) error {
 	args, err := pullImageArgs(req)
 	if err != nil {
 		return err
@@ -87,7 +70,7 @@ func (a *Adapter) PullImage(ctx context.Context, req ImagePullRequest) error {
 	return nil
 }
 
-func (a *Adapter) PushImage(ctx context.Context, req ImagePushRequest) error {
+func (a *Adapter) PushImage(ctx context.Context, req image.PushRequest) error {
 	args, err := pushImageArgs(req)
 	if err != nil {
 		return err
@@ -101,7 +84,7 @@ func (a *Adapter) PushImage(ctx context.Context, req ImagePushRequest) error {
 	return nil
 }
 
-func (a *Adapter) TagImage(ctx context.Context, req ImageTagRequest) error {
+func (a *Adapter) TagImage(ctx context.Context, req image.TagRequest) error {
 	args, err := tagImageArgs(req)
 	if err != nil {
 		return err
@@ -118,7 +101,7 @@ func (a *Adapter) TagImage(ctx context.Context, req ImageTagRequest) error {
 // manifest list in the registry. Uses whatever buildx builder is currently
 // active (set with `docker buildx use <builder>`).
 // Single platform or no platform: uses plain docker build for a local image.
-func buildImageArgs(req ImageBuildRequest) ([]string, error) {
+func buildImageArgs(req image.BuildRequest) ([]string, error) {
 	if len(req.Tags) == 0 {
 		return nil, fmt.Errorf("build image tags are required")
 	}
@@ -154,21 +137,21 @@ func buildImageArgs(req ImageBuildRequest) ([]string, error) {
 	return args, nil
 }
 
-func pullImageArgs(req ImagePullRequest) ([]string, error) {
+func pullImageArgs(req image.PullRequest) ([]string, error) {
 	if req.Reference == "" {
 		return nil, fmt.Errorf("pull reference is required")
 	}
 	return []string{"pull", req.Reference}, nil
 }
 
-func pushImageArgs(req ImagePushRequest) ([]string, error) {
+func pushImageArgs(req image.PushRequest) ([]string, error) {
 	if req.Reference == "" {
 		return nil, fmt.Errorf("push reference is required")
 	}
 	return []string{"push", req.Reference}, nil
 }
 
-func tagImageArgs(req ImageTagRequest) ([]string, error) {
+func tagImageArgs(req image.TagRequest) ([]string, error) {
 	if req.Source == "" {
 		return nil, fmt.Errorf("tag source is required")
 	}

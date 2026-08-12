@@ -6,12 +6,11 @@ package webpa
 import (
 	"context"
 	"fmt"
-	"sort"
 	"strings"
 	"sync"
 
-	"github.com/gdcs-dev/vcpe/controlplane/internal/manifest"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/render"
+	"github.com/gdcs-dev/vcpe/controlplane/internal/render/servicetemplate"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/typeregistry"
 	"gopkg.in/yaml.v3"
 )
@@ -19,7 +18,11 @@ import (
 // TypeName is the manifest discriminator for WebPA.
 const TypeName = "webpa"
 
-type serviceType struct{}
+type serviceType struct {
+	typeregistry.BaseServiceType
+}
+
+var _ typeregistry.ServiceType = serviceType{}
 
 func (serviceType) Type() string { return TypeName }
 
@@ -37,19 +40,18 @@ func (serviceType) ValidateConfig(node yaml.Node) error {
 	return typeregistry.StrictDecode(node, &cfg)
 }
 
-func (serviceType) Renderer() render.Renderer { return renderer{} }
+func (serviceType) Renderer() render.Renderer {
+	return servicetemplate.New(servicetemplate.Hooks[Config]{
+		Name:           "webpa-renderer",
+		Mode:           servicetemplate.PerInstance,
+		DecodeConfig:   decodeConfig,
+		RenderInstance: renderInstance,
+	})
+}
 
 func (serviceType) ExpectedRoles() []typeregistry.RoleRequirement {
 	return []typeregistry.RoleRequirement{{Role: "mgmt", Required: false}}
 }
-
-func (serviceType) Health() typeregistry.HealthBehavior {
-	return typeregistry.HealthBehavior{Mode: typeregistry.HealthModeCurated, ContainerPort: 9878}
-}
-
-func (serviceType) DefaultImagePolicy() string { return "build" }
-
-func (serviceType) ValidateInterfaces(_ []manifest.Interface) error { return nil }
 
 func (serviceType) Description() string {
 	return "USP/WebPA device-management server"
@@ -57,46 +59,33 @@ func (serviceType) Description() string {
 
 func (serviceType) DefaultImage() string { return "ghcr.io/gdcs-dev/webpa" }
 
-type renderer struct{}
-
-func (renderer) Name() string { return "webpa-renderer" }
-
-func (renderer) Render(_ context.Context, input render.Input) (render.Result, error) {
-	if len(input.Service.Instances) == 0 {
-		return render.Result{}, fmt.Errorf("webpa %q has no instances", input.Service.Name)
-	}
+func decodeConfig(node yaml.Node) (Config, error) {
 	var cfg Config
-	_ = typeregistry.StrictDecode(input.Service.Config, &cfg)
+	if node.Kind == 0 {
+		return cfg, nil
+	}
+	if err := typeregistry.StrictDecode(node, &cfg); err != nil {
+		return Config{}, err
+	}
+	return cfg, nil
+}
 
+func renderInstance(_ context.Context, input render.Input, cfg Config) (render.Result, error) {
+	inst := input.Service.Instances[0]
 	ipamNone := map[string]bool{}
 	for _, n := range input.Deployment.Networks {
 		if n.IPAMDriver == "none" {
 			ipamNone[n.Role] = true
 		}
 	}
-	artifacts := []render.Artifact{}
-	for _, inst := range input.Service.Instances {
-		env := render.IfaceEnv(input.Deployment, input.Service, inst)
-		if len(cfg.Env) > 0 {
-			extra := make([]string, 0, len(cfg.Env))
-			for k, v := range cfg.Env {
-				extra = append(extra, k+"="+v)
-			}
-			sort.Strings(extra)
-			env = append(env, extra...)
-		}
-		content := strings.Join(env, "\n") + "\n"
-		if inst.Index == 0 {
-			artifacts = append(artifacts, render.Artifact{Key: "compose.env", Content: content})
-		}
-		artifacts = append(artifacts, render.Artifact{Key: fmt.Sprintf("instances/%d/compose.env", inst.Index+1), Content: content})
+	env := render.IfaceEnv(input.Deployment, input.Service, inst)
+	env = append(env, render.SortedEnv(cfg.Env)...)
+	artifacts := []render.Artifact{
+		{Key: "compose.env", Content: strings.TrimRight(strings.Join(env, "\n"), "\n") + "\n"},
+		{Key: "compose.yaml", Content: renderWebPACompose(input, ipamNone)},
 	}
-	artifacts = append(artifacts, render.Artifact{Key: "compose.yaml", Content: renderWebPACompose(input, ipamNone)})
 
-	return render.Result{
-		Renderer:  "webpa-renderer",
-		Artifacts: artifacts,
-	}, nil
+	return render.Result{Artifacts: artifacts}, nil
 }
 
 // renderWebPACompose generates a compose.yaml that wires up every interface

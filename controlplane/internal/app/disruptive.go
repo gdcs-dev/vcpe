@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sort"
 
+	"github.com/gdcs-dev/vcpe/controlplane/internal/ipam"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/manifest"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/persist"
 	"gopkg.in/yaml.v3"
@@ -34,7 +35,7 @@ func classifyDisruptive(ps *persist.Store, doc manifest.Document) (bool, []strin
 		if !ok {
 			continue
 		}
-		desired := primaryCIDR(n)
+		desired := ipam.PrimaryCIDR(n)
 		if desired != "" && prior != "" && desired != prior {
 			reasons = append(reasons, fmt.Sprintf("network role %q CIDR changes from %s to %s", n.Role, prior, desired))
 		}
@@ -63,16 +64,4 @@ func classifyDisruptive(ps *persist.Store, doc manifest.Document) (bool, []strin
 
 	sort.Strings(reasons)
 	return len(reasons) > 0, reasons, nil
-}
-
-// primaryCIDR returns the IPv4 CIDR for a network, falling back to IPv6. It
-// mirrors the lease key the IPAM store persists.
-func primaryCIDR(n manifest.Network) string {
-	if n.IPv4 != nil && n.IPv4.CIDR != "" {
-		return n.IPv4.CIDR
-	}
-	if n.IPv6 != nil && n.IPv6.CIDR != "" {
-		return n.IPv6.CIDR
-	}
-	return ""
 }

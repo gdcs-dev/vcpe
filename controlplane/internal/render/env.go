@@ -2,9 +2,11 @@ package render
 
 import (
 	"fmt"
+	"net"
 	"sort"
 	"strings"
 
+	"github.com/gdcs-dev/vcpe/controlplane/internal/imageref"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/manifest"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/plan"
 )
@@ -12,11 +14,53 @@ import (
 // ImageRef returns the fully qualified image reference, defaulting the tag to
 // "latest" when unset.
 func ImageRef(img manifest.Image) string {
-	tag := img.Tag
-	if strings.TrimSpace(tag) == "" {
-		tag = "latest"
+	return imageref.Format(img)
+}
+
+// IPWithPrefix appends the CIDR prefix length to an IP address. It returns the
+// IP unchanged when either input is empty or the CIDR is malformed.
+func IPWithPrefix(ip, cidr string) string {
+	if ip == "" || cidr == "" {
+		return ip
 	}
-	return img.Repository + ":" + tag
+	_, ipNet, err := net.ParseCIDR(cidr)
+	if err != nil {
+		return ip
+	}
+	ones, _ := ipNet.Mask.Size()
+	return fmt.Sprintf("%s/%d", ip, ones)
+}
+
+// SortedEnv converts an environment map to lexically ordered KEY=value lines.
+func SortedEnv(env map[string]string) []string {
+	if len(env) == 0 {
+		return nil
+	}
+	lines := make([]string, 0, len(env))
+	for key, value := range env {
+		lines = append(lines, key+"="+value)
+	}
+	sort.Strings(lines)
+	return lines
+}
+
+// InstanceEnvArtifacts renders conventional root and per-instance compose.env files.
+func InstanceEnvArtifacts(input Input, env func(plan.Instance) []string) []Artifact {
+	if len(input.Service.Instances) == 0 {
+		return nil
+	}
+	artifacts := make([]Artifact, 0, len(input.Service.Instances)+1)
+	for _, instance := range input.Service.Instances {
+		content := strings.TrimRight(strings.Join(env(instance), "\n"), "\n") + "\n"
+		if instance.Index == 0 {
+			artifacts = append(artifacts, Artifact{Key: "compose.env", Content: content})
+		}
+		artifacts = append(artifacts, Artifact{
+			Key:     fmt.Sprintf("instances/%d/compose.env", instance.Index+1),
+			Content: content,
+		})
+	}
+	return artifacts
 }
 
 // envKey normalizes a network role into an environment-variable-safe token:

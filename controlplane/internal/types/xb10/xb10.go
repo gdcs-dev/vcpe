@@ -8,14 +8,12 @@ package xb10
 import (
 	"context"
 	"fmt"
-	"net"
-	"sort"
 	"strings"
 	"sync"
 
-	"github.com/gdcs-dev/vcpe/controlplane/internal/manifest"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/plan"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/render"
+	"github.com/gdcs-dev/vcpe/controlplane/internal/render/servicetemplate"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/typeregistry"
 	"gopkg.in/yaml.v3"
 )
@@ -45,7 +43,11 @@ type ErouterConfig struct {
 	VLAN int `yaml:"vlan,omitempty"`
 }
 
-type serviceType struct{}
+type serviceType struct {
+	typeregistry.BaseServiceType
+}
+
+var _ typeregistry.ServiceType = serviceType{}
 
 func (serviceType) Type() string { return TypeName }
 
@@ -57,7 +59,14 @@ func (serviceType) ValidateConfig(node yaml.Node) error {
 	return typeregistry.StrictDecode(node, &cfg)
 }
 
-func (serviceType) Renderer() render.Renderer { return renderer{} }
+func (serviceType) Renderer() render.Renderer {
+	return servicetemplate.New(servicetemplate.Hooks[Config]{
+		Name:           "xb10-renderer",
+		Mode:           servicetemplate.PerInstance,
+		DecodeConfig:   decodeConfig,
+		RenderInstance: renderXB10Instance,
+	})
+}
 
 func (serviceType) ExpectedRoles() []typeregistry.RoleRequirement {
 	return []typeregistry.RoleRequirement{
@@ -66,36 +75,23 @@ func (serviceType) ExpectedRoles() []typeregistry.RoleRequirement {
 	}
 }
 
-func (serviceType) Health() typeregistry.HealthBehavior {
-	return typeregistry.HealthBehavior{Mode: typeregistry.HealthModeCurated, ContainerPort: 9878}
-}
-
-func (serviceType) DefaultImagePolicy() string { return "build" }
-
-func (serviceType) ValidateInterfaces(_ []manifest.Interface) error { return nil }
-
 func (serviceType) Description() string {
 	return "XB10 CPE gateway simulator"
 }
 
 func (serviceType) DefaultImage() string { return "ghcr.io/gdcs-dev/xb10" }
 
-type renderer struct{}
-
-func (renderer) Name() string { return "xb10-renderer" }
-
-func (renderer) Render(_ context.Context, input render.Input) (render.Result, error) {
-	if len(input.Service.Instances) == 0 {
-		return render.Result{}, fmt.Errorf("xb10 %q has no instances", input.Service.Name)
-	}
-
-	var cfg Config
-	if input.Service.Config.Kind != 0 {
-		if err := typeregistry.StrictDecode(input.Service.Config, &cfg); err != nil {
-			return render.Result{}, fmt.Errorf("xb10 %q: %w", input.Service.Name, err)
+func decodeConfig(node yaml.Node) (Config, error) {
+	var config Config
+	if node.Kind != 0 {
+		if err := typeregistry.StrictDecode(node, &config); err != nil {
+			return Config{}, err
 		}
 	}
+	return config, nil
+}
 
+func renderXB10Instance(_ context.Context, input render.Input, cfg Config) (render.Result, error) {
 	// Resolve role names with defaults.
 	wanRole := cfg.Erouter.WanRole
 	if wanRole == "" {
@@ -110,44 +106,30 @@ func (renderer) Render(_ context.Context, input render.Input) (render.Result, er
 		lanPrefix = "lan-p"
 	}
 
-	artifacts := []render.Artifact{}
-	for _, inst := range input.Service.Instances {
-		env := render.IfaceEnv(input.Deployment, input.Service, inst)
-		ifaceByRole := make(map[string]plan.Interface, len(inst.Interfaces))
-		for _, iface := range inst.Interfaces {
-			ifaceByRole[iface.Role] = iface
-		}
-		wanIface := ifaceByRole[wanRole]
-		wanCIDR := ""
-		if n := input.Deployment.Network(wanRole); n != nil && n.IPv4 != nil {
-			wanCIDR = n.IPv4.CIDR
-		}
-		env = append(env, "EROUTER0_IPV4="+ipWithPrefix(wanIface.IPv4, wanCIDR), "EROUTER0_IPV6="+wanIface.IPv6, "EROUTER0_IPV4_GATEWAY="+wanIface.Gateway4, "EROUTER0_IPV6_GATEWAY="+wanIface.Gateway6)
-		if cfg.Erouter.VLAN != 0 {
-			env = append(env, fmt.Sprintf("EROUTER0_VLAN=%d", cfg.Erouter.VLAN))
-		}
-		if len(cfg.Env) > 0 {
-			extra := make([]string, 0, len(cfg.Env))
-			for k, v := range cfg.Env {
-				extra = append(extra, k+"="+v)
-			}
-			sort.Strings(extra)
-			env = append(env, extra...)
-		}
-		cmIface := ifaceByRole[cmRole]
-		env = append(env, "WAN0_IPV4="+cmIface.IPv4, "WAN0_IPV6="+cmIface.IPv6)
-		content := strings.Join(env, "\n") + "\n"
-		if inst.Index == 0 {
-			artifacts = append(artifacts, render.Artifact{Key: "compose.env", Content: content})
-		}
-		artifacts = append(artifacts, render.Artifact{Key: fmt.Sprintf("instances/%d/compose.env", inst.Index+1), Content: content})
+	inst := input.Service.Instances[0]
+	env := render.IfaceEnv(input.Deployment, input.Service, inst)
+	ifaceByRole := make(map[string]plan.Interface, len(inst.Interfaces))
+	for _, iface := range inst.Interfaces {
+		ifaceByRole[iface.Role] = iface
 	}
-	composeYAML := renderXB10Compose(input)
-	artifacts = append(artifacts, render.Artifact{Key: "compose.yaml", Content: composeYAML})
+	wanIface := ifaceByRole[wanRole]
+	wanCIDR := ""
+	if network := input.Deployment.Network(wanRole); network != nil && network.IPv4 != nil {
+		wanCIDR = network.IPv4.CIDR
+	}
+	env = append(env, "EROUTER0_IPV4="+render.IPWithPrefix(wanIface.IPv4, wanCIDR), "EROUTER0_IPV6="+wanIface.IPv6, "EROUTER0_IPV4_GATEWAY="+wanIface.Gateway4, "EROUTER0_IPV6_GATEWAY="+wanIface.Gateway6)
+	if cfg.Erouter.VLAN != 0 {
+		env = append(env, fmt.Sprintf("EROUTER0_VLAN=%d", cfg.Erouter.VLAN))
+	}
+	env = append(env, render.SortedEnv(cfg.Env)...)
+	cmIface := ifaceByRole[cmRole]
+	env = append(env, "WAN0_IPV4="+cmIface.IPv4, "WAN0_IPV6="+cmIface.IPv6)
 
 	return render.Result{
-		Renderer:  "xb10-renderer",
-		Artifacts: artifacts,
+		Artifacts: []render.Artifact{
+			{Key: "compose.env", Content: strings.Join(env, "\n") + "\n"},
+			{Key: "compose.yaml", Content: renderXB10Compose(input)},
+		},
 	}, nil
 }
 
@@ -183,21 +165,6 @@ func renderXB10Compose(input render.Input) string {
 	}
 	out, _ := yaml.Marshal(doc)
 	return string(out)
-}
-
-// ipWithPrefix returns ip with the prefix length from cidr appended.
-// e.g. ip="10.1.2.3", cidr="10.1.2.0/24" → "10.1.2.3/24".
-// Returns ip unchanged when cidr is empty or unparseable.
-func ipWithPrefix(ip, cidr string) string {
-	if ip == "" || cidr == "" {
-		return ip
-	}
-	_, ipNet, err := net.ParseCIDR(cidr)
-	if err != nil {
-		return ip
-	}
-	ones, _ := ipNet.Mask.Size()
-	return fmt.Sprintf("%s/%d", ip, ones)
 }
 
 // Register wires this service type into the global registry. It is idempotent.

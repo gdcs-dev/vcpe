@@ -8,12 +8,11 @@ import (
 	"context"
 	"fmt"
 	"net/url"
-	"sort"
 	"strings"
 	"sync"
 
-	"github.com/gdcs-dev/vcpe/controlplane/internal/manifest"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/render"
+	"github.com/gdcs-dev/vcpe/controlplane/internal/render/servicetemplate"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/typeregistry"
 	"gopkg.in/yaml.v3"
 )
@@ -136,16 +135,28 @@ fi
 exec "$@"
 `
 
-type serviceType struct{}
+type serviceType struct {
+	typeregistry.BaseServiceType
+}
+
+var _ typeregistry.ServiceType = serviceType{}
 
 func (serviceType) Type() string { return TypeName }
 
 func (serviceType) ValidateConfig(node yaml.Node) error {
-	var cfg Config
-	if err := typeregistry.StrictDecode(node, &cfg); err != nil {
-		return err
+	_, err := decodeConfig(node)
+	return err
+}
+
+func decodeConfig(node yaml.Node) (Config, error) {
+	var config Config
+	if err := typeregistry.StrictDecode(node, &config); err != nil {
+		return Config{}, err
 	}
-	return validateHealth(cfg.Health)
+	if err := validateHealth(config.Health); err != nil {
+		return Config{}, err
+	}
+	return config, nil
 }
 
 func validateHealth(config *HealthConfig) error {
@@ -176,17 +187,21 @@ func validateHealth(config *HealthConfig) error {
 // HasConfiguredHealth reports whether the generic service declares a valid
 // probe and is therefore eligible for a published health endpoint.
 func HasConfiguredHealth(node yaml.Node) (bool, error) {
-	var config Config
-	if err := typeregistry.StrictDecode(node, &config); err != nil {
-		return false, err
-	}
-	if err := validateHealth(config.Health); err != nil {
+	config, err := decodeConfig(node)
+	if err != nil {
 		return false, err
 	}
 	return config.Health != nil, nil
 }
 
-func (serviceType) Renderer() render.Renderer { return renderer{} }
+func (serviceType) Renderer() render.Renderer {
+	return servicetemplate.New(servicetemplate.Hooks[Config]{
+		Name:           "generic-container-renderer",
+		Mode:           servicetemplate.Interpolated,
+		DecodeConfig:   decodeConfig,
+		RenderInstance: renderService,
+	})
+}
 
 func (serviceType) ExpectedRoles() []typeregistry.RoleRequirement { return nil }
 
@@ -194,28 +209,13 @@ func (serviceType) Health() typeregistry.HealthBehavior {
 	return typeregistry.HealthBehavior{Mode: typeregistry.HealthModeOptional, ContainerPort: 9878}
 }
 
-func (serviceType) DefaultImagePolicy() string { return "build" }
-
-func (serviceType) ValidateInterfaces(_ []manifest.Interface) error { return nil }
-
 func (serviceType) Description() string {
 	return "Catch-all generic container workload"
 }
 
 func (serviceType) DefaultImage() string { return "" }
 
-type renderer struct{}
-
-func (renderer) Name() string { return "generic-container-renderer" }
-
-func (renderer) Render(_ context.Context, input render.Input) (render.Result, error) {
-	var cfg Config
-	if err := typeregistry.StrictDecode(input.Service.Config, &cfg); err != nil {
-		return render.Result{}, fmt.Errorf("generic-container %q: %w", input.Service.Name, err)
-	}
-	if err := validateHealth(cfg.Health); err != nil {
-		return render.Result{}, fmt.Errorf("generic-container %q: %w", input.Service.Name, err)
-	}
+func renderService(_ context.Context, input render.Input, cfg Config) (render.Result, error) {
 	if len(input.Service.Instances) == 0 {
 		return render.Result{}, fmt.Errorf("generic-container %q has no instances", input.Service.Name)
 	}
@@ -244,12 +244,7 @@ func (renderer) Render(_ context.Context, input render.Input) (render.Result, er
 	}
 
 	env := render.IfaceEnv(input.Deployment, input.Service, input.Service.Instances[0])
-	extra := make([]string, 0, len(cfg.Env))
-	for k, v := range cfg.Env {
-		extra = append(extra, k+"="+v)
-	}
-	sort.Strings(extra)
-	env = append(env, extra...)
+	env = append(env, render.SortedEnv(cfg.Env)...)
 
 	composeYAML, err := generateCompose(input, cfg)
 	if err != nil {

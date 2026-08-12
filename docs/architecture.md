@@ -30,11 +30,38 @@ phases are recorded in the state store for status and timeline inspection.
 
 Service behavior is a compile-time registry rather than a per-deployment
 catalog. Each `services[].type` maps to a registered `ServiceType` that provides
-a config validator, a renderer, the expected host-network roles, and a default
-image policy. The registry holds no deployment-, customer-, or instance-derived
-data; "supported type" means "registered". The v1 type set is `bng`, `gateway`,
-`webpa`, and `generic-container`; new types register additively without schema
-changes.
+a config validator, a renderer, expected host-network roles, health behavior,
+descriptive metadata, a default image, and a default image policy. Built-in
+types embed registry defaults for common curated health, image policy, and
+no-op interface validation, then override behavior that differs. The registry
+holds no deployment-, customer-, or instance-derived data; "supported type"
+means "registered". The built-in type set is `bng`, `event-sink`, `gateway`,
+`generic-container`, `oktopus`, `webpa`, and `xb10`; new types register
+additively without schema changes. Tools such as the manifest wizard resolve
+type defaults through this registry rather than maintaining a parallel catalog.
+
+## Rendering extension contract
+
+Built-in renderers use the typed lifecycle in
+`internal/render/servicetemplate`. It owns config decode timing, resolved
+instance traversal, root and per-instance artifact paths, and aggregation of
+Compose service and network fragments. A per-instance mode consumes concrete
+planned instances; an interpolated mode preserves generic-container's
+all-replica `${...}` Compose model.
+
+Service packages continue to own workload policy: environment values, network
+attachments, privileges, volumes, commands, health topology, and auxiliary
+configuration files. The shared lifecycle is not a universal Compose policy
+builder. All modes return the existing `render.Result` contract and preserve
+`compose.yaml`, root `compose.env`, and one-based `instances/<n>/...` paths.
+
+## Image backend contract
+
+`internal/image.Manager` owns image lifecycle policy and canonical typed
+requests. Docker and Podman adapters implement `image.Backend` directly while
+retaining separate runtime-specific command construction and diagnostics. Image
+references are formatted by one leaf helper: an absent tag defaults to `latest`
+for a non-empty repository, while an absent repository remains empty.
 
 ## IPAM as the sole IP authority
 

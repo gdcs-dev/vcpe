@@ -4,16 +4,19 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net"
 	"os"
 	"os/exec"
 	"runtime"
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/gdcs-dev/vcpe/controlplane/internal/image"
 )
 
 type Adapter struct{}
+
+var _ image.Backend = (*Adapter)(nil)
 
 // NetworkSpec holds all parameters for creating a Podman network.
 type NetworkSpec struct {
@@ -24,27 +27,6 @@ type NetworkSpec struct {
 	Driver        string            // empty = Podman default (bridge)
 	DriverOptions map[string]string // passed as -o key=val; keys sorted
 	IPAMDriver    string            // optional custom IPAM driver
-}
-
-type ImageBuildRequest struct {
-	Tags      []string // one or more repo:tag values; at least one required
-	Context   string
-	File      string
-	NoCache   bool
-	Platforms []string
-}
-
-type ImagePullRequest struct {
-	Reference string
-}
-
-type ImagePushRequest struct {
-	Reference string
-}
-
-type ImageTagRequest struct {
-	Source string
-	Target string
 }
 
 func New() *Adapter {
@@ -277,7 +259,7 @@ func (a *Adapter) ImageExists(ctx context.Context, reference string) (bool, erro
 	return true, nil
 }
 
-func (a *Adapter) BuildImage(ctx context.Context, req ImageBuildRequest) error {
+func (a *Adapter) BuildImage(ctx context.Context, req image.BuildRequest) error {
 	// When building a multi-arch manifest list, remove any existing image or
 	// manifest with the same tag first. podman build --manifest fails if the
 	// name already exists as a regular (single-arch) image.
@@ -302,7 +284,7 @@ func (a *Adapter) BuildImage(ctx context.Context, req ImageBuildRequest) error {
 	return nil
 }
 
-func (a *Adapter) PullImage(ctx context.Context, req ImagePullRequest) error {
+func (a *Adapter) PullImage(ctx context.Context, req image.PullRequest) error {
 	args, err := pullImageArgs(req)
 	if err != nil {
 		return err
@@ -316,7 +298,7 @@ func (a *Adapter) PullImage(ctx context.Context, req ImagePullRequest) error {
 	return nil
 }
 
-func (a *Adapter) PushImage(ctx context.Context, req ImagePushRequest) error {
+func (a *Adapter) PushImage(ctx context.Context, req image.PushRequest) error {
 	args, err := pushImageArgs(req)
 	if err != nil {
 		return err
@@ -328,7 +310,7 @@ func (a *Adapter) PushImage(ctx context.Context, req ImagePushRequest) error {
 	return nil
 }
 
-func (a *Adapter) TagImage(ctx context.Context, req ImageTagRequest) error {
+func (a *Adapter) TagImage(ctx context.Context, req image.TagRequest) error {
 	args, err := tagImageArgs(req)
 	if err != nil {
 		return err
@@ -340,7 +322,7 @@ func (a *Adapter) TagImage(ctx context.Context, req ImageTagRequest) error {
 	return nil
 }
 
-func buildImageArgs(req ImageBuildRequest) ([]string, error) {
+func buildImageArgs(req image.BuildRequest) ([]string, error) {
 	if len(req.Tags) == 0 {
 		return nil, fmt.Errorf("build image tags are required")
 	}
@@ -367,21 +349,21 @@ func buildImageArgs(req ImageBuildRequest) ([]string, error) {
 	return args, nil
 }
 
-func pullImageArgs(req ImagePullRequest) ([]string, error) {
+func pullImageArgs(req image.PullRequest) ([]string, error) {
 	if req.Reference == "" {
 		return nil, fmt.Errorf("pull reference is required")
 	}
 	return []string{"pull", req.Reference}, nil
 }
 
-func pushImageArgs(req ImagePushRequest) ([]string, error) {
+func pushImageArgs(req image.PushRequest) ([]string, error) {
 	if req.Reference == "" {
 		return nil, fmt.Errorf("push reference is required")
 	}
 	return []string{"push", req.Reference}, nil
 }
 
-func tagImageArgs(req ImageTagRequest) ([]string, error) {
+func tagImageArgs(req image.TagRequest) ([]string, error) {
 	if req.Source == "" {
 		return nil, fmt.Errorf("tag source is required")
 	}
@@ -389,34 +371,4 @@ func tagImageArgs(req ImageTagRequest) ([]string, error) {
 		return nil, fmt.Errorf("tag target is required")
 	}
 	return []string{"tag", req.Source, req.Target}, nil
-}
-
-// lastUsableIP returns the last usable host address in a CIDR block. For
-// 192.168.10.0/24 this is 192.168.10.254. Podman is told to assign this IP to
-// its host-side bridge so the network gateway (.1) stays free for the gateway
-// container's brlan0 bridge interface.
-func lastUsableIP(cidr string) (string, error) {
-	_, ipNet, err := net.ParseCIDR(cidr)
-	if err != nil {
-		return "", err
-	}
-	ip := ipNet.IP.To4()
-	if ip == nil {
-		ip = ipNet.IP.To16()
-	}
-	// Compute broadcast: network | ^mask
-	broadcast := make(net.IP, len(ip))
-	for i := range ip {
-		broadcast[i] = ip[i] | ^ipNet.Mask[i]
-	}
-	// Last usable = broadcast - 1
-	last := make(net.IP, len(broadcast))
-	copy(last, broadcast)
-	for i := len(last) - 1; i >= 0; i-- {
-		if last[i] > 0 {
-			last[i]--
-			break
-		}
-	}
-	return last.String(), nil
 }

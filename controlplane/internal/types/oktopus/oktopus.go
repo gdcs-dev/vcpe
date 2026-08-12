@@ -11,8 +11,9 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/gdcs-dev/vcpe/controlplane/internal/manifest"
+	"github.com/gdcs-dev/vcpe/controlplane/internal/plan"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/render"
+	"github.com/gdcs-dev/vcpe/controlplane/internal/render/servicetemplate"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/typeregistry"
 	"gopkg.in/yaml.v3"
 )
@@ -44,7 +45,11 @@ type Config struct {
 	Env map[string]string `yaml:"env,omitempty"`
 }
 
-type serviceType struct{}
+type serviceType struct {
+	typeregistry.BaseServiceType
+}
+
+var _ typeregistry.ServiceType = serviceType{}
 
 func (serviceType) Type() string { return TypeName }
 
@@ -56,19 +61,18 @@ func (serviceType) ValidateConfig(node yaml.Node) error {
 	return typeregistry.StrictDecode(node, &cfg)
 }
 
-func (serviceType) Renderer() render.Renderer { return renderer{} }
+func (serviceType) Renderer() render.Renderer {
+	return servicetemplate.New(servicetemplate.Hooks[Config]{
+		Name:           "oktopus-renderer",
+		Mode:           servicetemplate.PerInstance,
+		DecodeConfig:   decodeConfig,
+		RenderInstance: renderInstance,
+	})
+}
 
 func (serviceType) ExpectedRoles() []typeregistry.RoleRequirement {
 	return []typeregistry.RoleRequirement{{Role: "mgmt", Required: true}}
 }
-
-func (serviceType) Health() typeregistry.HealthBehavior {
-	return typeregistry.HealthBehavior{Mode: typeregistry.HealthModeCurated, ContainerPort: 9878}
-}
-
-func (serviceType) DefaultImagePolicy() string { return "build" }
-
-func (serviceType) ValidateInterfaces(_ []manifest.Interface) error { return nil }
 
 func (serviceType) Description() string {
 	return "Oktopus USP controller — cloud-native device management platform"
@@ -76,37 +80,25 @@ func (serviceType) Description() string {
 
 func (serviceType) DefaultImage() string { return "" }
 
-type renderer struct{}
-
-func (renderer) Name() string { return "oktopus-renderer" }
-
-func (renderer) Render(_ context.Context, input render.Input) (render.Result, error) {
-	if len(input.Service.Instances) == 0 {
-		return render.Result{}, fmt.Errorf("oktopus %q has no instances", input.Service.Name)
-	}
-
+func decodeConfig(node yaml.Node) (Config, error) {
 	var cfg Config
-	if input.Service.Config.Kind != 0 {
-		if err := typeregistry.StrictDecode(input.Service.Config, &cfg); err != nil {
-			return render.Result{}, fmt.Errorf("oktopus %q: %w", input.Service.Name, err)
-		}
+	if node.Kind == 0 {
+		return cfg, nil
+	}
+	if err := typeregistry.StrictDecode(node, &cfg); err != nil {
+		return Config{}, err
+	}
+	return cfg, nil
+}
+
+func renderInstance(_ context.Context, input render.Input, cfg Config) (render.Result, error) {
+	env := oktopusEnv(input, input.Service.Instances[0], cfg)
+	artifacts := []render.Artifact{
+		{Key: "compose.env", Content: strings.TrimRight(strings.Join(env, "\n"), "\n") + "\n"},
+		{Key: "compose.yaml", Content: generateCompose(input)},
 	}
 
-	artifacts := []render.Artifact{}
-	for _, inst := range input.Service.Instances {
-		lines := oktopusEnv(input, inst.Index, cfg)
-		content := strings.Join(lines, "\n") + "\n"
-		if inst.Index == 0 {
-			artifacts = append(artifacts, render.Artifact{Key: "compose.env", Content: content})
-		}
-		artifacts = append(artifacts, render.Artifact{Key: fmt.Sprintf("instances/%d/compose.env", inst.Index+1), Content: content})
-	}
-	artifacts = append(artifacts, render.Artifact{Key: "compose.yaml", Content: generateCompose(input)})
-
-	return render.Result{
-		Renderer:  "oktopus-renderer",
-		Artifacts: artifacts,
-	}, nil
+	return render.Result{Artifacts: artifacts}, nil
 }
 
 // generateCompose builds the compose.yaml for the oktopus container, wiring
@@ -135,8 +127,8 @@ func generateCompose(input render.Input) string {
 	return string(out)
 }
 
-func oktopusEnv(input render.Input, index int, cfg Config) []string {
-	lines := render.IfaceEnv(input.Deployment, input.Service, input.Service.Instances[index])
+func oktopusEnv(input render.Input, instance plan.Instance, cfg Config) []string {
+	lines := render.IfaceEnv(input.Deployment, input.Service, instance)
 	for _, pair := range [][2]string{{"ADMIN_EMAIL", cfg.AdminEmail}, {"ADMIN_NAME", cfg.AdminName}, {"ADMIN_PASSWORD", cfg.AdminPassword}, {"NATS_USER", cfg.NATSUser}, {"NATS_PW", cfg.NATSPassword}, {"STOMP_USER", cfg.STOMPUser}, {"STOMP_PASSWD", cfg.STOMPPassword}, {"SECRET_API_KEY", cfg.TaaSAPIKey}} {
 		lines = appendIfSet(lines, pair[0], pair[1])
 	}
