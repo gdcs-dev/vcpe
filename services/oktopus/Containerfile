@@ -91,6 +91,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
    ca-certificates \
    gnupg \
    net-tools \
+   isc-dhcp-client \
    nginx \
    && \
    # Node.js 18 LTS
@@ -141,6 +142,9 @@ COPY container/vcpe-healthd /usr/local/bin/vcpe-healthd
 COPY container/vcpe-healthd.service /etc/systemd/system/vcpe-healthd.service
 COPY container/health-probe.sh /usr/local/bin/oktopus-health-probe
 RUN chmod 0755 /usr/local/bin/oktopus-health-probe
+COPY container/network-init.sh /usr/local/bin/oktopus-network-init
+COPY container/oktopus-network-init.service /etc/systemd/system/oktopus-network-init.service
+RUN chmod 0755 /usr/local/bin/oktopus-network-init
 
 # ---------------------------------------------------------------------------
 # Copy Next.js frontend
@@ -196,6 +200,7 @@ RUN printf '[Service]\nEnvironmentFile=-/etc/oktopus/oktopus.env\n' \
 # Enable all services.
 RUN systemctl enable \
 	vcpe-healthd.service \
+	oktopus-network-init.service \
    mongod.service \
    nats.service \
    ws.service \

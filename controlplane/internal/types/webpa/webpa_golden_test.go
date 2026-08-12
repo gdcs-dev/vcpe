@@ -26,7 +26,7 @@ func TestWebPAGoldenComposeEnv(t *testing.T) {
 		Type:  "webpa",
 		Image: manifest.Image{Repository: "ghcr.io/gdcs-dev/webpa", Tag: "dev"},
 		Instances: []plan.Instance{{Interfaces: []plan.Interface{
-			{Role: "mgmt", Network: "edge-mgmt", Device: "eth0", MAC: "02:00:00:00:00:09", IPv4: "10.10.10.5", Gateway4: "10.10.10.1"},
+			{Role: "mgmt", Network: "edge-mgmt", Device: "eth0", MAC: "02:00:00:00:00:09", IPv4: "10.10.10.5", Gateway4: "10.10.10.1", Addressing: "static"},
 		}}},
 	}
 
@@ -45,6 +45,7 @@ func TestWebPAGoldenComposeEnv(t *testing.T) {
 		"DEPLOYMENT_NAME=edge",
 		"SERVICE_NAME=webpa",
 		"IMAGE=ghcr.io/gdcs-dev/webpa:dev",
+		"IFACE_MGMT_ADDRESSING=static",
 		"IFACE_MGMT_BRIDGE=",
 		"IFACE_MGMT_DEVICE=eth0",
 		"IFACE_MGMT_GATEWAY4=10.10.10.1",
@@ -65,6 +66,43 @@ func TestWebPAGoldenComposeEnv(t *testing.T) {
 	}
 	if !strings.Contains(composeYAML, "name: edge-mgmt") {
 		t.Errorf("compose.yaml should contain the resolved mgmt network, got:\n%s", composeYAML)
+	}
+}
+
+// TestWebPADefaultAddressingIsDHCP verifies an interface with no explicit
+// addressing/ipv4 resolves to dhcp and carries no pinned address.
+func TestWebPADefaultAddressingIsDHCP(t *testing.T) {
+	webpa.Register()
+	st, _ := typeregistry.Lookup("webpa")
+
+	dep := plan.Deployment{Name: "edge", Networks: []plan.Network{{Role: "mgmt", Bridge: "edge-mgmt"}}}
+	svc := plan.Service{
+		Name:  "webpa",
+		Type:  "webpa",
+		Image: manifest.Image{Repository: "ghcr.io/gdcs-dev/webpa", Tag: "dev"},
+		Instances: []plan.Instance{{Interfaces: []plan.Interface{
+			{Role: "mgmt", Network: "edge-mgmt", Device: "eth0", MAC: "02:00:00:00:00:09", ManagedNetwork: true},
+		}}},
+	}
+
+	result, err := st.Renderer().Render(context.Background(), render.Input{Deployment: dep, Service: svc})
+	if err != nil {
+		t.Fatalf("render webpa: %v", err)
+	}
+	env := ""
+	for _, a := range result.Artifacts {
+		if a.Key == "compose.env" {
+			env = a.Content
+		}
+	}
+	if !strings.Contains(env, "IFACE_MGMT_ADDRESSING=dhcp") {
+		t.Fatalf("compose.env missing IFACE_MGMT_ADDRESSING=dhcp (default):\n%s", env)
+	}
+	if !strings.Contains(env, "IFACE_MGMT_NETWORK_MANAGED=1") {
+		t.Fatalf("compose.env missing IFACE_MGMT_NETWORK_MANAGED=1 for a Podman-managed network:\n%s", env)
+	}
+	if strings.Contains(env, "IFACE_MGMT_IPV4=10") {
+		t.Fatalf("expected no pinned ipv4 in dhcp mode:\n%s", env)
 	}
 }
 

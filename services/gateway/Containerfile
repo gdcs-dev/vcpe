@@ -9,6 +9,7 @@ RUN apt-get update && \
    DEBIAN_FRONTEND=noninteractive apt-get -y install \
    rbus parodus rbus-elements telemetry utopia webcfg parodus2rbus \
    iptables net-tools dnsutils dnsmasq systemd-sysv iputils-ping syslog-ng jq netplan.io \
+   isc-dhcp-client \
    libcjson1 libmsgpackc2 curl liblog4c3t64 libjansson4 libspdlog-dev && \
    rm -rf /var/lib/apt/lists/*
 

@@ -76,8 +76,8 @@ spec:
         containerfile: services/bng/Containerfile
       interfaces:
         - { role: mgmt, device: mgmt0 }
-        - { role: wan, device: wan0, defaultRoute: true, ipv4: "10.7.200.1" }
-        - { role: cm, device: cm0, ipv4: "10.7.201.1" }
+        - { role: wan, device: wan0, defaultRoute: true, ipv4: "10.7.200.1", addressing: static }
+        - { role: cm, device: cm0, ipv4: "10.7.201.1", addressing: static }
       config:
         access:
           - role: wan
@@ -124,8 +124,8 @@ spec:
         pullPolicy: build-if-missing
         buildContext: services/gateway
       interfaces:
-        - { role: wan, device: erouter0, ipv4: "10.7.200.10", healthUpstream: true }
-        - { role: cm, device: wan0, ipv4: "10.7.201.10" }
+        - { role: wan, device: erouter0, ipv4: "10.7.200.10", healthUpstream: true, addressing: static }
+        - { role: cm, device: wan0, ipv4: "10.7.201.10", addressing: static }
         - { role: lan-p1, device: eth0, bridge: brlan0 }
         - { role: lan-p2, device: eth1, bridge: brlan0 }
         - { role: lan-p3, device: eth2, bridge: brlan0 }

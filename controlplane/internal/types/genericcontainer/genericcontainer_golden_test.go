@@ -89,14 +89,16 @@ func TestGenericContainerGeneratesComposeAndEnv(t *testing.T) {
 	}
 }
 
-// TestGenericContainerStaticRole verifies that the entrypoint.sh is emitted and
-// compose is well-formed when VCPE_INIT_STATIC_ROLE is used via config.env.
-func TestGenericContainerStaticRole(t *testing.T) {
+// TestGenericContainerStaticAddressing verifies that an interface with
+// addressing: static is reflected in compose.env and the entrypoint applies it
+// without running a DHCP client, replacing the former VCPE_INIT_STATIC_ROLE
+// config.env convention.
+func TestGenericContainerStaticAddressing(t *testing.T) {
 	genericcontainer.Register()
 	st, _ := typeregistry.Lookup("generic-container")
 
 	var cfg yaml.Node
-	src := "command: [\"/bin/sh\"]\nenv: { VCPE_INIT_STATIC_ROLE: lan }\n"
+	src := "command: [\"/bin/sh\"]\n"
 	if err := yaml.Unmarshal([]byte(src), &cfg); err != nil {
 		t.Fatalf("unmarshal cfg: %v", err)
 	}
@@ -113,7 +115,7 @@ func TestGenericContainerStaticRole(t *testing.T) {
 		Config: node,
 		Instances: []plan.Instance{{Interfaces: []plan.Interface{
 			{Role: "lan", Network: "edge-lan", Device: "eth0", MAC: "02:00:00:00:00:0a",
-				IPv4: "192.168.1.10/24", Gateway4: "192.168.1.1", DefaultRoute: true},
+				IPv4: "192.168.1.10/24", Gateway4: "192.168.1.1", DefaultRoute: true, Addressing: "static"},
 		}}},
 	}
 
@@ -137,8 +139,48 @@ func TestGenericContainerStaticRole(t *testing.T) {
 	if !strings.Contains(env, "IFACE_LAN_DEFAULT_ROUTE=1") {
 		t.Fatalf("compose.env missing IFACE_LAN_DEFAULT_ROUTE=1:\n%s", env)
 	}
-	if !strings.Contains(env, "VCPE_INIT_STATIC_ROLE=lan") {
-		t.Fatalf("compose.env missing VCPE_INIT_STATIC_ROLE=lan:\n%s", env)
+	if !strings.Contains(env, "IFACE_LAN_ADDRESSING=static") {
+		t.Fatalf("compose.env missing IFACE_LAN_ADDRESSING=static:\n%s", env)
+	}
+	if strings.Contains(env, "VCPE_INIT_STATIC_ROLE") {
+		t.Fatalf("VCPE_INIT_STATIC_ROLE is superseded by addressing and must not appear:\n%s", env)
+	}
+}
+
+// TestGenericContainerMultipleInterfacesEachInitialized verifies every
+// declared interface is reflected with its own resolved addressing, not just
+// a single default-route interface.
+func TestGenericContainerMultipleInterfacesEachInitialized(t *testing.T) {
+	genericcontainer.Register()
+	st, _ := typeregistry.Lookup("generic-container")
+
+	dep := plan.Deployment{Name: "edge"}
+	svc := plan.Service{
+		Name:  "client",
+		Type:  "generic-container",
+		Image: manifest.Image{Repository: "docker.io/library/alpine", Tag: "3.19"},
+		Instances: []plan.Instance{{Interfaces: []plan.Interface{
+			{Role: "wan", Device: "eth0", MAC: "02:00:00:00:00:0a", DefaultRoute: true},
+			{Role: "lan-p1", Device: "eth1", MAC: "02:00:00:00:00:0b",
+				IPv4: "10.0.0.5/24", Gateway4: "10.0.0.1", Addressing: "static"},
+		}}},
+	}
+
+	result, err := st.Renderer().Render(context.Background(), render.Input{Deployment: dep, Service: svc})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	env := ""
+	for _, a := range result.Artifacts {
+		if a.Key == "compose.env" {
+			env = a.Content
+		}
+	}
+	if !strings.Contains(env, "IFACE_WAN_ADDRESSING=dhcp") {
+		t.Fatalf("compose.env missing IFACE_WAN_ADDRESSING=dhcp (default):\n%s", env)
+	}
+	if !strings.Contains(env, "IFACE_LAN_P1_ADDRESSING=static") {
+		t.Fatalf("compose.env missing IFACE_LAN_P1_ADDRESSING=static:\n%s", env)
 	}
 }
 

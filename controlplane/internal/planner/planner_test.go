@@ -61,6 +61,43 @@ func TestDependsOnOrdering(t *testing.T) {
 	}
 }
 
+// TestManagedNetworkResolution asserts an interface's ManagedNetwork reflects
+// whether its network's IPAMDriver is "none" (container-managed, false) or
+// anything else, including empty/default (Podman-managed, true).
+func TestManagedNetworkResolution(t *testing.T) {
+	doc := manifest.Document{
+		APIVersion: manifest.APIVersion,
+		Kind:       manifest.Kind,
+		Metadata:   manifest.Metadata{Name: "edge"},
+		Spec: manifest.Spec{
+			Networks: []manifest.Network{
+				{Role: "wan", IPAMDriver: "none", IPv4: &manifest.AddressFamily{CIDR: "10.200.0.0/24", Gateway: "10.200.0.1"}},
+				{Role: "mgmt", IPv4: &manifest.AddressFamily{CIDR: "10.10.10.0/24", Gateway: "10.10.10.1", Pool: &manifest.Pool{Start: "10.10.10.10", End: "10.10.10.20"}}},
+			},
+			Services: []manifest.Service{
+				{Name: "gateway", Type: "gateway", Replicas: 1, Image: manifest.Image{Repository: "x/gateway"}, Interfaces: []manifest.Interface{
+					{Role: "wan", Addressing: manifest.AddressingStatic, IPv4: "10.200.0.2"},
+					{Role: "mgmt"},
+				}},
+			},
+		},
+	}
+	resolved, err := planner.Build(doc, nil)
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	byRole := map[string]plan.Interface{}
+	for _, iface := range resolved.Services[0].Instances[0].Interfaces {
+		byRole[iface.Role] = iface
+	}
+	if byRole["wan"].ManagedNetwork {
+		t.Fatalf("expected wan (ipamDriver: none) to be unmanaged, got ManagedNetwork=true")
+	}
+	if !byRole["mgmt"].ManagedNetwork {
+		t.Fatalf("expected mgmt (default ipamDriver) to be Podman-managed, got ManagedNetwork=false")
+	}
+}
+
 // TestDeviceAndGatewayAssignment asserts ordered eth<n> devices and inherited
 // gateways from the network.
 func TestDeviceAndGatewayAssignment(t *testing.T) {

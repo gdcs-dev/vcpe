@@ -170,6 +170,9 @@ func validateServiceInterfaces(svc Service, networks map[string][]netip.Prefix) 
 				return err
 			}
 		}
+		if err := validateAddressing(svc.Name, iface); err != nil {
+			return err
+		}
 		if iface.DefaultRoute {
 			defaultRoutes++
 		}
@@ -179,6 +182,34 @@ func validateServiceInterfaces(svc Service, networks map[string][]netip.Prefix) 
 	}
 	if healthUpstreams > 1 {
 		return fmt.Errorf("service %q declares %d healthUpstream interfaces: at most one interface may set healthUpstream", svc.Name, healthUpstreams)
+	}
+	return nil
+}
+
+// validateAddressing enforces the addressing/address consistency rule: static
+// requires an explicit ipv4/ipv6, dhcp (explicit or defaulted) forbids one.
+// Bridge-enslaved interfaces are exempt since the bridge, not the member port,
+// carries an address. There is deliberately no check against a service's own
+// config (e.g. a DHCP-server role misconfigured as dhcp) — see design.md.
+func validateAddressing(service string, iface Interface) error {
+	if iface.Bridge != "" {
+		return nil
+	}
+	addressing := iface.Addressing
+	if addressing == "" {
+		addressing = AddressingDHCP
+	}
+	switch addressing {
+	case AddressingDHCP:
+		if iface.IPv4 != "" || iface.IPv6 != "" {
+			return fmt.Errorf("service %q interface role %q declares an ipv4/ipv6 address but addressing is %q: set addressing: %s or remove the address", service, iface.Role, AddressingDHCP, AddressingStatic)
+		}
+	case AddressingStatic:
+		if iface.IPv4 == "" && iface.IPv6 == "" {
+			return fmt.Errorf("service %q interface role %q sets addressing: %s but declares no ipv4/ipv6 address", service, iface.Role, AddressingStatic)
+		}
+	default:
+		return fmt.Errorf("service %q interface role %q has invalid addressing %q: must be %q or %q", service, iface.Role, iface.Addressing, AddressingDHCP, AddressingStatic)
 	}
 	return nil
 }

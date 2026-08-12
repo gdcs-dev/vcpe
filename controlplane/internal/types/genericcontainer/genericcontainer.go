@@ -70,31 +70,43 @@ if [ -n "${VCPE_INIT_MAC_ROLE:-}" ]; then
 fi
 
 # ── Network ───────────────────────────────────────────────────────────────────
+# Every declared interface (any IFACE_<ROLE>_DEVICE present) is initialized
+# according to its own IFACE_<ROLE>_ADDRESSING (dhcp or static), replacing the
+# former single default-route-interface special case.
 
-_dr_prefix=$(env | awk -F= '$1 ~ /^IFACE_.*_DEFAULT_ROUTE$/ && $2 == "1" {
-    sub(/_DEFAULT_ROUTE$/, "", $1); print $1; exit }')
+for _if_var in $(env | awk -F= '$1 ~ /^IFACE_.*_DEVICE$/ {print $1}'); do
+    _if_prefix="${_if_var%_DEVICE}"
+    _if_dev=$(eval "printf '%s' \"\${${_if_prefix}_DEVICE:-}\"")
+    [ -n "$_if_dev" ] || continue
+    _if_addressing=$(eval "printf '%s' \"\${${_if_prefix}_ADDRESSING:-dhcp}\"")
+    _if_default_route=$(eval "printf '%s' \"\${${_if_prefix}_DEFAULT_ROUTE:-}\"")
+    _if_managed=$(eval "printf '%s' \"\${${_if_prefix}_NETWORK_MANAGED:-}\"")
 
-if [ -n "$_dr_prefix" ]; then
-    _dr_dev=$(eval "printf '%s' \"\${${_dr_prefix}_DEVICE:-}\"")
-    _dr_key="${_dr_prefix#IFACE_}"
-    _dr_role=$(printf '%s' "$_dr_key" | tr 'A-Z_' 'a-z-')
-    ip link set "$_dr_dev" up 2>/dev/null || true
+    ip link set "$_if_dev" up 2>/dev/null || true
 
-    if [ "${VCPE_INIT_STATIC_ROLE:-}" = "$_dr_role" ]; then
-        _s_ipv4=$(eval "printf '%s' \"\${${_dr_prefix}_IPV4:-}\"")
-        _s_gw4=$(eval  "printf '%s' \"\${${_dr_prefix}_GATEWAY4:-}\"")
-        [ -n "$_s_ipv4" ] && ip addr add "$_s_ipv4" dev "$_dr_dev"
-        [ -n "$_s_gw4"  ] && ip route replace default via "$_s_gw4" dev "$_dr_dev"
-    else
+    if [ "$_if_addressing" = "static" ]; then
+        _if_ipv4=$(eval "printf '%s' \"\${${_if_prefix}_IPV4:-}\"")
+        _if_gw4=$(eval  "printf '%s' \"\${${_if_prefix}_GATEWAY4:-}\"")
+        [ -n "$_if_ipv4" ] && ip addr add "$_if_ipv4" dev "$_if_dev"
+        if [ "$_if_default_route" = "1" ] && [ -n "$_if_gw4" ]; then
+            ip route replace default via "$_if_gw4" dev "$_if_dev"
+        fi
+    elif [ -z "$_if_managed" ]; then
         _dhcp_host="${_vcpe_hostname:-$(hostname)}"
         _n=0
-        until udhcpc -n -q -i "$_dr_dev" -x "hostname:${_dhcp_host}" 2>/dev/null; do
+        until udhcpc -n -q -i "$_if_dev" -x "hostname:${_dhcp_host}" 2>/dev/null; do
             _n=$((_n + 1))
             [ "$_n" -ge 100 ] && break
             sleep 3
         done
+        # Only the interface marked defaultRoute keeps a default route; a
+        # DHCP offer's router option on any other interface must not race
+        # with (and override) the intended default-route interface's.
+        if [ "$_if_default_route" != "1" ]; then
+            ip route del default dev "$_if_dev" 2>/dev/null || true
+        fi
     fi
-fi
+done
 
 # ── DNS override ─────────────────────────────────────────────────────────────
 

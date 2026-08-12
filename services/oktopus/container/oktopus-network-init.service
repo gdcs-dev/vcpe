@@ -1,0 +1,13 @@
+[Unit]
+Description=vCPE mgmt interface addressing (dhcp/static per IFACE_MGMT_ADDRESSING)
+DefaultDependencies=no
+After=network.target
+Before=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/oktopus-network-init
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

@@ -215,7 +215,7 @@ func TestApplyReservesGatewayHealthEndpointOnlyWhenHealthUpstreamDeclared(t *tes
 		t.Run(testCase.name, func(t *testing.T) {
 			stateRoot := t.TempDir()
 			manifestPath := filepath.Join(t.TempDir(), "manifest.yaml")
-			content := "apiVersion: vcpe.dev/v1\nkind: Deployment\nmetadata:\n  name: edge\nspec:\n  networks:\n    - role: wan\n      ipamDriver: none\n      ipv4: { cidr: 10.7.200.0/24, gateway: 10.7.200.1 }\n  services:\n    - name: gateway\n      type: gateway\n      replicas: 1\n      image: { repository: ghcr.io/gdcs-dev/gateway, tag: dev }\n      interfaces:\n        - { role: wan, device: erouter0, ipv4: \"10.7.200.10\"" + testCase.healthUpstream + " }\n"
+			content := "apiVersion: vcpe.dev/v1\nkind: Deployment\nmetadata:\n  name: edge\nspec:\n  networks:\n    - role: wan\n      ipamDriver: none\n      ipv4: { cidr: 10.7.200.0/24, gateway: 10.7.200.1 }\n  services:\n    - name: gateway\n      type: gateway\n      replicas: 1\n      image: { repository: ghcr.io/gdcs-dev/gateway, tag: dev }\n      interfaces:\n        - { role: wan, device: erouter0, ipv4: \"10.7.200.10\", addressing: static" + testCase.healthUpstream + " }\n"
 			if err := os.WriteFile(manifestPath, []byte(content), 0o644); err != nil {
 				t.Fatalf("write manifest: %v", err)
 			}

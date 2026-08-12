@@ -58,7 +58,6 @@ spec:
     - name: bng
       type: bng
       replicas: 1
-      ports: ["8080:80"]
       image:
         repository: ghcr.io/gdcs-dev/bng
         tag: v0.2.8
@@ -66,8 +65,8 @@ spec:
         buildContext: services/bng
       interfaces:
         - { role: mgmt, device: mgmt0 }
-        - { role: wan, device: wan0, defaultRoute: true, ipv4: "10.7.200.1" }
-        - { role: cm, device: cm0, ipv4: "10.7.201.1" }
+        - { role: wan, device: wan0, defaultRoute: true, ipv4: "10.7.200.1", addressing: static }
+        - { role: cm, device: cm0, ipv4: "10.7.201.1", addressing: static }
       config:
         access:
           - role: wan
@@ -91,7 +90,6 @@ spec:
     - name: webpa
       type: webpa
       replicas: 1
-      ports: ["6200:6200"]
       image:
         repository: ghcr.io/gdcs-dev/webpa
         tag: v0.2.8
@@ -114,14 +112,12 @@ spec:
         pullPolicy: always-pull
         buildContext: services/gateway
       interfaces:
-        - { role: wan, device: erouter0, ipv4: "10.7.200.10", healthUpstream: false }
-        - { role: cm, device: wan0, ipv4: "10.7.201.10" }
+        - { role: wan, device: erouter0, healthUpstream: false, addressing: dhcp, defaultRoute: true }
+        - { role: cm, device: wan0, addressing: dhcp }
         - { role: lan-p1, device: eth0, bridge: brlan0 }
         - { role: lan-p2, device: eth1, bridge: brlan0 }
         - { role: lan-p3, device: eth2, bridge: brlan0 }
         - { role: lan-p4, device: eth3, bridge: brlan0 }
-      dependsOn:
-        - bng
       bridges:
         - name: brlan0
           ipv4: 10.0.0.1/24
@@ -130,7 +126,8 @@ spec:
       config:
         env:
           LAN_DNS: "10.0.0.1"
-
+      dependsOn:
+        - bng
     - name: client
       type: generic-container
       replicas: 1

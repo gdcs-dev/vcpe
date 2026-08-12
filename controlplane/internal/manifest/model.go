@@ -15,6 +15,14 @@ const (
 	Kind       = "Deployment"
 )
 
+// AddressingDHCP and AddressingStatic are the only valid values for
+// Interface.Addressing. AddressingDHCP is also the default applied when the
+// field is left empty.
+const (
+	AddressingDHCP   = "dhcp"
+	AddressingStatic = "static"
+)
+
 // Document is the top-level desired-state manifest. The deployment identity is
 // metadata.name; there is no first-class customer concept. A "customer" is at
 // most an opaque label under metadata.labels.
@@ -113,6 +121,12 @@ type Interface struct {
 	// network to publish its health endpoint on directly. At most one
 	// interface per service may set this.
 	HealthUpstream bool `json:"healthUpstream,omitempty" yaml:"healthUpstream,omitempty"`
+	// Addressing selects how this interface obtains its address at runtime:
+	// "dhcp" (the default, applied when empty) runs a real DHCP client
+	// against the interface's device; "static" applies the manifest's ipv4/
+	// ipv6 directly. static requires ipv4 and/or ipv6 to be set; dhcp forbids
+	// them. Ignored entirely on interfaces that also set Bridge.
+	Addressing string `json:"addressing,omitempty" yaml:"addressing,omitempty"`
 }
 
 // BridgeSpec declares a container-internal bridge to create for a service.

@@ -63,7 +63,7 @@ func renderBNG(t *testing.T) render.Result {
 			{
 				Index: 0,
 				Interfaces: []plan.Interface{
-					{Role: "wan", Network: "edge-wan", Device: "eth0", MAC: "02:aa:bb:cc:dd:ee", IPv4: "10.200.0.2", Gateway4: "10.200.0.1"},
+					{Role: "wan", Network: "edge-wan", Device: "eth0", MAC: "02:aa:bb:cc:dd:ee", IPv4: "10.200.0.2", Gateway4: "10.200.0.1", Addressing: "static"},
 				},
 			},
 		},
@@ -99,6 +99,7 @@ func TestBNGGoldenComposeEnv(t *testing.T) {
 		"DEPLOYMENT_NAME=edge",
 		"SERVICE_NAME=bng",
 		"IMAGE=ghcr.io/gdcs-dev/bng:dev",
+		"IFACE_WAN_ADDRESSING=static",
 		"IFACE_WAN_BRIDGE=",
 		"IFACE_WAN_DEVICE=eth0",
 		"IFACE_WAN_GATEWAY4=10.200.0.1",
@@ -233,5 +234,30 @@ func TestBNGDnsmasqResolvesWebPAByInstanceAlias(t *testing.T) {
 	}
 	if strings.Contains(conf, ",webpa\n") {
 		t.Fatalf("dnsmasq.conf cname targets should not use the bare service name, got:\n%s", conf)
+	}
+}
+
+// TestBNGRendersWithDHCPAddressingOnItsOwnServerRole documents that the
+// control plane does not guard against setting addressing: dhcp on an
+// interface BNG itself serves DHCP for — rendering succeeds regardless
+// (a misconfiguration here is left to fail at runtime, not validation).
+func TestBNGRendersWithDHCPAddressingOnItsOwnServerRole(t *testing.T) {
+	bng.Register()
+	st, _ := typeregistry.Lookup("bng")
+	dep := plan.Deployment{
+		Name:     "edge",
+		Networks: []plan.Network{{Role: "wan", Bridge: "edge-wan", IPv4: &plan.Family{CIDR: "10.200.0.0/24", Gateway: "10.200.0.1"}}},
+	}
+	svc := plan.Service{
+		Name:   "bng",
+		Type:   "bng",
+		Image:  manifest.Image{Repository: "ghcr.io/gdcs-dev/bng", Tag: "dev"},
+		Config: bngConfigNode(t),
+		Instances: []plan.Instance{{Interfaces: []plan.Interface{
+			{Role: "wan", Network: "edge-wan", Device: "eth0", MAC: "02:aa:bb:cc:dd:ee", Addressing: "dhcp"},
+		}}},
+	}
+	if _, err := st.Renderer().Render(context.Background(), render.Input{Deployment: dep, Service: svc}); err != nil {
+		t.Fatalf("expected bng to render even with addressing: dhcp on its own DHCP-server role, got %v", err)
 	}
 }

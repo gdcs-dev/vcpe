@@ -24,8 +24,8 @@ func validDoc() Document {
 					Replicas: 1,
 					Image:    Image{Repository: "ghcr.io/gdcs-dev/bng", Tag: "dev"},
 					Interfaces: []Interface{
-						{Role: "wan", IPv4: "10.7.200.2", DefaultRoute: true},
-						{Role: "lan", IPv4: "10.7.210.2"},
+						{Role: "wan", IPv4: "10.7.200.2", DefaultRoute: true, Addressing: AddressingStatic},
+						{Role: "lan", IPv4: "10.7.210.2", Addressing: AddressingStatic},
 					},
 				},
 			},
@@ -125,7 +125,9 @@ func TestValidateRejectsReplicasOverMax(t *testing.T) {
 	// Explicit addresses are invalid with replicas>1; clear them so we isolate
 	// the cap check.
 	doc.Spec.Services[0].Interfaces[0].IPv4 = ""
+	doc.Spec.Services[0].Interfaces[0].Addressing = ""
 	doc.Spec.Services[0].Interfaces[1].IPv4 = ""
+	doc.Spec.Services[0].Interfaces[1].Addressing = ""
 	err := Validate(doc)
 	if err == nil || !strings.Contains(err.Error(), "maxReplicasPerService") {
 		t.Fatalf("expected replicas-over-max error, got %v", err)
@@ -225,5 +227,77 @@ func TestValidateRejectsFirewallOnIPVlan(t *testing.T) {
 	err := Validate(doc)
 	if err == nil || !strings.Contains(err.Error(), "firewall") {
 		t.Fatalf("expected firewall-on-ipvlan error, got %v", err)
+	}
+}
+
+func TestValidateAcceptsDefaultAddressingAsDHCP(t *testing.T) {
+	doc := validDoc()
+	doc.Spec.Services[0].Interfaces[0].IPv4 = ""
+	doc.Spec.Services[0].Interfaces[0].Addressing = ""
+	if err := Validate(doc); err != nil {
+		t.Fatalf("expected omitted addressing to default to dhcp and validate, got %v", err)
+	}
+}
+
+func TestValidateRejectsStaticAddressingWithoutAddress(t *testing.T) {
+	doc := validDoc()
+	doc.Spec.Services[0].Interfaces[0].IPv4 = ""
+	err := Validate(doc)
+	if err == nil || !strings.Contains(err.Error(), "declares no ipv4/ipv6 address") {
+		t.Fatalf("expected static-without-address error, got %v", err)
+	}
+}
+
+func TestValidateRejectsDHCPAddressingWithAddress(t *testing.T) {
+	doc := validDoc()
+	doc.Spec.Services[0].Interfaces[0].Addressing = AddressingDHCP
+	err := Validate(doc)
+	if err == nil || !strings.Contains(err.Error(), "addressing is \"dhcp\"") {
+		t.Fatalf("expected dhcp-with-address error, got %v", err)
+	}
+}
+
+func TestValidateRejectsDefaultAddressingWithAddress(t *testing.T) {
+	// validDoc's interfaces already set addressing: static + ipv4; flip one to
+	// omit addressing entirely while keeping its ipv4 to prove the default of
+	// dhcp still conflicts with an explicit address.
+	doc := validDoc()
+	doc.Spec.Services[0].Interfaces[0].Addressing = ""
+	err := Validate(doc)
+	if err == nil || !strings.Contains(err.Error(), "addressing is \"dhcp\"") {
+		t.Fatalf("expected default-dhcp-with-address error, got %v", err)
+	}
+}
+
+func TestValidateRejectsInvalidAddressingValue(t *testing.T) {
+	doc := validDoc()
+	doc.Spec.Services[0].Interfaces[0].Addressing = "bogus"
+	err := Validate(doc)
+	if err == nil || !strings.Contains(err.Error(), "invalid addressing") {
+		t.Fatalf("expected invalid-addressing error, got %v", err)
+	}
+}
+
+func TestValidateIgnoresAddressingOnBridgeEnslavedInterface(t *testing.T) {
+	doc := validDoc()
+	// A bridge-enslaved interface with a contradictory static+no-address
+	// combination is still accepted: addressing is ignored entirely when
+	// Bridge is set.
+	doc.Spec.Services[0].Interfaces[0].IPv4 = ""
+	doc.Spec.Services[0].Interfaces[0].Bridge = "brlan0"
+	if err := Validate(doc); err != nil {
+		t.Fatalf("expected bridge-enslaved interface to skip addressing validation, got %v", err)
+	}
+}
+
+func TestValidateDoesNotGuardDHCPServerRoleAddressing(t *testing.T) {
+	// There is deliberately no cross-check against a service's own DHCP-server
+	// config (e.g. bng serving DHCP on the same role it's set to dhcp on):
+	// this must pass validation and is left to fail at runtime if misused.
+	doc := validDoc()
+	doc.Spec.Services[0].Interfaces[0].IPv4 = ""
+	doc.Spec.Services[0].Interfaces[0].Addressing = AddressingDHCP
+	if err := Validate(doc); err != nil {
+		t.Fatalf("expected no addressing guard for DHCP-server-role services, got %v", err)
 	}
 }

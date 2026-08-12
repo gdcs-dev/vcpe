@@ -91,7 +91,7 @@ func TestGatewayRendersHealthSidecarOnlyWhenHealthUpstreamDeclared(t *testing.T)
 
 	withoutUpstream := base
 	withoutUpstream.Instances = []plan.Instance{{Interfaces: []plan.Interface{
-		{Role: "wan", Network: "edge-wan", Device: "erouter0", IPv4: "10.7.200.10"},
+		{Role: "wan", Network: "edge-wan", Device: "erouter0", IPv4: "10.7.200.10", Addressing: "static"},
 	}}}
 	result, err := st.Renderer().Render(context.Background(), render.Input{Deployment: dep, Service: withoutUpstream, HealthPorts: map[int]int{0: 47000}})
 	if err != nil {
@@ -104,7 +104,7 @@ func TestGatewayRendersHealthSidecarOnlyWhenHealthUpstreamDeclared(t *testing.T)
 
 	withUpstream := base
 	withUpstream.Instances = []plan.Instance{{Interfaces: []plan.Interface{
-		{Role: "wan", Network: "edge-wan", Device: "erouter0", IPv4: "10.7.200.10", HealthUpstream: true},
+		{Role: "wan", Network: "edge-wan", Device: "erouter0", IPv4: "10.7.200.10", Addressing: "static", HealthUpstream: true},
 	}}}
 	result, err = st.Renderer().Render(context.Background(), render.Input{Deployment: dep, Service: withUpstream, HealthPorts: map[int]int{0: 47000}})
 	if err != nil {
@@ -127,4 +127,65 @@ func composeArtifact(t *testing.T, result render.Result) string {
 	}
 	t.Fatal("no compose.yaml artifact produced")
 	return ""
+}
+
+func TestGatewayAddressingReflectedInEnv(t *testing.T) {
+	gateway.Register()
+	st, _ := typeregistry.Lookup("gateway")
+	dep := plan.Deployment{Name: "edge", Networks: []plan.Network{{Role: "wan", Bridge: "edge-wan"}, {Role: "cm", Bridge: "edge-cm"}}}
+
+	svc := plan.Service{
+		Name:  "gateway",
+		Type:  "gateway",
+		Image: manifest.Image{Repository: "ghcr.io/gdcs-dev/gateway", Tag: "dev"},
+		Instances: []plan.Instance{{Interfaces: []plan.Interface{
+			{Role: "wan", Network: "edge-wan", Device: "erouter0", IPv4: "10.7.200.10", Gateway4: "10.7.200.1", Addressing: "static"},
+			{Role: "cm", Network: "edge-cm", Device: "wan0"},
+		}}},
+	}
+
+	result, err := st.Renderer().Render(context.Background(), render.Input{Deployment: dep, Service: svc})
+	if err != nil {
+		t.Fatalf("render gateway: %v", err)
+	}
+	got := ""
+	for _, a := range result.Artifacts {
+		if a.Key == "compose.env" {
+			got = a.Content
+		}
+	}
+	if !strings.Contains(got, "IFACE_WAN_ADDRESSING=static") {
+		t.Fatalf("compose.env missing IFACE_WAN_ADDRESSING=static:\n%s", got)
+	}
+	if !strings.Contains(got, "IFACE_CM_ADDRESSING=dhcp") {
+		t.Fatalf("compose.env missing IFACE_CM_ADDRESSING=dhcp (default):\n%s", got)
+	}
+}
+
+// TestGatewayHealthUpstreamWithDHCPAddressing verifies healthUpstream and a
+// dhcp-addressed interface coexist without conflict, since the health sidecar
+// dials the workload by service name over a dedicated network rather than by
+// this interface's resolved address.
+func TestGatewayHealthUpstreamWithDHCPAddressing(t *testing.T) {
+	gateway.Register()
+	st, _ := typeregistry.Lookup("gateway")
+	dep := plan.Deployment{Name: "edge", Networks: []plan.Network{{Role: "wan", Bridge: "edge-wan"}}}
+
+	svc := plan.Service{
+		Name:  "gateway",
+		Type:  "gateway",
+		Image: manifest.Image{Repository: "ghcr.io/gdcs-dev/gateway", Tag: "dev"},
+		Instances: []plan.Instance{{Interfaces: []plan.Interface{
+			{Role: "wan", Network: "edge-wan", Device: "erouter0", HealthUpstream: true},
+		}}},
+	}
+
+	result, err := st.Renderer().Render(context.Background(), render.Input{Deployment: dep, Service: svc, HealthPorts: map[int]int{0: 47000}})
+	if err != nil {
+		t.Fatalf("render gateway with dhcp + healthUpstream: %v", err)
+	}
+	compose := composeArtifact(t, result)
+	if !strings.Contains(compose, "vcpe-healthd") {
+		t.Fatalf("expected health sidecar even with addressing: dhcp on the healthUpstream interface:\n%s", compose)
+	}
 }

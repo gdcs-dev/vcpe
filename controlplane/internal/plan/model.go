@@ -113,6 +113,17 @@ type Interface struct {
 	// target for the health transport proxy when no interface on this service
 	// has a Podman-managed network to publish the health endpoint on directly.
 	HealthUpstream bool
+	// Addressing is the resolved "dhcp" or "static" mode for this interface;
+	// see manifest.Interface.Addressing. Always normalized to a concrete value
+	// (never empty) by the planner.
+	Addressing string
+	// ManagedNetwork is true when this interface's network has its address
+	// assigned by Podman itself (any IPAMDriver other than "none"), as
+	// opposed to a container-managed (ipamDriver: none) segment. Addressing:
+	// dhcp has no runtime effect (no DHCP client is invoked) on a managed
+	// network, since Podman has already assigned the address before the
+	// container starts.
+	ManagedNetwork bool
 }
 
 // Network returns the resolved network for a role, or nil when absent.

@@ -36,16 +36,32 @@ The entrypoint SHALL support setting network-layer identity before DHCP runs via
 - **WHEN** `VCPE_INIT_HOSTNAME=phone-01` is set
 - **THEN** the entrypoint sets the container hostname and passes it to `udhcpc` via `-x hostname:phone-01`
 
-### Requirement: Default-route DHCP
-The entrypoint SHALL automatically run DHCP on the interface declared as the default route (identified by `IFACE_<ROLE>_DEFAULT_ROUTE=1`) unless that role is listed in `VCPE_INIT_STATIC_ROLE`. No explicit `VCPE_INIT_DHCP_ROLE` variable is required for the common DHCP case.
+### Requirement: Per-interface addressing initialization
+The entrypoint SHALL iterate every interface for which `IFACE_<ROLE>_DEVICE` is set and, for each, initialize networking according to `IFACE_<ROLE>_ADDRESSING`: when `dhcp` and `IFACE_<ROLE>_NETWORK_MANAGED` is unset, the entrypoint SHALL bring the device up and run `udhcpc` on it (honoring `VCPE_INIT_MAC_ROLE`/`VCPE_INIT_HOSTNAME` as today when they name that role); when `dhcp` and `IFACE_<ROLE>_NETWORK_MANAGED=1` is set, the entrypoint SHALL bring the device up and take no further action (Podman has already assigned the address); when `static`, the entrypoint SHALL apply `IFACE_<ROLE>_IPV4`/`IFACE_<ROLE>_IPV6` via `ip addr add` and, if `IFACE_<ROLE>_DEFAULT_ROUTE=1` is also set for that role, add a default route via `IFACE_<ROLE>_GATEWAY4`/`GATEWAY6`. Only the interface marked `IFACE_<ROLE>_DEFAULT_ROUTE=1` may keep a default route from DHCP; the entrypoint SHALL remove any default route a non-default-route interface's DHCP lease installs, so multiple concurrently-DHCP'd interfaces cannot race for the default route.
 
-#### Scenario: DHCP runs automatically on default-route interface
-- **WHEN** a service has an interface with `defaultRoute: true` and `VCPE_INIT_STATIC_ROLE` is not set for that role
-- **THEN** the entrypoint brings up the interface device and runs `udhcpc` on it
+#### Scenario: Every declared interface is initialized
+- **WHEN** a generic-container service declares interfaces for roles `wan` and `lan-p1`, both with `IFACE_<ROLE>_DEVICE` set
+- **THEN** the entrypoint initializes both devices, not only one
 
-#### Scenario: Static assignment opts out of DHCP
-- **WHEN** `VCPE_INIT_STATIC_ROLE=lan-p1` is set and `IFACE_LAN_P1_IPV4` and `IFACE_LAN_P1_GATEWAY4` are present
-- **THEN** the entrypoint applies the static address and default route without running `udhcpc`
+#### Scenario: Dhcp role runs udhcpc
+- **WHEN** `IFACE_LAN_P1_ADDRESSING=dhcp` and `IFACE_LAN_P1_DEVICE=eth0` are set
+- **THEN** the entrypoint brings `eth0` up and runs `udhcpc` on it
+
+#### Scenario: Static role applies the manifest address without DHCP
+- **WHEN** `IFACE_WAN_ADDRESSING=static`, `IFACE_WAN_IPV4` and `IFACE_WAN_GATEWAY4` are present, and `IFACE_WAN_DEFAULT_ROUTE=1` is set
+- **THEN** the entrypoint applies the static address and default route on that interface without running `udhcpc`
+
+#### Scenario: Role with no device is skipped
+- **WHEN** a role has no `IFACE_<ROLE>_DEVICE` set
+- **THEN** the entrypoint does not attempt to initialize that role
+
+#### Scenario: Dhcp is a no-op on a Podman-managed network
+- **WHEN** `IFACE_MGMT_ADDRESSING=dhcp` and `IFACE_MGMT_NETWORK_MANAGED=1` are set
+- **THEN** the entrypoint does not run `udhcpc` for that role
+
+#### Scenario: Non-default-route DHCP interface cannot win the default route
+- **WHEN** a non-default-route interface's `udhcpc` lease includes a router option
+- **THEN** the entrypoint removes any default route installed via that interface's device, leaving the default-route interface's route intact
 
 ### Requirement: DNS configuration via entrypoint
 The entrypoint SHALL configure `/etc/resolv.conf` as part of initialization. When DHCP is used, DNS SHALL be set by the DHCP server's option 6 response via `udhcpc`'s default script. When `VCPE_INIT_NAMESERVER=<ip>` is set, the entrypoint SHALL write a `resolv.conf` containing that nameserver after DHCP completes (overriding the DHCP-provided value if any). The `generic-container` renderer SHALL NOT generate a static `resolv.conf` artifact or bind-mount it.

@@ -113,6 +113,16 @@ configure_networking() {
     # ── CM (cable-modem physical line) — only if declared ──────────────────
     if [[ -n "$cm_dev" ]]; then
         ip link set "$cm_dev" up || true
+        if [[ "${IFACE_CM_ADDRESSING:-dhcp}" == "static" ]]; then
+            [[ -n "${IFACE_CM_IPV4:-}" ]] && ip addr add "$IFACE_CM_IPV4" dev "$cm_dev" || true
+            [[ -n "${IFACE_CM_IPV6:-}" ]] && ip -6 addr add "$IFACE_CM_IPV6" dev "$cm_dev" || true
+        elif [[ -z "${IFACE_CM_NETWORK_MANAGED:-}" ]]; then
+            # CM never holds the default route: only WAN/erouter0 is the
+            # uplink. Strip any default route the CM lease's router option
+            # installs so it can't race with (and win over) WAN's.
+            dhclient -v "$cm_dev" || true
+            ip route del default dev "$cm_dev" 2>/dev/null || true
+        fi
     fi
 
     # ── WAN (erouter) — only if declared ───────────────────────────────────
@@ -125,17 +135,21 @@ configure_networking() {
             ip link set "$wan_dev" up
         fi
 
-        if [[ -n "${EROUTER0_IPV4:-}" ]]; then
-            ip addr add "$EROUTER0_IPV4" dev "$erouter_iface" || true
-        fi
-        if [[ -n "${EROUTER0_IPV6:-}" ]]; then
-            ip -6 addr add "$EROUTER0_IPV6" dev "$erouter_iface" || true
-        fi
-        if [[ -n "${EROUTER0_IPV4_GATEWAY:-}" ]]; then
-            ip route replace default via "$EROUTER0_IPV4_GATEWAY" dev "$erouter_iface" || true
-        fi
-        if [[ -n "${EROUTER0_IPV6_GATEWAY:-}" ]]; then
-            ip -6 route replace default via "$EROUTER0_IPV6_GATEWAY" dev "$erouter_iface" || true
+        if [[ "${IFACE_WAN_ADDRESSING:-dhcp}" == "static" ]]; then
+            if [[ -n "${EROUTER0_IPV4:-}" ]]; then
+                ip addr add "$EROUTER0_IPV4" dev "$erouter_iface" || true
+            fi
+            if [[ -n "${EROUTER0_IPV6:-}" ]]; then
+                ip -6 addr add "$EROUTER0_IPV6" dev "$erouter_iface" || true
+            fi
+            if [[ -n "${EROUTER0_IPV4_GATEWAY:-}" ]]; then
+                ip route replace default via "$EROUTER0_IPV4_GATEWAY" dev "$erouter_iface" || true
+            fi
+            if [[ -n "${EROUTER0_IPV6_GATEWAY:-}" ]]; then
+                ip -6 route replace default via "$EROUTER0_IPV6_GATEWAY" dev "$erouter_iface" || true
+            fi
+        elif [[ -z "${IFACE_WAN_NETWORK_MANAGED:-}" ]]; then
+            dhclient -v "$erouter_iface" || true
         fi
     fi
 }
