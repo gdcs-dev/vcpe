@@ -7,6 +7,7 @@ package genericcontainer
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"sort"
 	"strings"
 	"sync"
@@ -26,6 +27,23 @@ type Config struct {
 	Env     map[string]string `yaml:"env,omitempty"`
 	Ports   []string          `yaml:"ports,omitempty"`
 	Volumes []string          `yaml:"volumes,omitempty"`
+	Health  *HealthConfig     `yaml:"health,omitempty"`
+}
+
+// HealthConfig is the explicit readiness policy for a generic workload.
+type HealthConfig struct {
+	HTTP           *HTTPHealthProbe    `yaml:"http,omitempty"`
+	Command        *CommandHealthProbe `yaml:"command,omitempty"`
+	TimeoutSeconds int                 `yaml:"timeoutSeconds,omitempty"`
+}
+
+type HTTPHealthProbe struct {
+	URL            string `yaml:"url"`
+	ExpectedStatus int    `yaml:"expectedStatus,omitempty"`
+}
+
+type CommandHealthProbe struct {
+	Command string `yaml:"command"`
 }
 
 // entrypointSH is the init script embedded in every generic-container render.
@@ -112,12 +130,57 @@ func (serviceType) Type() string { return TypeName }
 
 func (serviceType) ValidateConfig(node yaml.Node) error {
 	var cfg Config
-	return typeregistry.StrictDecode(node, &cfg)
+	if err := typeregistry.StrictDecode(node, &cfg); err != nil {
+		return err
+	}
+	return validateHealth(cfg.Health)
+}
+
+func validateHealth(config *HealthConfig) error {
+	if config == nil {
+		return nil
+	}
+	if config.TimeoutSeconds < 1 || config.TimeoutSeconds > 30 {
+		return fmt.Errorf("health.timeoutSeconds must be between 1 and 30")
+	}
+	if (config.HTTP == nil) == (config.Command == nil) {
+		return fmt.Errorf("health requires exactly one of http or command")
+	}
+	if config.HTTP != nil {
+		parsed, err := url.Parse(config.HTTP.URL)
+		if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
+			return fmt.Errorf("health.http.url must be an absolute HTTP URL")
+		}
+		if config.HTTP.ExpectedStatus != 0 && (config.HTTP.ExpectedStatus < 100 || config.HTTP.ExpectedStatus > 599) {
+			return fmt.Errorf("health.http.expectedStatus must be a valid HTTP status")
+		}
+	}
+	if config.Command != nil && strings.TrimSpace(config.Command.Command) == "" {
+		return fmt.Errorf("health.command.command is required")
+	}
+	return nil
+}
+
+// HasConfiguredHealth reports whether the generic service declares a valid
+// probe and is therefore eligible for a published health endpoint.
+func HasConfiguredHealth(node yaml.Node) (bool, error) {
+	var config Config
+	if err := typeregistry.StrictDecode(node, &config); err != nil {
+		return false, err
+	}
+	if err := validateHealth(config.Health); err != nil {
+		return false, err
+	}
+	return config.Health != nil, nil
 }
 
 func (serviceType) Renderer() render.Renderer { return renderer{} }
 
 func (serviceType) ExpectedRoles() []typeregistry.RoleRequirement { return nil }
+
+func (serviceType) Health() typeregistry.HealthBehavior {
+	return typeregistry.HealthBehavior{Mode: typeregistry.HealthModeOptional, ContainerPort: 9878}
+}
 
 func (serviceType) DefaultImagePolicy() string { return "build" }
 
@@ -136,6 +199,9 @@ func (renderer) Name() string { return "generic-container-renderer" }
 func (renderer) Render(_ context.Context, input render.Input) (render.Result, error) {
 	var cfg Config
 	if err := typeregistry.StrictDecode(input.Service.Config, &cfg); err != nil {
+		return render.Result{}, fmt.Errorf("generic-container %q: %w", input.Service.Name, err)
+	}
+	if err := validateHealth(cfg.Health); err != nil {
 		return render.Result{}, fmt.Errorf("generic-container %q: %w", input.Service.Name, err)
 	}
 	if len(input.Service.Instances) == 0 {
@@ -183,6 +249,9 @@ func (renderer) Render(_ context.Context, input render.Input) (render.Result, er
 		{Key: "compose.yaml", Content: composeYAML},
 		{Key: "entrypoint.sh", Content: entrypointSH},
 	}
+	if cfg.Health != nil {
+		artifacts = append(artifacts, render.Artifact{Key: "vcpe-healthd.required", Content: ""})
+	}
 
 	return render.Result{
 		Renderer:  "generic-container-renderer",
@@ -218,7 +287,7 @@ func generateCompose(input render.Input, cfg Config) (string, error) {
 	// pinMAC controls whether mac_address is included in the network
 	// attachment; single-replica services pin the IPAM MAC, multi-replica
 	// services let Podman assign a unique random MAC to each container.
-	buildSvcEntry := func(pinMAC bool) map[string]any {
+	buildSvcEntry := func(index int, pinMAC bool) map[string]any {
 		svcNetworks := map[string]any{}
 		for _, iface := range inst.Interfaces {
 			key := strings.ToUpper(strings.ReplaceAll(iface.Role, "-", "_"))
@@ -246,6 +315,9 @@ func generateCompose(input render.Input, cfg Config) (string, error) {
 		}
 		// Merge top-level manifest ports with any ports declared in config.
 		allPorts := append(append([]string(nil), input.Service.Ports...), cfg.Ports...)
+		if cfg.Health != nil && input.HealthPorts[index] != 0 {
+			allPorts = append(allPorts, fmt.Sprintf("127.0.0.1:%d:9878", input.HealthPorts[index]))
+		}
 		if len(allPorts) > 0 {
 			svc["ports"] = allPorts
 		}
@@ -267,13 +339,25 @@ func generateCompose(input render.Input, cfg Config) (string, error) {
 		// Pin the MAC address only for single-replica services, where the IPAM
 		// MAC is stable. Multi-replica services let Podman assign unique MACs.
 		pinMAC := replicas == 1
-		entry := buildSvcEntry(pinMAC)
+		entry := buildSvcEntry(i, pinMAC)
 		// Set an explicit container_name and hostname, always indexed (e.g.
 		// example-client-1) so names are stable and unambiguous regardless of
 		// replica count.
 		entry["container_name"] = fmt.Sprintf("${DEPLOYMENT_NAME}-${SERVICE_NAME}-%d", i+1)
 		entry["hostname"] = fmt.Sprintf("${SERVICE_NAME}-%d", i+1)
 		services[fmt.Sprintf("%s-%d", input.Service.Name, i+1)] = entry
+		if cfg.Health != nil {
+			healthService := map[string]any{
+				"image":        render.ImageRef(input.Service.Image),
+				"network_mode": fmt.Sprintf("service:%s-%d", input.Service.Name, i+1),
+				"depends_on":   []string{fmt.Sprintf("%s-%d", input.Service.Name, i+1)},
+				"restart":      "unless-stopped",
+				"volumes":      []string{"./vcpe-healthd:/run/vcpe/vcpe-healthd:ro"},
+				"entrypoint":   []string{"/run/vcpe/vcpe-healthd"},
+			}
+			healthService["command"] = genericHealthCommand(cfg.Health)
+			services[fmt.Sprintf("%s-health-%d", input.Service.Name, i+1)] = healthService
+		}
 	}
 
 	doc := map[string]any{"services": services}
@@ -285,6 +369,17 @@ func generateCompose(input render.Input, cfg Config) (string, error) {
 		return "", fmt.Errorf("marshal generated compose: %w", err)
 	}
 	return string(out), nil
+}
+
+func genericHealthCommand(config *HealthConfig) []string {
+	if config.Command != nil {
+		return []string{"--timeout", fmt.Sprintf("%ds", config.TimeoutSeconds), "--probe", "configured=" + config.Command.Command}
+	}
+	expected := config.HTTP.ExpectedStatus
+	if expected == 0 {
+		expected = 200
+	}
+	return []string{"--timeout", fmt.Sprintf("%ds", config.TimeoutSeconds), "--http-probe", fmt.Sprintf("configured=%s|%d", config.HTTP.URL, expected)}
 }
 
 // Register wires this service type into the global registry. It is idempotent.

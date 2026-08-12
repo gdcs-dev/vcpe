@@ -117,7 +117,7 @@ func TestLifecycleStagesCuratedEnvFile(t *testing.T) {
 			{Role: "wan", Bridge: "edge-wan", IPv4: &plan.Family{CIDR: "10.200.0.0/24"}},
 		},
 		Services: []plan.Service{
-			{Name: "bng", Type: "bng", Replicas: 1},
+			{Name: "bng", Type: "bng", Replicas: 1, Instances: []plan.Instance{{Index: 0}}},
 		},
 	}
 
@@ -147,20 +147,20 @@ func TestLifecycleStagesCuratedEnvFile(t *testing.T) {
 func TestLifecycleEnsuresPodmanNetworksBeforeCompose(t *testing.T) {
 	stateRoot := t.TempDir()
 	opID := "op-test-002"
-	makeRepoRoot(t, "bng")
+	makeRepoRoot(t, "gateway")
 	netStub, cmpStub := stubLifecycle(t)
 
-	writeArtifactEnv(t, stateRoot, opID, "bng")
+	writeArtifactEnv(t, stateRoot, opID, "gateway")
 
 	dep := plan.Deployment{
 		Name: "edge",
 		Networks: []plan.Network{
-			{Role: "mgmt", Bridge: "edge-mgmt", IPv4: &plan.Family{CIDR: "10.10.0.0/24"}},
-			{Role: "wan", Bridge: "edge-wan", IPv4: &plan.Family{CIDR: "10.200.0.0/24"}},
-			{Role: "cm", Bridge: "edge-cm", IPv4: &plan.Family{CIDR: "10.201.0.0/24"}},
+			{Role: "mgmt", Bridge: "edge-mgmt", IPv4: &plan.Family{CIDR: "10.10.0.0/24"}, IPAMDriver: "none"},
+			{Role: "wan", Bridge: "edge-wan", IPv4: &plan.Family{CIDR: "10.200.0.0/24"}, IPAMDriver: "none"},
+			{Role: "cm", Bridge: "edge-cm", IPv4: &plan.Family{CIDR: "10.201.0.0/24"}, IPAMDriver: "none"},
 		},
 		Services: []plan.Service{
-			{Name: "bng", Type: "bng", Replicas: 1},
+			{Name: "gateway", Type: "gateway", Replicas: 1, Instances: []plan.Instance{{Index: 0, Interfaces: []plan.Interface{{Role: "wan"}}}}},
 		},
 	}
 
@@ -168,11 +168,12 @@ func TestLifecycleEnsuresPodmanNetworksBeforeCompose(t *testing.T) {
 		t.Fatalf("applyComposeLifecycle: %v", err)
 	}
 
-	// All three networks must have been provisioned.
-	if len(netStub.calls) != 3 {
-		t.Errorf("expected 3 EnsureNetwork calls, got %d: %v", len(netStub.calls), netStub.calls)
+	// The three topology networks and the private health transport network must
+	// be provisioned before Compose starts the self-addressed Gateway.
+	if len(netStub.calls) != 4 {
+		t.Errorf("expected 4 EnsureNetwork calls, got %d: %v", len(netStub.calls), netStub.calls)
 	}
-	for _, want := range []string{"edge-mgmt/10.10.0.0/24", "edge-wan/10.200.0.0/24", "edge-cm/10.201.0.0/24"} {
+	for _, want := range []string{"edge-mgmt/10.10.0.0/24", "edge-wan/10.200.0.0/24", "edge-cm/10.201.0.0/24", "edge-00-health/"} {
 		found := false
 		for _, call := range netStub.calls {
 			if call == want {

@@ -137,6 +137,10 @@ COPY --from=builder /out/mqtt-adapter  /usr/local/bin/mqtt-adapter
 COPY --from=builder /out/adapter       /usr/local/bin/adapter
 COPY --from=builder /out/controller    /usr/local/bin/controller
 COPY --from=builder /out/taas          /usr/local/bin/taas
+COPY container/vcpe-healthd /usr/local/bin/vcpe-healthd
+COPY container/vcpe-healthd.service /etc/systemd/system/vcpe-healthd.service
+COPY container/health-probe.sh /usr/local/bin/oktopus-health-probe
+RUN chmod 0755 /usr/local/bin/oktopus-health-probe
 
 # ---------------------------------------------------------------------------
 # Copy Next.js frontend
@@ -191,6 +195,7 @@ RUN printf '[Service]\nEnvironmentFile=-/etc/oktopus/oktopus.env\n' \
 
 # Enable all services.
 RUN systemctl enable \
+	vcpe-healthd.service \
    mongod.service \
    nats.service \
    ws.service \
@@ -218,4 +223,5 @@ RUN systemctl enable \
 #   4222  — NATS client (internal; expose only if external NATS clients needed)
 EXPOSE 80 8080 8081 8000 8001 61613 1883 8883
 
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 CMD ["/usr/local/bin/vcpe-healthd", "--check"]
 CMD ["/sbin/init"]

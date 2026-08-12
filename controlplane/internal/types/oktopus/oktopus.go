@@ -62,6 +62,10 @@ func (serviceType) ExpectedRoles() []typeregistry.RoleRequirement {
 	return []typeregistry.RoleRequirement{{Role: "mgmt", Required: true}}
 }
 
+func (serviceType) Health() typeregistry.HealthBehavior {
+	return typeregistry.HealthBehavior{Mode: typeregistry.HealthModeCurated, ContainerPort: 9878}
+}
+
 func (serviceType) DefaultImagePolicy() string { return "build" }
 
 func (serviceType) ValidateInterfaces(_ []manifest.Interface) error { return nil }
@@ -88,97 +92,68 @@ func (renderer) Render(_ context.Context, input render.Input) (render.Result, er
 		}
 	}
 
-	// Base interface env vars (DEPLOYMENT_NAME, SERVICE_NAME, IMAGE, IFACE_*).
-	lines := render.IfaceEnv(input.Deployment, input.Service, input.Service.Instances[0])
-
-	// Append Oktopus-specific overrides derived from the manifest config.
-	lines = appendIfSet(lines, "ADMIN_EMAIL", cfg.AdminEmail)
-	lines = appendIfSet(lines, "ADMIN_NAME", cfg.AdminName)
-	lines = appendIfSet(lines, "ADMIN_PASSWORD", cfg.AdminPassword)
-	lines = appendIfSet(lines, "NATS_USER", cfg.NATSUser)
-	lines = appendIfSet(lines, "NATS_PW", cfg.NATSPassword)
-	lines = appendIfSet(lines, "STOMP_USER", cfg.STOMPUser)
-	lines = appendIfSet(lines, "STOMP_PASSWD", cfg.STOMPPassword)
-	lines = appendIfSet(lines, "SECRET_API_KEY", cfg.TaaSAPIKey)
-
-	// Derive NATS_URL from credentials if either is overridden.
-	if cfg.NATSUser != "" || cfg.NATSPassword != "" {
-		user := cfg.NATSUser
-		if user == "" {
-			user = "oktopususer"
+	artifacts := []render.Artifact{}
+	for _, inst := range input.Service.Instances {
+		lines := oktopusEnv(input, inst.Index, cfg)
+		content := strings.Join(lines, "\n") + "\n"
+		if inst.Index == 0 {
+			artifacts = append(artifacts, render.Artifact{Key: "compose.env", Content: content})
 		}
-		pw := cfg.NATSPassword
-		if pw == "" {
-			pw = "oktopuspw"
-		}
-		lines = append(lines, fmt.Sprintf("NATS_URL=nats://%s:%s@localhost:4222", user, pw))
+		artifacts = append(artifacts, render.Artifact{Key: fmt.Sprintf("instances/%d/compose.env", inst.Index+1), Content: content})
 	}
-
-	// Pass through arbitrary extra env vars from the manifest.
-	for k, v := range cfg.Env {
-		lines = append(lines, k+"="+v)
-	}
-
-	composeYAML := generateCompose(input)
+	artifacts = append(artifacts, render.Artifact{Key: "compose.yaml", Content: generateCompose(input)})
 
 	return render.Result{
-		Renderer: "oktopus-renderer",
-		Artifacts: []render.Artifact{
-			{Key: "compose.env", Content: strings.Join(lines, "\n") + "\n"},
-			{Key: "compose.yaml", Content: composeYAML},
-		},
+		Renderer:  "oktopus-renderer",
+		Artifacts: artifacts,
 	}, nil
 }
 
 // generateCompose builds the compose.yaml for the oktopus container, wiring
 // the mgmt network attachment and any port mappings from the manifest.
 func generateCompose(input render.Input) string {
-	inst := input.Service.Instances[0]
+	services, networks := map[string]any{}, map[string]any{}
+	for _, inst := range input.Service.Instances {
+		svcNets := map[string]any{}
+		for _, iface := range inst.Interfaces {
+			svcNets[iface.Role] = map[string]any{"mac_address": iface.MAC, "ipv4_address": iface.IPv4}
+			networks[iface.Role] = map[string]any{"external": true, "name": iface.Network}
+		}
+		instanceName := fmt.Sprintf("%s-%d", input.Service.Name, inst.Index+1)
+		volumes := append([]string{"./runtime/mongo:/var/lib/mongodb", "./runtime/nats:/var/lib/nats/jetstream"}, input.Service.Volumes...)
+		svc := map[string]any{"image": render.ImageRef(input.Service.Image), "container_name": input.Deployment.Name + "-" + instanceName, "hostname": instanceName, "privileged": true, "cap_add": []string{"NET_ADMIN", "NET_RAW"}, "env_file": []string{fmt.Sprintf("instances/%d/compose.env", inst.Index+1)}, "volumes": volumes, "networks": svcNets}
+		ports := append([]string(nil), input.Service.Ports...)
+		if healthPort := input.HealthPorts[inst.Index]; healthPort != 0 {
+			ports = append(ports, fmt.Sprintf("127.0.0.1:%d:9878", healthPort))
+		}
+		if len(ports) > 0 {
+			svc["ports"] = ports
+		}
+		services[instanceName] = svc
+	}
+	out, _ := yaml.Marshal(map[string]any{"services": services, "networks": networks})
+	return string(out)
+}
 
-	// Build network entries from interfaces.
-	topNets := &strings.Builder{}
-	svcNets := &strings.Builder{}
-	for _, iface := range inst.Interfaces {
-		key := strings.ToUpper(strings.ReplaceAll(iface.Role, "-", "_"))
-		fmt.Fprintf(topNets, "  %s:\n    external: true\n    name: ${IFACE_%s_NETWORK}\n", iface.Role, key)
-		fmt.Fprintf(svcNets, "      %s:\n        mac_address: ${IFACE_%s_MAC}\n        ipv4_address: ${IFACE_%s_IPV4}\n", iface.Role, key, key)
+func oktopusEnv(input render.Input, index int, cfg Config) []string {
+	lines := render.IfaceEnv(input.Deployment, input.Service, input.Service.Instances[index])
+	for _, pair := range [][2]string{{"ADMIN_EMAIL", cfg.AdminEmail}, {"ADMIN_NAME", cfg.AdminName}, {"ADMIN_PASSWORD", cfg.AdminPassword}, {"NATS_USER", cfg.NATSUser}, {"NATS_PW", cfg.NATSPassword}, {"STOMP_USER", cfg.STOMPUser}, {"STOMP_PASSWD", cfg.STOMPPassword}, {"SECRET_API_KEY", cfg.TaaSAPIKey}} {
+		lines = appendIfSet(lines, pair[0], pair[1])
 	}
-
-	// Build ports section.
-	portLines := &strings.Builder{}
-	for _, p := range input.Service.Ports {
-		fmt.Fprintf(portLines, "      - %q\n", p)
+	if cfg.NATSUser != "" || cfg.NATSPassword != "" {
+		user, pw := cfg.NATSUser, cfg.NATSPassword
+		if user == "" {
+			user = "oktopususer"
+		}
+		if pw == "" {
+			pw = "oktopuspw"
+		}
+		lines = append(lines, fmt.Sprintf("NATS_URL=nats://%s:%s@localhost:4222", user, pw))
 	}
-
-	var b strings.Builder
-	b.WriteString("# Generated by oktopus-renderer — do not edit by hand.\n")
-	b.WriteString("services:\n")
-	fmt.Fprintf(&b, "  %s:\n", input.Service.Name)
-	fmt.Fprintf(&b, "    image: %s\n", render.ImageRef(input.Service.Image))
-	fmt.Fprintf(&b, "    container_name: ${DEPLOYMENT_NAME}-%s\n", input.Service.Name)
-	fmt.Fprintf(&b, "    hostname: %s\n", input.Service.Name)
-	b.WriteString("    privileged: true\n")
-	b.WriteString("    cap_add:\n      - NET_ADMIN\n      - NET_RAW\n")
-	b.WriteString("    env_file:\n      - compose.env\n")
-	if portLines.Len() > 0 {
-		b.WriteString("    ports:\n")
-		b.WriteString(portLines.String())
+	for k, v := range cfg.Env {
+		lines = append(lines, k+"="+v)
 	}
-	b.WriteString("    volumes:\n")
-	b.WriteString("      - ./runtime/mongo:/var/lib/mongodb\n")
-	b.WriteString("      - ./runtime/nats:/var/lib/nats/jetstream\n")
-	for _, v := range input.Service.Volumes {
-		fmt.Fprintf(&b, "      - %s\n", v)
-	}
-	if svcNets.Len() > 0 {
-		b.WriteString("    networks:\n")
-		b.WriteString(svcNets.String())
-	}
-	if topNets.Len() > 0 {
-		b.WriteString("\nnetworks:\n")
-		b.WriteString(topNets.String())
-	}
-	return b.String()
+	return lines
 }
 
 func appendIfSet(lines []string, key, value string) []string {

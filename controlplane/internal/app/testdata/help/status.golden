@@ -1,6 +1,6 @@
 Usage: vcpe status [flags]
 
-Reports reconcile metrics, active IPAM leases, and recent operation history. With --name, shows the desired state snapshot for that deployment.
+Reports reconcile metrics, active IPAM leases, and recent operation history. With --name, shows the desired state snapshot for that deployment; if exactly one deployment is active, it is used by default.
 
 Optional flags:
   --name <deployment>     Filter output to a specific deployment

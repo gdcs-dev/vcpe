@@ -16,6 +16,9 @@ import (
 type Input struct {
 	Deployment plan.Deployment
 	Service    plan.Service
+	// HealthPorts maps each 0-based replica index to its reserved loopback host
+	// port. Renderers omit a health mapping for service types without an entry.
+	HealthPorts map[int]int
 	// Secrets maps secret ref name to its resolved value. File-provider secrets
 	// carry the on-host path; env-provider secrets carry the host env var name.
 	Secrets map[string]string

@@ -66,6 +66,10 @@ func (serviceType) ExpectedRoles() []typeregistry.RoleRequirement {
 	}
 }
 
+func (serviceType) Health() typeregistry.HealthBehavior {
+	return typeregistry.HealthBehavior{Mode: typeregistry.HealthModeCurated, ContainerPort: 9878}
+}
+
 func (serviceType) DefaultImagePolicy() string { return "build" }
 
 func (serviceType) ValidateInterfaces(_ []manifest.Interface) error { return nil }
@@ -106,93 +110,75 @@ func (renderer) Render(_ context.Context, input render.Input) (render.Result, er
 		lanPrefix = "lan-p"
 	}
 
-	inst := input.Service.Instances[0]
-
-	// Standard IFACE_* env vars.
-	env := render.IfaceEnv(input.Deployment, input.Service, inst)
-	// IFACE_*_MAC / IFACE_*_DEVICE are the canonical env var contract.
-	// Legacy role-specific aliases (LAN*_MAC=, WAN0_MAC=, EROUTER0_MAC=) are
-	// no longer emitted; the entrypoint uses IFACE_*_MAC + IFACE_*_DEVICE.
-
-	// Build a role → Interface lookup for WAN/CM vars still used directly.
-	ifaceByRole := make(map[string]plan.Interface, len(inst.Interfaces))
-	for _, iface := range inst.Interfaces {
-		ifaceByRole[iface.Role] = iface
-	}
-
-	// WAN/erouter interface vars (manifest-driven via IFACE_* — no legacy aliases).
-	wanIface := ifaceByRole[wanRole]
-	wanCIDR := ""
-	if n := input.Deployment.Network(wanRole); n != nil && n.IPv4 != nil {
-		wanCIDR = n.IPv4.CIDR
-	}
-	env = append(env, "EROUTER0_IPV4="+ipWithPrefix(wanIface.IPv4, wanCIDR))
-	env = append(env, "EROUTER0_IPV6="+wanIface.IPv6)
-	env = append(env, "EROUTER0_IPV4_GATEWAY="+wanIface.Gateway4)
-	env = append(env, "EROUTER0_IPV6_GATEWAY="+wanIface.Gateway6)
-
-	if cfg.Erouter.VLAN != 0 {
-		env = append(env, fmt.Sprintf("EROUTER0_VLAN=%d", cfg.Erouter.VLAN))
-	}
-
-	if len(cfg.Env) > 0 {
-		extra := make([]string, 0, len(cfg.Env))
-		for k, v := range cfg.Env {
-			extra = append(extra, k+"="+v)
+	artifacts := []render.Artifact{}
+	for _, inst := range input.Service.Instances {
+		env := render.IfaceEnv(input.Deployment, input.Service, inst)
+		ifaceByRole := make(map[string]plan.Interface, len(inst.Interfaces))
+		for _, iface := range inst.Interfaces {
+			ifaceByRole[iface.Role] = iface
 		}
-		sort.Strings(extra)
-		env = append(env, extra...)
+		wanIface := ifaceByRole[wanRole]
+		wanCIDR := ""
+		if n := input.Deployment.Network(wanRole); n != nil && n.IPv4 != nil {
+			wanCIDR = n.IPv4.CIDR
+		}
+		env = append(env, "EROUTER0_IPV4="+ipWithPrefix(wanIface.IPv4, wanCIDR), "EROUTER0_IPV6="+wanIface.IPv6, "EROUTER0_IPV4_GATEWAY="+wanIface.Gateway4, "EROUTER0_IPV6_GATEWAY="+wanIface.Gateway6)
+		if cfg.Erouter.VLAN != 0 {
+			env = append(env, fmt.Sprintf("EROUTER0_VLAN=%d", cfg.Erouter.VLAN))
+		}
+		if len(cfg.Env) > 0 {
+			extra := make([]string, 0, len(cfg.Env))
+			for k, v := range cfg.Env {
+				extra = append(extra, k+"="+v)
+			}
+			sort.Strings(extra)
+			env = append(env, extra...)
+		}
+		cmIface := ifaceByRole[cmRole]
+		env = append(env, "WAN0_IPV4="+cmIface.IPv4, "WAN0_IPV6="+cmIface.IPv6)
+		content := strings.Join(env, "\n") + "\n"
+		if inst.Index == 0 {
+			artifacts = append(artifacts, render.Artifact{Key: "compose.env", Content: content})
+		}
+		artifacts = append(artifacts, render.Artifact{Key: fmt.Sprintf("instances/%d/compose.env", inst.Index+1), Content: content})
 	}
-
-	// CM interface network vars (used by some xb10 services internally).
-	cmIface := ifaceByRole[cmRole]
-	env = append(env, "WAN0_IPV4="+cmIface.IPv4)
-	env = append(env, "WAN0_IPV6="+cmIface.IPv6)
-
-	composeYAML := renderXB10Compose(input.Service.Name, inst.Interfaces, input.Service.Volumes, input.Service.Ports)
+	composeYAML := renderXB10Compose(input)
+	artifacts = append(artifacts, render.Artifact{Key: "compose.yaml", Content: composeYAML})
 
 	return render.Result{
-		Renderer: "xb10-renderer",
-		Artifacts: []render.Artifact{
-			{Key: "compose.yaml", Content: composeYAML},
-			{Key: "compose.env", Content: strings.Join(env, "\n") + "\n"},
-		},
+		Renderer:  "xb10-renderer",
+		Artifacts: artifacts,
 	}, nil
 }
 
 // renderXB10Compose generates a compose.yaml for the xb10 container wired to
 // the exact interfaces from the resolved instance, pinning each network
 // attachment by MAC address.
-func renderXB10Compose(svcName string, ifaces []plan.Interface, extraVolumes []string, ports []string) string {
-	svcNets := map[string]any{}
+func renderXB10Compose(input render.Input) string {
 	topNets := map[string]any{}
-	for _, iface := range ifaces {
-		key := strings.ToUpper(strings.ReplaceAll(iface.Role, "-", "_"))
-		svcNets[iface.Role] = map[string]any{
-			"mac_address": "${IFACE_" + key + "_MAC}",
+	services := map[string]any{}
+	for _, inst := range input.Service.Instances {
+		svcNets := map[string]any{}
+		for _, iface := range inst.Interfaces {
+			svcNets[iface.Role] = map[string]any{"mac_address": iface.MAC}
+			topNets[iface.Role] = map[string]any{"external": true, "name": iface.Network}
 		}
-		topNets[iface.Role] = map[string]any{
-			"external": true,
-			"name":     "${IFACE_" + key + "_NETWORK}",
+		instanceName := fmt.Sprintf("%s-%d", input.Service.Name, inst.Index+1)
+		svc := map[string]any{"image": render.ImageRef(input.Service.Image), "container_name": input.Deployment.Name + "-" + instanceName, "hostname": instanceName, "privileged": true, "cap_add": []string{"NET_ADMIN", "NET_RAW"}, "env_file": []string{fmt.Sprintf("instances/%d/compose.env", inst.Index+1)}, "networks": svcNets}
+		if len(input.Service.Volumes) > 0 {
+			svc["volumes"] = input.Service.Volumes
 		}
-	}
-	svc := map[string]any{
-		"image":          "${IMAGE}",
-		"container_name": "${DEPLOYMENT_NAME}-${SERVICE_NAME}",
-		"hostname":       "${SERVICE_NAME}",
-		"privileged":     true,
-		"cap_add":        []string{"NET_ADMIN", "NET_RAW"},
-		"env_file":       []string{"compose.env"},
-		"networks":       svcNets,
-	}
-	if len(extraVolumes) > 0 {
-		svc["volumes"] = extraVolumes
-	}
-	if len(ports) > 0 {
-		svc["ports"] = ports
+		ports := append([]string(nil), input.Service.Ports...)
+		if healthPort := input.HealthPorts[inst.Index]; healthPort != 0 {
+			ports = append(ports, fmt.Sprintf("127.0.0.1:%d:9878", healthPort))
+		}
+		if len(ports) > 0 {
+			svc["ports"] = ports
+		}
+		services[instanceName] = svc
 	}
 	doc := map[string]any{
-		"services": map[string]any{svcName: svc},
+		"services": services,
 		"networks": topNets,
 	}
 	out, _ := yaml.Marshal(doc)

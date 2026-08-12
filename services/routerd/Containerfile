@@ -20,12 +20,15 @@ RUN apt-get update \
    && rm -rf /var/lib/apt/lists/*
 
 COPY container/runtime-init-routerd /usr/local/bin/runtime-init-routerd
+COPY container/vcpe-healthd /usr/local/bin/vcpe-healthd
 COPY container/entrypoint.sh /usr/local/bin/routerd-legacy-entrypoint.sh
+COPY container/health-probe.sh /usr/local/bin/routerd-health-probe
 COPY container/healthcheck.sh /usr/local/bin/healthcheck.sh
 COPY container/render-config.sh /usr/local/bin/render-config.sh
 
-RUN chmod +x /usr/local/bin/runtime-init-routerd \
+RUN chmod +x /usr/local/bin/runtime-init-routerd /usr/local/bin/vcpe-healthd \
               /usr/local/bin/routerd-legacy-entrypoint.sh \
+              /usr/local/bin/routerd-health-probe \
               /usr/local/bin/healthcheck.sh \
               /usr/local/bin/render-config.sh \
    && mkdir -p /var/lib/routerd /run/routerd /etc/routerd \

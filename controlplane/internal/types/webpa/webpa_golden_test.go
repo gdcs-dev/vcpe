@@ -58,19 +58,13 @@ func TestWebPAGoldenComposeEnv(t *testing.T) {
 		t.Fatalf("webpa compose.env mismatch:\n--- got ---\n%s\n--- want ---\n%s", artifacts["compose.env"], wantEnv)
 	}
 
-	// compose.yaml must reference the mgmt network (not a hardcoded string)
+	// compose.yaml must contain the resolved mgmt network for its instance.
 	composeYAML := artifacts["compose.yaml"]
 	if composeYAML == "" {
 		t.Fatal("webpa renderer did not produce compose.yaml")
 	}
-	if !strings.Contains(composeYAML, "IFACE_MGMT_NETWORK") {
-		t.Errorf("compose.yaml should reference IFACE_MGMT_NETWORK, got:\n%s", composeYAML)
-	}
-	if strings.Contains(composeYAML, "mgmt:") && strings.Contains(composeYAML, "external: true") {
-		// make sure the external network name is driven by env var, not hardcoded
-		if strings.Contains(composeYAML, "name: mgmt") || strings.Contains(composeYAML, "name: edge-mgmt") {
-			t.Errorf("compose.yaml must use env-var for network name, got:\n%s", composeYAML)
-		}
+	if !strings.Contains(composeYAML, "name: edge-mgmt") {
+		t.Errorf("compose.yaml should contain the resolved mgmt network, got:\n%s", composeYAML)
 	}
 }
 
@@ -85,5 +79,34 @@ func TestWebPARejectsConfig(t *testing.T) {
 	}
 	if err := st.ValidateConfig(node); err == nil {
 		t.Fatal("expected webpa to reject any config")
+	}
+}
+
+func TestWebPAComposeReplicasHaveDistinctHealthPorts(t *testing.T) {
+	webpa.Register()
+	st, _ := typeregistry.Lookup("webpa")
+	dep := plan.Deployment{Name: "edge"}
+	svc := plan.Service{
+		Name: "webpa", Type: "webpa", Image: manifest.Image{Repository: "webpa", Tag: "test"},
+		Ports: []string{"8080:8080"},
+		Instances: []plan.Instance{
+			{Index: 0, Interfaces: []plan.Interface{{Role: "mgmt", Network: "edge-mgmt", MAC: "02:00:00:00:00:01", IPv4: "10.0.0.2"}}},
+			{Index: 1, Interfaces: []plan.Interface{{Role: "mgmt", Network: "edge-mgmt", MAC: "02:00:00:00:00:02", IPv4: "10.0.0.3"}}},
+		},
+	}
+	result, err := st.Renderer().Render(context.Background(), render.Input{Deployment: dep, Service: svc, HealthPorts: map[int]int{0: 47000, 1: 47001}})
+	if err != nil {
+		t.Fatalf("render webpa replicas: %v", err)
+	}
+	var compose string
+	for _, artifact := range result.Artifacts {
+		if artifact.Key == "compose.yaml" {
+			compose = artifact.Content
+		}
+	}
+	for _, want := range []string{"webpa-1:", "webpa-2:", "127.0.0.1:47000:9878", "127.0.0.1:47001:9878", "instances/1/compose.env", "instances/2/compose.env"} {
+		if !strings.Contains(compose, want) {
+			t.Errorf("compose.yaml missing %q:\n%s", want, compose)
+		}
 	}
 }

@@ -205,3 +205,93 @@ func TestGenericContainerRejectsUnknownConfig(t *testing.T) {
 		t.Fatal("expected unknown field rejection")
 	}
 }
+
+func TestGenericContainerHealthConfigValidation(t *testing.T) {
+	genericcontainer.Register()
+	st, _ := typeregistry.Lookup("generic-container")
+	for _, testCase := range []struct {
+		name    string
+		config  string
+		wantErr bool
+	}{
+		{name: "HTTP probe", config: "health: { http: { url: http://service:8080/ready }, timeoutSeconds: 2 }"},
+		{name: "command probe", config: "health: { command: { command: test -f /ready }, timeoutSeconds: 2 }"},
+		{name: "missing probe", config: "health: { timeoutSeconds: 2 }", wantErr: true},
+		{name: "ambiguous probe", config: "health: { http: { url: http://service/ }, command: { command: true }, timeoutSeconds: 2 }", wantErr: true},
+		{name: "unbounded timeout", config: "health: { command: { command: true }, timeoutSeconds: 31 }", wantErr: true},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			var config yaml.Node
+			if err := yaml.Unmarshal([]byte(testCase.config), &config); err != nil {
+				t.Fatal(err)
+			}
+			node := config
+			if config.Kind == yaml.DocumentNode {
+				node = *config.Content[0]
+			}
+			err := st.ValidateConfig(node)
+			if (err != nil) != testCase.wantErr {
+				t.Fatalf("ValidateConfig() error = %v, wantErr %t", err, testCase.wantErr)
+			}
+		})
+	}
+}
+
+func TestGenericContainerRendersConfiguredHealthSidecar(t *testing.T) {
+	genericcontainer.Register()
+	st, _ := typeregistry.Lookup("generic-container")
+	var config yaml.Node
+	if err := yaml.Unmarshal([]byte("health: { http: { url: http://127.0.0.1:8080/ready, expectedStatus: 204 }, timeoutSeconds: 3 }"), &config); err != nil {
+		t.Fatal(err)
+	}
+	service := plan.Service{
+		Name: "client", Type: "generic-container", Image: manifest.Image{Repository: "example/client", Tag: "test"}, Config: config,
+		Instances: []plan.Instance{{Index: 0, Interfaces: []plan.Interface{{Role: "lan", Network: "edge-lan", Device: "eth0", MAC: "02:00:00:00:00:0a"}}}},
+	}
+	result, err := st.Renderer().Render(context.Background(), render.Input{Deployment: plan.Deployment{Name: "edge"}, Service: service, HealthPorts: map[int]int{0: 47000}})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	artifacts := map[string]string{}
+	for _, artifact := range result.Artifacts {
+		artifacts[artifact.Key] = artifact.Content
+	}
+	if _, ok := artifacts["vcpe-healthd.required"]; !ok {
+		t.Fatal("expected vcpe-healthd staging marker")
+	}
+	for _, expected := range []string{
+		"client-health-1:",
+		"network_mode: service:client-1",
+		"127.0.0.1:47000:9878",
+		"configured=http://127.0.0.1:8080/ready|204",
+	} {
+		if !strings.Contains(artifacts["compose.yaml"], expected) {
+			t.Fatalf("compose.yaml missing %q:\n%s", expected, artifacts["compose.yaml"])
+		}
+	}
+}
+
+func TestGenericContainerWithoutHealthHasNoEndpoint(t *testing.T) {
+	genericcontainer.Register()
+	st, _ := typeregistry.Lookup("generic-container")
+	var config yaml.Node
+	if err := yaml.Unmarshal([]byte("command: [sleep, infinity]"), &config); err != nil {
+		t.Fatal(err)
+	}
+	service := plan.Service{
+		Name: "client", Type: "generic-container", Image: manifest.Image{Repository: "example/client", Tag: "test"}, Config: config,
+		Instances: []plan.Instance{{Index: 0, Interfaces: []plan.Interface{{Role: "lan", Network: "edge-lan", Device: "eth0", MAC: "02:00:00:00:00:0a"}}}},
+	}
+	result, err := st.Renderer().Render(context.Background(), render.Input{Deployment: plan.Deployment{Name: "edge"}, Service: service, HealthPorts: map[int]int{0: 47000}})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	for _, artifact := range result.Artifacts {
+		if artifact.Key == "vcpe-healthd.required" {
+			t.Fatal("unconfigured service must not stage vcpe-healthd")
+		}
+		if artifact.Key == "compose.yaml" && strings.Contains(artifact.Content, "47000:9878") {
+			t.Fatalf("unconfigured service must not publish a health endpoint:\n%s", artifact.Content)
+		}
+	}
+}

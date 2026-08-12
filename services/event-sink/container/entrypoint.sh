@@ -12,4 +12,6 @@ ip addr flush dev eth0
 dhclient -v eth0
 # echo "nameserver ${BNG_DNS_SERVER}" > /etc/resolv.conf
 
-exec /usr/local/bin/event-sink "$@"
+exec /usr/local/bin/vcpe-healthd \
+	--command /usr/local/bin/event-sink-health-probe \
+	--run '/usr/local/bin/event-sink'

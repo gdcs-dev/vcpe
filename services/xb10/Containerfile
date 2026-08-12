@@ -42,8 +42,12 @@ RUN echo 'MODEL_NAME=SG417DBCT' >> /etc/device.properties
 RUN echo 'PS1="[\u@xb10-dev \W]\\$ "' >> /home/root/.bashrc
 
 COPY container/runtime-init-xb10 /usr/local/bin/runtime-init-xb10
+COPY container/vcpe-healthd /usr/local/bin/vcpe-healthd
+COPY container/vcpe-healthd.service /etc/systemd/system/vcpe-healthd.service
 COPY container/entrypoint.sh /usr/local/bin/xb10-legacy-entrypoint.sh
-RUN chmod 0755 /usr/local/bin/runtime-init-xb10 /usr/local/bin/xb10-legacy-entrypoint.sh
+COPY container/health-probe.sh /usr/local/bin/xb10-health-probe
+RUN chmod 0755 /usr/local/bin/runtime-init-xb10 /usr/local/bin/vcpe-healthd /usr/local/bin/xb10-legacy-entrypoint.sh /usr/local/bin/xb10-health-probe
+RUN systemctl enable vcpe-healthd.service
 
 # Fix broken /etc/snmp/snmpd.conf symlink (target /etc/var/ doesn't exist in container)
 RUN rm /etc/snmp/snmpd.conf && \
@@ -67,3 +71,4 @@ RUN sed -i 's/CaptivePortal_Enable=true/CaptivePortal_Enable=false/g' /etc/utopi
 
 ENTRYPOINT ["/usr/local/bin/runtime-init-xb10"]
 CMD ["/usr/local/bin/xb10-legacy-entrypoint.sh", "/sbin/init"]
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 CMD ["/usr/local/bin/vcpe-healthd", "--check"]

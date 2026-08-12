@@ -30,6 +30,7 @@ import (
 	"github.com/gdcs-dev/vcpe/controlplane/internal/secrets"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/state"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/typeregistry"
+	"github.com/gdcs-dev/vcpe/controlplane/internal/types/genericcontainer"
 	"gopkg.in/yaml.v3"
 )
 
@@ -154,11 +155,17 @@ func runApply(opts Options) (daemon.CommandResponse, error) {
 	}
 	_ = ps.RecordPhase(opID, "allocation", "succeeded", fmt.Sprintf("%v", conflicts))
 
+	healthPorts, err := reserveHealthPorts(ps, resolved)
+	if err != nil {
+		return fail("health-endpoints", err)
+	}
+	_ = ps.RecordPhase(opID, "health-endpoints", "succeeded", "health endpoint ports reserved")
+
 	// Phase: render typed artifacts.
 	if failPhase("render") {
 		return fail("render", fmt.Errorf("VCPE_FAIL_PHASE=render"))
 	}
-	if err := renderAll(ctx, opts.StateRoot, opID, resolved, secretValues); err != nil {
+	if err := renderAll(ctx, opts.StateRoot, opID, resolved, secretValues, healthPorts); err != nil {
 		return fail("render", err)
 	}
 	_ = ps.RecordPhase(opID, "render", "succeeded", "typed artifacts rendered")
@@ -216,6 +223,7 @@ func runApply(opts Options) (daemon.CommandResponse, error) {
 // changed.
 func rollback(ps *persist.Store, opID, name string) {
 	_ = ps.ReplaceCustomerLeases(name, nil)
+	_ = ps.DeleteHealthEndpoints(name)
 	_ = ps.DeleteDeploymentSnapshot(name)
 	_ = ps.RecordPhase(opID, "rollback", "succeeded", "reverted allocation")
 }
@@ -311,7 +319,7 @@ func hostIntents(dep plan.Deployment) []hostnet.Intent {
 // renderAll dispatches each service to its registered renderer, writes every
 // artifact to <opArtifactsDir>/runtime/<serviceName>/<key>, and mirrors a copy
 // to the deployment artifacts dir so the env files survive beyond the operation.
-func renderAll(ctx context.Context, stateRoot, opID string, dep plan.Deployment, secretValues map[string]string) error {
+func renderAll(ctx context.Context, stateRoot, opID string, dep plan.Deployment, secretValues map[string]string, healthPorts map[string]map[int]int) error {
 	opDir := state.OperationArtifactsDir(stateRoot, opID)
 	depDir := state.DeploymentArtifactsDir(stateRoot, dep.Name)
 	for _, svc := range dep.Services {
@@ -322,13 +330,31 @@ func renderAll(ctx context.Context, stateRoot, opID string, dep plan.Deployment,
 		if !ok {
 			return fmt.Errorf("service %q has unregistered type %q", svc.Name, svc.Type)
 		}
-		result, err := st.Renderer().Render(ctx, render.Input{Deployment: dep, Service: svc, Secrets: secretValues})
+		result, err := st.Renderer().Render(ctx, render.Input{Deployment: dep, Service: svc, HealthPorts: healthPorts[svc.Name], Secrets: secretValues})
 		if err != nil {
 			return fmt.Errorf("render service %q: %w", svc.Name, err)
+		}
+		needsPrivateHealthNetwork, err := serviceNeedsPrivateHealthNetwork(dep, svc)
+		if err != nil {
+			return fmt.Errorf("render service %q health network: %w", svc.Name, err)
+		}
+		// Services whose manifest declares a healthUpstream interface render
+		// their own health transport (see the gateway renderer); the generic
+		// direct-attach path below is only for services with no such renderer.
+		if needsPrivateHealthNetwork && !serviceHasHealthUpstreamInterface(svc) && len(healthPorts[svc.Name]) > 0 {
+			if err := attachHealthNetwork(&result, healthNetworkName(dep.Name)); err != nil {
+				return fmt.Errorf("render service %q health network: %w", svc.Name, err)
+			}
 		}
 		producedKeys := map[string]bool{}
 		for _, artifact := range result.Artifacts {
 			producedKeys[artifact.Key] = true
+			if artifact.Key == "vcpe-healthd.required" {
+				if err := stageGenericHealthd(opDir, depDir, svc.Name); err != nil {
+					return err
+				}
+				continue
+			}
 			for _, base := range []string{opDir, depDir} {
 				dst := filepath.Join(base, "runtime", svc.Name, artifact.Key)
 				if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
@@ -346,6 +372,171 @@ func renderAll(ctx context.Context, stateRoot, opID string, dep plan.Deployment,
 		if !producedKeys["compose.yaml"] {
 			stale := filepath.Join(depDir, "runtime", svc.Name, "compose.yaml")
 			_ = os.Remove(stale)
+		}
+	}
+	return nil
+}
+
+const healthNetworkAlias = "aa-health"
+
+func healthNetworkName(deployment string) string {
+	return deployment + "-00-health"
+}
+
+// attachHealthNetwork gives Podman a stable, private address for host-port
+// forwarding when workload interfaces are configured inside the container.
+func attachHealthNetwork(result *render.Result, networkName string) error {
+	for index := range result.Artifacts {
+		artifact := &result.Artifacts[index]
+		if artifact.Key != "compose.yaml" {
+			continue
+		}
+		var document map[string]any
+		if err := yaml.Unmarshal([]byte(artifact.Content), &document); err != nil {
+			return fmt.Errorf("parse compose.yaml: %w", err)
+		}
+		services, ok := document["services"].(map[string]any)
+		if !ok {
+			return fmt.Errorf("compose.yaml services must be a mapping")
+		}
+		networks, ok := document["networks"].(map[string]any)
+		if !ok {
+			networks = make(map[string]any)
+			document["networks"] = networks
+		}
+		networks[healthNetworkAlias] = map[string]any{"external": true, "name": networkName}
+		for serviceName, rawService := range services {
+			service, ok := rawService.(map[string]any)
+			if !ok {
+				return fmt.Errorf("compose service %q must be a mapping", serviceName)
+			}
+			serviceNetworks, ok := service["networks"].(map[string]any)
+			if !ok {
+				serviceNetworks = make(map[string]any)
+				service["networks"] = serviceNetworks
+			}
+			serviceNetworks[healthNetworkAlias] = map[string]any{}
+		}
+		content, err := yaml.Marshal(document)
+		if err != nil {
+			return fmt.Errorf("marshal compose.yaml: %w", err)
+		}
+		artifact.Content = string(content)
+	}
+	return nil
+}
+
+func healthNetworkRequired(dep plan.Deployment) (bool, error) {
+	for _, svc := range dep.Services {
+		required, err := serviceNeedsPrivateHealthNetwork(dep, svc)
+		if err != nil {
+			return false, err
+		}
+		if required {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func serviceNeedsPrivateHealthNetwork(dep plan.Deployment, svc plan.Service) (bool, error) {
+	requiresHealth, err := serviceHealthTransportRequired(svc)
+	if err != nil || !requiresHealth {
+		return false, err
+	}
+	for _, iface := range svc.Instances[0].Interfaces {
+		network := dep.Network(iface.Role)
+		if network != nil && network.IPAMDriver != "none" {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+// serviceHasHealthUpstreamInterface reports whether the manifest marked one
+// of this service's interfaces as the target for a health transport proxy.
+func serviceHasHealthUpstreamInterface(svc plan.Service) bool {
+	if len(svc.Instances) == 0 {
+		return false
+	}
+	for _, iface := range svc.Instances[0].Interfaces {
+		if iface.HealthUpstream {
+			return true
+		}
+	}
+	return false
+}
+
+func serviceHealthTransportRequired(svc plan.Service) (bool, error) {
+	st, ok := typeregistry.Lookup(svc.Type)
+	if !ok || !st.Health().Valid() || len(svc.Instances) == 0 {
+		return false, nil
+	}
+	if svc.Type != genericcontainer.TypeName {
+		return true, nil
+	}
+	configured, err := genericcontainer.HasConfiguredHealth(svc.Config)
+	if err != nil {
+		return false, fmt.Errorf("parse generic-container health for %s: %w", svc.Name, err)
+	}
+	return configured, nil
+}
+
+// reserveHealthPorts allocates stable loopback ports for every instance of a
+// type that implements the common health endpoint protocol.
+func reserveHealthPorts(ps *persist.Store, dep plan.Deployment) (map[string]map[int]int, error) {
+	ports := make(map[string]map[int]int)
+	for _, svc := range dep.Services {
+		st, ok := typeregistry.Lookup(svc.Type)
+		if !ok || !st.Health().Valid() {
+			continue
+		}
+		if svc.Type == genericcontainer.TypeName {
+			configured, err := genericcontainer.HasConfiguredHealth(svc.Config)
+			if err != nil {
+				return nil, fmt.Errorf("parse generic-container health for %s: %w", svc.Name, err)
+			}
+			if !configured {
+				continue
+			}
+		} else {
+			// A self-addressed service (no Podman-managed network) can only
+			// publish health when the manifest names an interface to proxy to.
+			needsPrivate, err := serviceNeedsPrivateHealthNetwork(dep, svc)
+			if err != nil {
+				return nil, err
+			}
+			if needsPrivate && !serviceHasHealthUpstreamInterface(svc) {
+				continue
+			}
+		}
+		servicePorts := make(map[int]int, len(svc.Instances))
+		for _, inst := range svc.Instances {
+			endpoint, err := ps.ReserveHealthEndpoint(dep.Name, svc.Name, inst.Index)
+			if err != nil {
+				return nil, fmt.Errorf("reserve health endpoint for %s/%d: %w", svc.Name, inst.Index, err)
+			}
+			servicePorts[inst.Index] = endpoint.HostPort
+		}
+		ports[svc.Name] = servicePorts
+	}
+	return ports, nil
+}
+
+func stageGenericHealthd(opDir, depDir, service string) error {
+	repoRoot, err := resolveRepoRoot()
+	if err != nil {
+		return err
+	}
+	source := filepath.Join(repoRoot, "services", "bng", "container", "vcpe-healthd")
+	binary, err := os.ReadFile(source)
+	if err != nil {
+		return fmt.Errorf("read staged vcpe-healthd: %w", err)
+	}
+	for _, base := range []string{opDir, depDir} {
+		destination := filepath.Join(base, "runtime", service, "vcpe-healthd")
+		if err := os.WriteFile(destination, binary, 0o755); err != nil {
+			return fmt.Errorf("stage vcpe-healthd: %w", err)
 		}
 	}
 	return nil
@@ -383,6 +574,15 @@ func applyComposeLifecycle(ctx context.Context, stateRoot, opID string, dep plan
 			return fmt.Errorf("ensure podman network %s: %w", net.Bridge, err)
 		}
 	}
+	needsHealthNetwork, err := healthNetworkRequired(dep)
+	if err != nil {
+		return err
+	}
+	if needsHealthNetwork {
+		if err := podmanAdapter.EnsureNetwork(ctx, podman.NetworkSpec{Name: healthNetworkName(dep.Name)}); err != nil {
+			return fmt.Errorf("ensure podman health network: %w", err)
+		}
+	}
 
 	adapter := newComposeRunner()
 	opDir := state.OperationArtifactsDir(stateRoot, opID)
@@ -410,12 +610,9 @@ func applyComposeLifecycle(ctx context.Context, stateRoot, opID string, dep plan
 			runtimeDst := filepath.Join(repoRoot, "services", svc.Type, "runtime")
 			_ = stageRuntimeTree(runtimeSrc, runtimeDst)
 		}
-		// usesIndexedNames is true only for generic-container, which generates
-		// compose services named {svc}-1, {svc}-2, etc. All other types —
-		// including bng, gateway, and webpa — generate compose files with the
-		// plain service name ({svc}) even though they are not "curated" in the
-		// sense of using checked-in compose files.
-		usesIndexedNames := svc.Type == "generic-container"
+		// Generated Compose renderers name every replica {service}-{n}; checked-in
+		// curated files retain their legacy singleton service name.
+		usesIndexedNames := !isCurated
 
 		req := compose.Request{
 			ComposeGroup: svc.Type,
@@ -450,7 +647,11 @@ func applyComposeLifecycle(ctx context.Context, stateRoot, opID string, dep plan
 		// without delta tracking — always run compose in that case.
 		noChange := len(delta.ToAdd) == 0 && len(delta.ToRemove) == 0 &&
 			(svc.PreviousReplicaCount > 0 || svc.Replicas == 0)
-		if noChange {
+		healthTransport, err := serviceHealthTransportRequired(svc)
+		if err != nil {
+			return err
+		}
+		if noChange && !healthTransport {
 			continue // nothing to do for this service
 		}
 		if len(delta.ToRemove) == 0 && len(delta.ToAdd) > 0 && usesIndexedNames {

@@ -46,6 +46,9 @@ func TestRegistryCompleteness(t *testing.T) {
 		if st.Renderer() != nil && st.Renderer().Name() == "" {
 			t.Errorf("type %q renderer has empty Name()", name)
 		}
+		if !st.Health().Valid() {
+			t.Errorf("type %q has invalid health behavior: %+v", name, st.Health())
+		}
 		if policy := st.DefaultImagePolicy(); policy == "" {
 			t.Errorf("type %q has empty DefaultImagePolicy", name)
 		}

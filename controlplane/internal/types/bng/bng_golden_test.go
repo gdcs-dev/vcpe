@@ -151,7 +151,7 @@ func TestBNGGoldenDHCPAndRADVD(t *testing.T) {
 	}
 }
 
-// TestBNGRendererHasNoEmbeddedLiterals asserts the renderer pulls addresses from
+// TestBNGRendererUsesResolvedDevice asserts the renderer pulls addresses from
 // the typed config and interfaces, not from hardcoded customer literals. We
 // assert the device comes from the resolved interface (changing it changes the
 // radvd output).
@@ -173,5 +173,65 @@ func TestBNGRendererUsesResolvedDevice(t *testing.T) {
 	radvd, _ := artifact(result, "etc/radvd.conf")
 	if !strings.Contains(radvd, "interface wan99 {") {
 		t.Fatalf("expected radvd to use resolved device wan99, got:\n%s", radvd)
+	}
+}
+
+// TestBNGDnsmasqResolvesWebPAByInstanceAlias asserts that the WebPA peer
+// hostname and virtual-host CNAMEs target the actual compose/aardvark
+// instance alias (e.g. "webpa-1"), not the bare manifest service name, which
+// curated renderers no longer register as a network alias.
+func TestBNGDnsmasqResolvesWebPAByInstanceAlias(t *testing.T) {
+	bng.Register()
+	st, _ := typeregistry.Lookup("bng")
+	dep := plan.Deployment{
+		Name: "edge",
+		Networks: []plan.Network{
+			{Role: "mgmt", Bridge: "edge-mgmt", IPv4: &plan.Family{CIDR: "10.10.10.0/24", Gateway: "10.10.10.1"}},
+		},
+		Services: []plan.Service{
+			{
+				Name: "webpa",
+				Type: "webpa",
+				Instances: []plan.Instance{
+					{Index: 0, Interfaces: []plan.Interface{{Role: "mgmt", Network: "edge-mgmt", IPv4: "10.10.10.11"}}},
+				},
+			},
+		},
+	}
+	svc := plan.Service{
+		Name:      "bng",
+		Type:      "bng",
+		Image:     manifest.Image{Repository: "x/bng"},
+		Config:    bngConfigNode(t),
+		Instances: []plan.Instance{{Interfaces: []plan.Interface{{Role: "wan", Network: "edge-wan", Device: "eth0", MAC: "02:00:00:00:00:01"}}}},
+	}
+	dep.Services = append(dep.Services, svc)
+	result, err := st.Renderer().Render(context.Background(), render.Input{Deployment: dep, Service: svc})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+
+	hosts, ok := artifact(result, "etc/dnsmasq.hosts")
+	if !ok {
+		t.Fatal("expected etc/dnsmasq.hosts")
+	}
+	if !strings.Contains(hosts, "10.10.10.11 webpa-1\n") {
+		t.Fatalf("expected dnsmasq.hosts to key WebPA by instance alias webpa-1, got:\n%s", hosts)
+	}
+	if strings.Contains(hosts, " webpa\n") {
+		t.Fatalf("dnsmasq.hosts should not use the bare service name, got:\n%s", hosts)
+	}
+
+	conf, ok := artifact(result, "etc/dnsmasq.conf")
+	if !ok {
+		t.Fatal("expected etc/dnsmasq.conf")
+	}
+	for _, want := range []string{"cname=talaria,webpa-1", "cname=webpa,webpa-1", "cname=talaria.dns.podman,webpa-1"} {
+		if !strings.Contains(conf, want) {
+			t.Fatalf("expected dnsmasq.conf to contain %q, got:\n%s", want, conf)
+		}
+	}
+	if strings.Contains(conf, ",webpa\n") {
+		t.Fatalf("dnsmasq.conf cname targets should not use the bare service name, got:\n%s", conf)
 	}
 }

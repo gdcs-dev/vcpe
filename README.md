@@ -14,6 +14,8 @@ declarative desired-state manifest into Podman projects. Top-level scripts in
 - `platform/`: host networking helpers and shared shell libs
 - `docs/`: architecture, networking, and runbook documentation
 
+Health endpoint and status behavior is documented in [docs/health.md](docs/health.md).
+
 ## Build
 
 ```bash

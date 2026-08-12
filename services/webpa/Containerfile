@@ -52,14 +52,18 @@ COPY assets/caduceus.yaml /etc/caduceus/caduceus.yaml
 COPY assets/themis.yaml   /etc/themis/themis.yaml
 COPY assets/consul.json   /etc/consul.d/consul.json
 COPY container/runtime-init-webpa /usr/local/bin/runtime-init-webpa
+COPY container/vcpe-healthd /usr/local/bin/vcpe-healthd
 COPY container/entrypoint.sh     /usr/local/bin/webpa-legacy-entrypoint.sh
 COPY container/start-services.sh /usr/local/bin/start-services.sh
+COPY container/health-probe.sh   /usr/local/bin/webpa-health-probe
 COPY container/healthcheck.sh    /usr/local/bin/healthcheck.sh
 
 RUN chmod +x \
    /usr/local/bin/runtime-init-webpa \
+   /usr/local/bin/vcpe-healthd \
    /usr/local/bin/webpa-legacy-entrypoint.sh \
    /usr/local/bin/start-services.sh \
+   /usr/local/bin/webpa-health-probe \
    /usr/local/bin/healthcheck.sh
 
 ENTRYPOINT ["/usr/local/bin/runtime-init-webpa"]

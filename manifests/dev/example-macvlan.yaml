@@ -124,7 +124,7 @@ spec:
         pullPolicy: build-if-missing
         buildContext: services/gateway
       interfaces:
-        - { role: wan, device: erouter0, ipv4: "10.7.200.10" }
+        - { role: wan, device: erouter0, ipv4: "10.7.200.10", healthUpstream: true }
         - { role: cm, device: wan0, ipv4: "10.7.201.10" }
         - { role: lan-p1, device: eth0, bridge: brlan0 }
         - { role: lan-p2, device: eth1, bridge: brlan0 }

@@ -109,6 +109,10 @@ type Interface struct {
 	Gateway4     string
 	Gateway6     string
 	DefaultRoute bool
+	// HealthUpstream marks this interface's address as the manifest-declared
+	// target for the health transport proxy when no interface on this service
+	// has a Podman-managed network to publish the health endpoint on directly.
+	HealthUpstream bool
 }
 
 // Network returns the resolved network for a role, or nil when absent.

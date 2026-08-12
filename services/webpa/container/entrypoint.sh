@@ -2,12 +2,15 @@
 set -euo pipefail
 
 # ---- Network configuration ------------------------------------------------
-# Acquire the management IP from BNG's dnsmasq DHCP server. Flush the
-# Podman-assigned address first so only the DHCP-acquired IP is active.
-# dnsmasq binds the container hostname to the assigned IP automatically,
-# making this container resolvable by name from the WAN/CM side of the BNG.
+# Keep Podman's planned management address. Replacing it with a DHCP lease
+# invalidates the address selected for loopback-only published health ports.
 ip link set eth0 up
-ip addr flush dev eth0
-dhclient -v eth0
 
-exec /usr/local/bin/start-services.sh
+exec /usr/local/bin/vcpe-healthd \
+	--probe "talaria=/usr/local/bin/webpa-health-probe talaria" \
+	--probe "scytale=/usr/local/bin/webpa-health-probe scytale" \
+	--probe "tr1d1um=/usr/local/bin/webpa-health-probe tr1d1um" \
+	--probe "argus=/usr/local/bin/webpa-health-probe argus" \
+	--probe "caduceus=/usr/local/bin/webpa-health-probe caduceus" \
+	--probe "themis=/usr/local/bin/webpa-health-probe themis" \
+	--run /usr/local/bin/start-services.sh

@@ -274,14 +274,15 @@ func resolveInstance(deployment string, svc manifest.Service, index, replicas in
 		}
 
 		resolved := plan.Interface{
-			Role:         iface.Role,
-			Network:      net.Bridge,
-			Device:       device,
-			Bridge:       iface.Bridge,
-			MAC:          mac,
-			IPv4:         ipv4,
-			IPv6:         ipv6,
-			DefaultRoute: iface.DefaultRoute,
+			Role:           iface.Role,
+			Network:        net.Bridge,
+			Device:         device,
+			Bridge:         iface.Bridge,
+			MAC:            mac,
+			IPv4:           ipv4,
+			IPv6:           ipv6,
+			DefaultRoute:   iface.DefaultRoute,
+			HealthUpstream: iface.HealthUpstream,
 		}
 		if net.IPv4 != nil {
 			resolved.Gateway4 = net.IPv4.Gateway

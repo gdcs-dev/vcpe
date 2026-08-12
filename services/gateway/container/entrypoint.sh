@@ -27,6 +27,17 @@ rename_interfaces_by_mac() {
         current_by_mac["${mac,,}"]=$name
     done
 
+    # The private health network is attached first so Podman forwards the
+    # loopback-published endpoint through its assigned address. Move that
+    # unmanaged interface aside before assigning manifest device names.
+    for mac in "${!current_by_mac[@]}"; do
+        [[ -n "${target_by_mac[$mac]:-}" ]] && continue
+        name=${current_by_mac[$mac]}
+        ip link set "$name" name vcpe-health0
+        unset 'current_by_mac[$mac]'
+        break
+    done
+
     for mac in "${!target_by_mac[@]}"; do
         local target=${target_by_mac[$mac]}
         [[ -n "${current_by_mac[$mac]:-}" ]] || continue

@@ -343,6 +343,10 @@ func runDown(opts Options) (daemon.CommandResponse, error) {
 	}
 	// Clear persisted replica counts so a future apply starts fresh.
 	_ = ps.DeleteReplicaCounts(opts.Name)
+	if err := ps.DeleteHealthEndpoints(opts.Name); err != nil {
+		_ = ps.FinishOperation(opID, "failed", err.Error())
+		return daemon.CommandResponse{}, err
+	}
 	if err := ps.FinishOperation(opID, "succeeded", "deployment torn down"); err != nil {
 		return daemon.CommandResponse{}, err
 	}

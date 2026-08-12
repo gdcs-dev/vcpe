@@ -84,7 +84,7 @@ var commandHelp = map[string]CommandHelp{
 	},
 	"status": {
 		Synopsis:      "Show control-plane status",
-		Description:   "Reports reconcile metrics, active IPAM leases, and recent operation history. With --name, shows the desired state snapshot for that deployment.",
+		Description:   "Reports reconcile metrics, active IPAM leases, and recent operation history. With --name, shows the desired state snapshot for that deployment; if exactly one deployment is active, it is used by default.",
 		RequiredFlags: []FlagHelp{},
 		OptionalFlags: []FlagHelp{
 			{Name: "--name", Arg: "<deployment>", Description: "Filter output to a specific deployment"},

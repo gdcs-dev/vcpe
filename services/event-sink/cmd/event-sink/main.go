@@ -19,6 +19,7 @@ import (
 	"os"
 	"os/signal"
 	"regexp"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -66,6 +67,7 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
+	var registered atomic.Bool
 
 	// Set up HTTP server (start before registration so /health responds immediately)
 	wh := handler.New(webhookSecret, slog.Default())
@@ -74,7 +76,15 @@ func main() {
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"status":"ok"}`)) //nolint:errcheck
+		status := "starting"
+		checkStatus := "starting"
+		message := "waiting for Argus registration"
+		if registered.Load() {
+			status = "healthy"
+			checkStatus = "healthy"
+			message = "registered with Argus"
+		}
+		w.Write([]byte(`{"schemaVersion":"vcpe.dev/health/v1","status":"` + status + `","observedAt":"` + time.Now().UTC().Format(time.RFC3339Nano) + `","checks":[{"name":"argus-registration","status":"` + checkStatus + `","message":"` + message + `"}]}`)) //nolint:errcheck
 	})
 
 	srv := &http.Server{
@@ -105,6 +115,7 @@ func main() {
 		slog.Error("webhook registration failed", "error", err)
 		os.Exit(1)
 	}
+	registered.Store(true)
 
 	// Start TTL refresh goroutine
 	go registration.RefreshLoop(ctx, regCfg)

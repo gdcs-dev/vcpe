@@ -1,11 +1,17 @@
 package app
 
 import (
+	"encoding/json"
+	"net"
+	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/gdcs-dev/vcpe/controlplane/internal/health"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/persist"
 )
 
@@ -125,6 +131,210 @@ func TestApplySucceedsWithoutRuntime(t *testing.T) {
 	depContract := filepath.Join(stateRoot, "artifacts", "v1", "deployments", "edge", "runtime", "startup-contracts", "bng.json")
 	if _, err := os.Stat(depContract); err != nil {
 		t.Fatalf("expected deployment startup contract: %v", err)
+	}
+}
+
+func TestApplyPersistsStableHealthEndpointBeforeLifecycle(t *testing.T) {
+	stateRoot := t.TempDir()
+	manifestPath := writeV1Manifest(t, "edge")
+	t.Setenv("VCPE_SKIP_HOSTNET_PREFLIGHT", "1")
+	t.Setenv("VCPE_SKIP_RUNTIME", "1")
+
+	if _, err := executeLocal(Options{Command: "apply", ManifestPath: manifestPath, StateRoot: stateRoot}); err != nil {
+		t.Fatalf("first apply: %v", err)
+	}
+	store, err := persist.Open(stateRoot)
+	if err != nil {
+		t.Fatalf("open store after first apply: %v", err)
+	}
+	first, err := store.ListHealthEndpoints("edge")
+	if err != nil {
+		t.Fatalf("list endpoints after first apply: %v", err)
+	}
+	if len(first) != 1 || first[0].Service != "bng" || first[0].Replica != 0 {
+		t.Fatalf("unexpected first endpoint set: %#v", first)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+
+	if _, err := executeLocal(Options{Command: "apply", ManifestPath: manifestPath, StateRoot: stateRoot}); err != nil {
+		t.Fatalf("second apply: %v", err)
+	}
+	store, err = persist.Open(stateRoot)
+	if err != nil {
+		t.Fatalf("open store after second apply: %v", err)
+	}
+	defer store.Close()
+	second, err := store.ListHealthEndpoints("edge")
+	if err != nil {
+		t.Fatalf("list endpoints after second apply: %v", err)
+	}
+	if len(second) != 1 || second[0] != first[0] {
+		t.Fatalf("endpoint changed across non-disruptive apply: first=%#v second=%#v", first, second)
+	}
+}
+
+func TestApplySkipsPrivateHealthNetworkWhenPodmanIPAMIsAvailable(t *testing.T) {
+	stateRoot := t.TempDir()
+	manifestPath := writeV1Manifest(t, "edge")
+	t.Setenv("VCPE_SKIP_HOSTNET_PREFLIGHT", "1")
+	t.Setenv("VCPE_SKIP_RUNTIME", "1")
+
+	if _, err := executeLocal(Options{Command: "apply", ManifestPath: manifestPath, StateRoot: stateRoot}); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	store, err := persist.Open(stateRoot)
+	if err != nil {
+		t.Fatalf("open state: %v", err)
+	}
+	operations, err := store.RecentOperations(1)
+	store.Close()
+	if err != nil || len(operations) != 1 {
+		t.Fatalf("operations = %#v, err = %v", operations, err)
+	}
+	composePath := filepath.Join(stateRoot, "artifacts", "v1", "operations", operations[0].OperationID, "runtime", "bng", "compose.yaml")
+	compose, err := os.ReadFile(composePath)
+	if err != nil {
+		t.Fatalf("read rendered compose: %v", err)
+	}
+	if strings.Contains(string(compose), "zz-health:") {
+		t.Fatalf("rendered Compose unexpectedly added private health network:\n%s", compose)
+	}
+}
+
+func TestApplyReservesGatewayHealthEndpointOnlyWhenHealthUpstreamDeclared(t *testing.T) {
+	for _, testCase := range []struct {
+		name           string
+		healthUpstream string
+		wantEndpoints  int
+	}{
+		{name: "undeclared", wantEndpoints: 0},
+		{name: "declared", healthUpstream: ", healthUpstream: true", wantEndpoints: 1},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			stateRoot := t.TempDir()
+			manifestPath := filepath.Join(t.TempDir(), "manifest.yaml")
+			content := "apiVersion: vcpe.dev/v1\nkind: Deployment\nmetadata:\n  name: edge\nspec:\n  networks:\n    - role: wan\n      ipamDriver: none\n      ipv4: { cidr: 10.7.200.0/24, gateway: 10.7.200.1 }\n  services:\n    - name: gateway\n      type: gateway\n      replicas: 1\n      image: { repository: ghcr.io/gdcs-dev/gateway, tag: dev }\n      interfaces:\n        - { role: wan, device: erouter0, ipv4: \"10.7.200.10\"" + testCase.healthUpstream + " }\n"
+			if err := os.WriteFile(manifestPath, []byte(content), 0o644); err != nil {
+				t.Fatalf("write manifest: %v", err)
+			}
+			t.Setenv("VCPE_SKIP_HOSTNET_PREFLIGHT", "1")
+			t.Setenv("VCPE_SKIP_RUNTIME", "1")
+			if _, err := executeLocal(Options{Command: "apply", ManifestPath: manifestPath, StateRoot: stateRoot}); err != nil {
+				t.Fatalf("apply: %v", err)
+			}
+			store, err := persist.Open(stateRoot)
+			if err != nil {
+				t.Fatalf("open store: %v", err)
+			}
+			defer store.Close()
+			endpoints, err := store.ListHealthEndpoints("edge")
+			if err != nil {
+				t.Fatalf("list health endpoints: %v", err)
+			}
+			if len(endpoints) != testCase.wantEndpoints {
+				t.Fatalf("endpoints = %#v, want %d", endpoints, testCase.wantEndpoints)
+			}
+			response, err := executeLocal(Options{Command: "status", Name: "edge", StateRoot: stateRoot})
+			if err != nil {
+				t.Fatalf("status: %v", err)
+			}
+			if testCase.wantEndpoints == 0 && !strings.Contains(response.Message, "health gateway/0: not-configured") {
+				t.Fatalf("expected not-configured gateway health, got: %s", response.Message)
+			}
+		})
+	}
+}
+
+func TestApplyReservesGenericHealthEndpointOnlyWhenConfigured(t *testing.T) {
+	for _, testCase := range []struct {
+		name          string
+		healthConfig  string
+		wantEndpoints int
+	}{
+		{name: "unconfigured", wantEndpoints: 0},
+		{name: "configured", healthConfig: "        health:\n          command:\n            command: test -f /ready\n          timeoutSeconds: 2\n", wantEndpoints: 1},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			stateRoot := t.TempDir()
+			manifestPath := filepath.Join(t.TempDir(), "manifest.yaml")
+			content := "apiVersion: vcpe.dev/v1\nkind: Deployment\nmetadata:\n  name: edge\nspec:\n  networks:\n    - role: mgmt\n      ipv4: { cidr: 10.10.10.0/24, gateway: 10.10.10.1, pool: { start: 10.10.10.10, end: 10.10.10.250 } }\n  services:\n    - name: client\n      type: generic-container\n      replicas: 1\n      image: { repository: docker.io/library/alpine, tag: \"3.19\" }\n      interfaces:\n        - { role: mgmt }\n      config:\n" + testCase.healthConfig
+			if testCase.healthConfig == "" {
+				content += "        command: [sleep, infinity]\n"
+			}
+			if err := os.WriteFile(manifestPath, []byte(content), 0o644); err != nil {
+				t.Fatalf("write manifest: %v", err)
+			}
+			t.Setenv("VCPE_SKIP_HOSTNET_PREFLIGHT", "1")
+			t.Setenv("VCPE_SKIP_RUNTIME", "1")
+			if _, err := executeLocal(Options{Command: "apply", ManifestPath: manifestPath, StateRoot: stateRoot}); err != nil {
+				t.Fatalf("apply: %v", err)
+			}
+			store, err := persist.Open(stateRoot)
+			if err != nil {
+				t.Fatalf("open store: %v", err)
+			}
+			defer store.Close()
+			endpoints, err := store.ListHealthEndpoints("edge")
+			if err != nil {
+				t.Fatalf("list health endpoints: %v", err)
+			}
+			if len(endpoints) != testCase.wantEndpoints {
+				t.Fatalf("endpoints = %#v, want %d", endpoints, testCase.wantEndpoints)
+			}
+		})
+	}
+}
+
+func TestAppliedDeploymentStatusCollectsGenericHealthOverHTTP(t *testing.T) {
+	stateRoot := t.TempDir()
+	manifestPath := filepath.Join(t.TempDir(), "manifest.yaml")
+	manifest := "apiVersion: vcpe.dev/v1\nkind: Deployment\nmetadata:\n  name: edge\nspec:\n  networks:\n    - role: mgmt\n      ipv4: { cidr: 10.10.10.0/24, gateway: 10.10.10.1, pool: { start: 10.10.10.10, end: 10.10.10.250 } }\n  services:\n    - name: client\n      type: generic-container\n      replicas: 1\n      image: { repository: docker.io/library/alpine, tag: \"3.19\" }\n      interfaces:\n        - { role: mgmt }\n      config:\n        health:\n          command:\n            command: test -f /ready\n          timeoutSeconds: 2\n"
+	if err := os.WriteFile(manifestPath, []byte(manifest), 0o644); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+	t.Setenv("VCPE_SKIP_HOSTNET_PREFLIGHT", "1")
+	t.Setenv("VCPE_SKIP_RUNTIME", "1")
+	store, err := persist.Open(stateRoot)
+	if err != nil {
+		t.Fatalf("open state: %v", err)
+	}
+	for index := 0; index < 3; index++ {
+		if _, err := store.ReserveHealthEndpoint("seed", "service", index); err != nil {
+			store.Close()
+			t.Fatalf("reserve seed endpoint %d: %v", index, err)
+		}
+	}
+	store.Close()
+	if _, err := executeLocal(Options{Command: "apply", ManifestPath: manifestPath, StateRoot: stateRoot}); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	store, err = persist.Open(stateRoot)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	endpoints, err := store.ListHealthEndpoints("edge")
+	store.Close()
+	if err != nil || len(endpoints) != 1 {
+		t.Fatalf("endpoints = %#v, err = %v", endpoints, err)
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:"+strconv.Itoa(endpoints[0].HostPort))
+	if err != nil {
+		t.Fatalf("listen on reserved health port: %v", err)
+	}
+	server := &http.Server{Handler: http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		_ = json.NewEncoder(writer).Encode(health.Response{SchemaVersion: health.SchemaVersion, Status: health.StatusHealthy, ObservedAt: time.Now().UTC(), Checks: []health.Check{{Name: "configured", Status: health.StatusHealthy}}})
+	})}
+	defer server.Close()
+	go server.Serve(listener)
+
+	response, err := executeLocal(Options{Command: "status", Name: "edge", StateRoot: stateRoot})
+	if err != nil {
+		t.Fatalf("status: %v", err)
+	}
+	if !strings.Contains(response.Message, "health client/0: healthy") {
+		t.Fatalf("status did not collect health over HTTP: %s", response.Message)
 	}
 }
 
@@ -328,5 +538,48 @@ func TestApplyStatusJSONKeys(t *testing.T) {
 		if !strings.Contains(resp.Message, key) {
 			t.Errorf("expected key %s in status JSON, got:\n%s", key, resp.Message)
 		}
+	}
+}
+
+func TestStatusDefaultsToSingleActiveDeployment(t *testing.T) {
+	stateRoot := t.TempDir()
+	t.Setenv("VCPE_SKIP_HOSTNET_PREFLIGHT", "1")
+	t.Setenv("VCPE_SKIP_RUNTIME", "1")
+	manifestPath := writeV1Manifest(t, "edge")
+	if _, err := executeLocal(Options{Command: "apply", ManifestPath: manifestPath, StateRoot: stateRoot}); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+
+	resp, err := executeLocal(Options{Command: "status", StateRoot: stateRoot})
+	if err != nil {
+		t.Fatalf("status: %v", err)
+	}
+	if !strings.Contains(resp.Message, "deployment=edge") {
+		t.Fatalf("expected status to default to the single active deployment, got:\n%s", resp.Message)
+	}
+}
+
+func TestStatusOmitsDeploymentWhenMultipleActive(t *testing.T) {
+	stateRoot := t.TempDir()
+	t.Setenv("VCPE_SKIP_HOSTNET_PREFLIGHT", "1")
+	t.Setenv("VCPE_SKIP_RUNTIME", "1")
+	if _, err := executeLocal(Options{Command: "apply", ManifestPath: writeV1Manifest(t, "edge-a"), StateRoot: stateRoot}); err != nil {
+		t.Fatalf("apply edge-a: %v", err)
+	}
+	manifestPath := filepath.Join(t.TempDir(), "manifest.yaml")
+	content := "apiVersion: vcpe.dev/v1\nkind: Deployment\nmetadata:\n  name: edge-b\nspec:\n  networks:\n    - role: mgmt\n      ipv4: { cidr: 10.20.10.0/24, gateway: 10.20.10.1, pool: { start: 10.20.10.10, end: 10.20.10.250 } }\n    - role: wan\n      nat: true\n      ipv4: { cidr: 10.20.200.0/24, gateway: 10.20.200.1, pool: { start: 10.20.200.10, end: 10.20.200.250 } }\n    - role: cm\n      ipv4: { cidr: 10.20.201.0/24, gateway: 10.20.201.1, pool: { start: 10.20.201.10, end: 10.20.201.250 } }\n  services:\n    - name: bng\n      type: bng\n      replicas: 1\n      image: { repository: ghcr.io/gdcs-dev/bng, tag: dev }\n      interfaces:\n        - { role: mgmt }\n        - { role: wan, defaultRoute: true }\n        - { role: cm }\n"
+	if err := os.WriteFile(manifestPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+	if _, err := executeLocal(Options{Command: "apply", ManifestPath: manifestPath, StateRoot: stateRoot}); err != nil {
+		t.Fatalf("apply edge-b: %v", err)
+	}
+
+	resp, err := executeLocal(Options{Command: "status", StateRoot: stateRoot})
+	if err != nil {
+		t.Fatalf("status: %v", err)
+	}
+	if strings.Contains(resp.Message, "deployment=") {
+		t.Fatalf("expected no default deployment selection with multiple active deployments, got:\n%s", resp.Message)
 	}
 }

@@ -6,11 +6,16 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/gdcs-dev/vcpe/controlplane/internal/daemon"
+	"github.com/gdcs-dev/vcpe/controlplane/internal/health"
+	"github.com/gdcs-dev/vcpe/controlplane/internal/manifest"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/persist"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/state"
+	"github.com/gdcs-dev/vcpe/controlplane/internal/typeregistry"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/types"
+	"gopkg.in/yaml.v3"
 )
 
 // executeLocal runs a parsed command in-process against the resolved state root.
@@ -55,6 +60,78 @@ func executeLocal(opts Options) (daemon.CommandResponse, error) {
 	}
 }
 
+type statusHealthObservation struct {
+	Deployment string         `json:"deployment"`
+	Service    string         `json:"service"`
+	Replica    int            `json:"replica"`
+	State      string         `json:"state"`
+	ObservedAt string         `json:"observedAt"`
+	Checks     []health.Check `json:"checks,omitempty"`
+	Error      string         `json:"error,omitempty"`
+}
+
+func collectStatusHealth(ps *persist.Store, deployment string) ([]statusHealthObservation, error) {
+	if deployment == "" {
+		return nil, nil
+	}
+	endpoints, err := ps.ListHealthEndpoints(deployment)
+	if err != nil {
+		return nil, err
+	}
+	targets := make([]health.Target, 0, len(endpoints))
+	for _, endpoint := range endpoints {
+		targets = append(targets, health.Target{Deployment: endpoint.Deployment, Service: endpoint.Service, Replica: endpoint.Replica, Host: "127.0.0.1", Port: endpoint.HostPort})
+	}
+	observations := health.NewCollector(0, 4).Collect(context.Background(), targets)
+	views := make([]statusHealthObservation, 0, len(observations))
+	for _, observation := range observations {
+		view := statusHealthObservation{
+			Deployment: observation.Target.Deployment,
+			Service:    observation.Target.Service,
+			Replica:    observation.Target.Replica,
+			State:      observation.State,
+			ObservedAt: observation.ObservedAt.Format(time.RFC3339Nano),
+			Error:      observation.Error,
+		}
+		if observation.Response != nil {
+			view.Checks = observation.Response.Checks
+		}
+		views = append(views, view)
+	}
+	observedInstances := make(map[string]struct{}, len(views))
+	for _, view := range views {
+		observedInstances[fmt.Sprintf("%s/%d", view.Service, view.Replica)] = struct{}{}
+	}
+	if snapshot, ok, err := ps.LatestDesiredSnapshot(deployment); err == nil && ok {
+		var document manifest.Document
+		if yaml.Unmarshal(snapshot, &document) == nil {
+			for _, service := range document.Spec.Services {
+				st, registered := typeregistry.Lookup(service.Type)
+				if !registered || !st.Health().Valid() {
+					continue
+				}
+				replicas := service.Replicas
+				if replicas < 1 {
+					replicas = 1
+				}
+				for replica := 0; replica < replicas; replica++ {
+					if _, observed := observedInstances[fmt.Sprintf("%s/%d", service.Name, replica)]; observed {
+						continue
+					}
+					views = append(views, statusHealthObservation{Deployment: deployment, Service: service.Name, Replica: replica, State: "not-configured", ObservedAt: time.Now().UTC().Format(time.RFC3339Nano)})
+				}
+			}
+		}
+	}
+	sort.SliceStable(views, func(left, right int) bool {
+		if views[left].Service != views[right].Service {
+			return views[left].Service < views[right].Service
+		}
+		return views[left].Replica < views[right].Replica
+	})
+	return views, nil
+}
+
 func runInit(opts Options) (daemon.CommandResponse, error) {
 	ps, err := persist.Open(opts.StateRoot)
 	if err != nil {
@@ -73,11 +150,23 @@ func runStatus(opts Options) (daemon.CommandResponse, error) {
 	}
 	defer ps.Close()
 
+	// With no --name, default to the single active deployment when there is
+	// exactly one; leave it unset (deployment-agnostic output) otherwise.
+	if opts.Name == "" {
+		if names, err := ps.ListKnownDeployments(); err == nil && len(names) == 1 {
+			opts.Name = names[0]
+		}
+	}
+
 	metrics, err := ps.Metrics()
 	if err != nil {
 		return daemon.CommandResponse{}, err
 	}
 	timeline, err := ps.RecentOperations(10)
+	if err != nil {
+		return daemon.CommandResponse{}, err
+	}
+	healthObservations, err := collectStatusHealth(ps, opts.Name)
 	if err != nil {
 		return daemon.CommandResponse{}, err
 	}
@@ -89,6 +178,7 @@ func runStatus(opts Options) (daemon.CommandResponse, error) {
 			"desired":  desiredView(ps, opts.Name),
 			"planned":  map[string]any{"deployment": opts.Name},
 			"observed": map[string]any{"runningOperations": metrics.RunningOperations},
+			"health":   healthObservations,
 			"runtimeInitDiagnostics": map[string]any{
 				"contractsRoot": state.VersionedArtifactsRoot(opts.StateRoot),
 			},
@@ -104,6 +194,13 @@ func runStatus(opts Options) (daemon.CommandResponse, error) {
 	b.WriteString("vCPE status\n")
 	if opts.Name != "" {
 		fmt.Fprintf(&b, "deployment=%s\n", opts.Name)
+		for _, observation := range healthObservations {
+			fmt.Fprintf(&b, "health %s/%d: %s", observation.Service, observation.Replica, observation.State)
+			if observation.Error != "" {
+				fmt.Fprintf(&b, " (%s)", observation.Error)
+			}
+			b.WriteByte('\n')
+		}
 	}
 	fmt.Fprintf(&b, "reconcile total: %d (failures: %d)\n", metrics.ReconcileTotal, metrics.ReconcileFailures)
 	fmt.Fprintf(&b, "ipam leases in use: %d\n", metrics.IPAMLeasesInUse)

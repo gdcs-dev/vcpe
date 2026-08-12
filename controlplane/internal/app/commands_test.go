@@ -1,10 +1,16 @@
 package app
 
 import (
+	"encoding/json"
+	"net"
+	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/gdcs-dev/vcpe/controlplane/internal/health"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/manifest"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/persist"
 )
@@ -28,6 +34,127 @@ func TestStatusOutputModes(t *testing.T) {
 		if !strings.Contains(jsonOut.Message, key) {
 			t.Fatalf("expected %s in json status, got %q", key, jsonOut.Message)
 		}
+	}
+}
+
+func TestNamedStatusCollectsPersistedHealthOverHTTP(t *testing.T) {
+	stateRoot := t.TempDir()
+	store, err := persist.Open(stateRoot)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	endpoint, err := store.ReserveHealthEndpoint("edge", "bng", 0)
+	if err != nil {
+		t.Fatalf("reserve endpoint: %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:"+strconv.Itoa(endpoint.HostPort))
+	if err != nil {
+		t.Fatalf("listen on reserved port: %v", err)
+	}
+	server := &http.Server{Handler: http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(writer).Encode(health.Response{SchemaVersion: health.SchemaVersion, Status: health.StatusHealthy, ObservedAt: time.Now().UTC(), Checks: []health.Check{{Name: "service", Status: health.StatusHealthy}}})
+	})}
+	go server.Serve(listener)
+	t.Cleanup(func() { _ = server.Close() })
+
+	human, err := executeLocal(Options{Command: "status", Name: "edge", StateRoot: stateRoot})
+	if err != nil {
+		t.Fatalf("human status: %v", err)
+	}
+	if !strings.Contains(human.Message, "health bng/0: healthy") {
+		t.Fatalf("human health status missing: %s", human.Message)
+	}
+	jsonStatus, err := executeLocal(Options{Command: "status", Name: "edge", StateRoot: stateRoot, OutputJSON: true})
+	if err != nil {
+		t.Fatalf("json status: %v", err)
+	}
+	if !strings.Contains(jsonStatus.Message, `"state": "healthy"`) || !strings.Contains(jsonStatus.Message, `"service": "bng"`) {
+		t.Fatalf("json health status missing: %s", jsonStatus.Message)
+	}
+}
+
+func TestNamedStatusReportsGenericHealthNotConfigured(t *testing.T) {
+	stateRoot := t.TempDir()
+	store, err := persist.Open(stateRoot)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	snapshot := []byte("apiVersion: vcpe.dev/v1\nkind: Deployment\nmetadata:\n  name: edge\nspec:\n  services:\n    - name: client\n      type: generic-container\n      replicas: 1\n")
+	if err := store.SaveDesiredSnapshot("edge", snapshot); err != nil {
+		t.Fatalf("save snapshot: %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+
+	response, err := executeLocal(Options{Command: "status", Name: "edge", StateRoot: stateRoot})
+	if err != nil {
+		t.Fatalf("status: %v", err)
+	}
+	if !strings.Contains(response.Message, "health client/0: not-configured") {
+		t.Fatalf("missing not-configured generic health state: %s", response.Message)
+	}
+}
+
+func TestNamedStatusHealthStateMatrix(t *testing.T) {
+	stateRoot := t.TempDir()
+	store, err := persist.Open(stateRoot)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	endpoint, err := store.ReserveHealthEndpoint("edge", "bng", 0)
+	if err != nil {
+		t.Fatalf("reserve served endpoint: %v", err)
+	}
+	if _, err := store.ReserveHealthEndpoint("edge", "webpa", 0); err != nil {
+		t.Fatalf("reserve unreachable endpoint: %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+
+	mode := "healthy"
+	listener, err := net.Listen("tcp", "127.0.0.1:"+strconv.Itoa(endpoint.HostPort))
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	server := &http.Server{Handler: http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		if mode == "malformed" {
+			_, _ = writer.Write([]byte("not json"))
+			return
+		}
+		response := health.Response{SchemaVersion: health.SchemaVersion, Status: health.Status(mode), ObservedAt: time.Now().UTC(), Checks: []health.Check{{Name: "service", Status: health.Status(mode)}}}
+		if mode == "unsupported" {
+			response.SchemaVersion = "vcpe.dev/health/v2"
+			response.Status = health.StatusHealthy
+		}
+		_ = json.NewEncoder(writer).Encode(response)
+	})}
+	go server.Serve(listener)
+	t.Cleanup(func() { _ = server.Close() })
+
+	for _, testCase := range []struct {
+		mode  string
+		state string
+	}{
+		{mode: "starting", state: "starting"},
+		{mode: "unhealthy", state: "unhealthy"},
+		{mode: "malformed", state: "unknown"},
+		{mode: "unsupported", state: "unknown"},
+	} {
+		t.Run(testCase.mode, func(t *testing.T) {
+			mode = testCase.mode
+			response, err := executeLocal(Options{Command: "status", Name: "edge", StateRoot: stateRoot})
+			if err != nil {
+				t.Fatalf("status: %v", err)
+			}
+			if !strings.Contains(response.Message, "health bng/0: "+testCase.state) || !strings.Contains(response.Message, "health webpa/0: unknown") {
+				t.Fatalf("unexpected status output: %s", response.Message)
+			}
+		})
 	}
 }
 
@@ -294,6 +421,12 @@ func TestDownClearsLeases(t *testing.T) {
 	if err := ps.SaveDesiredSnapshot("edge", []byte("{}")); err != nil {
 		t.Fatalf("seed snapshot: %v", err)
 	}
+	if _, err := ps.ReserveHealthEndpoint("edge", "bng", 0); err != nil {
+		t.Fatalf("reserve first health endpoint: %v", err)
+	}
+	if _, err := ps.ReserveHealthEndpoint("edge", "bng", 1); err != nil {
+		t.Fatalf("reserve second health endpoint: %v", err)
+	}
 	ps.Close()
 
 	_, err = executeLocal(Options{Command: "down", Name: "edge", StateRoot: stateRoot})
@@ -312,6 +445,13 @@ func TestDownClearsLeases(t *testing.T) {
 	}
 	if len(leases) != 0 {
 		t.Fatalf("expected leases cleared after down, got %#v", leases)
+	}
+	endpoints, err := ps2.ListHealthEndpoints("edge")
+	if err != nil {
+		t.Fatalf("list health endpoints: %v", err)
+	}
+	if len(endpoints) != 0 {
+		t.Fatalf("expected health endpoints cleared after down, got %#v", endpoints)
 	}
 }
 

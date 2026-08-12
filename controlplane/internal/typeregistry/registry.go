@@ -21,6 +21,28 @@ type RoleRequirement struct {
 	Required bool
 }
 
+// HealthMode declares whether a type always provides the common health
+// endpoint or requires explicit manifest opt-in.
+type HealthMode string
+
+const (
+	HealthModeCurated  HealthMode = "curated"
+	HealthModeOptional HealthMode = "optional"
+)
+
+// HealthBehavior declares a type's deployment-independent health behavior.
+// The container port is reserved for the common GET /health protocol.
+type HealthBehavior struct {
+	Mode          HealthMode
+	ContainerPort int
+}
+
+// Valid reports whether the health metadata can be used by the renderer.
+func (h HealthBehavior) Valid() bool {
+	return (h.Mode == HealthModeCurated || h.Mode == HealthModeOptional) &&
+		h.ContainerPort > 0 && h.ContainerPort <= 65535
+}
+
 // ServiceType is implemented by every supported workload type.
 type ServiceType interface {
 	// Type is the discriminator matched against a manifest service's type field.
@@ -31,6 +53,8 @@ type ServiceType interface {
 	Renderer() render.Renderer
 	// ExpectedRoles declares the network roles this type expects.
 	ExpectedRoles() []RoleRequirement
+	// Health declares the deployment-independent health endpoint behavior.
+	Health() HealthBehavior
 	// DefaultImagePolicy returns the default pull policy ("build" or "pull").
 	DefaultImagePolicy() string
 	// Description returns a human-readable one-line description of the service

@@ -64,6 +64,13 @@ wait_for_socket() {
 }
 
 main() {
+    if [[ -z "${VCPE_HEALTHD_SUPERVISED:-}" ]]; then
+        export VCPE_HEALTHD_SUPERVISED=1
+        exec /usr/local/bin/vcpe-healthd \
+            --command /usr/local/bin/routerd-health-probe \
+            --run /usr/local/bin/routerd-legacy-entrypoint.sh
+    fi
+
     rename_interfaces_by_mac
     render_config
 

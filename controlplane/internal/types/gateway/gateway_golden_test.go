@@ -77,3 +77,54 @@ func TestGATEWAYRejectsUnknownConfigField(t *testing.T) {
 		t.Fatal("expected unknown field rejection")
 	}
 }
+
+func TestGatewayRendersHealthSidecarOnlyWhenHealthUpstreamDeclared(t *testing.T) {
+	gateway.Register()
+	st, _ := typeregistry.Lookup("gateway")
+	dep := plan.Deployment{Name: "edge", Networks: []plan.Network{{Role: "wan", Bridge: "edge-wan"}}}
+
+	base := plan.Service{
+		Name:  "gateway",
+		Type:  "gateway",
+		Image: manifest.Image{Repository: "ghcr.io/gdcs-dev/gateway", Tag: "dev"},
+	}
+
+	withoutUpstream := base
+	withoutUpstream.Instances = []plan.Instance{{Interfaces: []plan.Interface{
+		{Role: "wan", Network: "edge-wan", Device: "erouter0", IPv4: "10.7.200.10"},
+	}}}
+	result, err := st.Renderer().Render(context.Background(), render.Input{Deployment: dep, Service: withoutUpstream, HealthPorts: map[int]int{0: 47000}})
+	if err != nil {
+		t.Fatalf("render without healthUpstream: %v", err)
+	}
+	compose := composeArtifact(t, result)
+	if strings.Contains(compose, "vcpe-healthd") {
+		t.Fatalf("expected no health sidecar without a declared healthUpstream interface:\n%s", compose)
+	}
+
+	withUpstream := base
+	withUpstream.Instances = []plan.Instance{{Interfaces: []plan.Interface{
+		{Role: "wan", Network: "edge-wan", Device: "erouter0", IPv4: "10.7.200.10", HealthUpstream: true},
+	}}}
+	result, err = st.Renderer().Render(context.Background(), render.Input{Deployment: dep, Service: withUpstream, HealthPorts: map[int]int{0: 47000}})
+	if err != nil {
+		t.Fatalf("render with healthUpstream: %v", err)
+	}
+	compose = composeArtifact(t, result)
+	for _, want := range []string{"vcpe-healthd", "--proxy-url", "http://gateway-1:9878/health", "--timeout", "10s", "127.0.0.1:47000:9878", "aa-health:"} {
+		if !strings.Contains(compose, want) {
+			t.Fatalf("expected health sidecar to contain %q:\n%s", want, compose)
+		}
+	}
+}
+
+func composeArtifact(t *testing.T, result render.Result) string {
+	t.Helper()
+	for _, artifact := range result.Artifacts {
+		if artifact.Key == "compose.yaml" {
+			return artifact.Content
+		}
+	}
+	t.Fatal("no compose.yaml artifact produced")
+	return ""
+}

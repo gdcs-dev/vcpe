@@ -129,12 +129,28 @@ apply_runtime_config() {
     # dnsmasq.hosts via Podman's aardvark-dns (which knows each container's
     # actual runtime IP). Write the resolved entries to dnsmasq.dynamic.hosts
     # and clear the static file so dnsmasq never serves stale planned IPs.
+    # Peers that depend on BNG (e.g. webpa) start after it, so their aardvark
+    # alias may not exist yet on the first attempt; retry briefly.
+    resolve_peer_ip() {
+        local hostname=$1
+        local attempt
+        for attempt in $(seq 1 10); do
+            local ip
+            ip=$(getent hosts "$hostname" 2>/dev/null | awk '{print $1}' | head -1 || true)
+            if [[ -n "$ip" ]]; then
+                printf '%s' "$ip"
+                return 0
+            fi
+            sleep 0.5
+        done
+        return 1
+    }
     : > /etc/dnsmasq.dynamic.hosts
     while IFS= read -r line || [[ -n "$line" ]]; do
         [[ -z "$line" || "$line" == '#'* ]] && continue
         first_hostname=$(printf '%s' "$line" | awk '{print $2}')
         [[ -z "$first_hostname" ]] && continue
-        actual_ip=$(getent hosts "$first_hostname" 2>/dev/null | awk '{print $1}' | head -1 || true)
+        actual_ip=$(resolve_peer_ip "$first_hostname" || true)
         if [[ -n "$actual_ip" ]]; then
             rest=$(printf '%s' "$line" | cut -d' ' -f2-)
             printf '%s %s\n' "$actual_ip" "$rest" >> /etc/dnsmasq.dynamic.hosts
@@ -154,7 +170,9 @@ main() {
     [[ -d /runtime-config ]] || { echo "missing /runtime-config" >&2; exit 1; }
     rename_interfaces
     apply_runtime_config
-    exec /usr/local/bin/start-services.sh
+    exec /usr/local/bin/vcpe-healthd \
+        --command /usr/local/bin/bng-health-probe \
+        --run /usr/local/bin/start-services.sh
 }
 
 main "$@"

@@ -90,6 +90,10 @@ func (serviceType) ExpectedRoles() []typeregistry.RoleRequirement {
 	}
 }
 
+func (serviceType) Health() typeregistry.HealthBehavior {
+	return typeregistry.HealthBehavior{Mode: typeregistry.HealthModeCurated, ContainerPort: 9878}
+}
+
 func (serviceType) DefaultImagePolicy() string { return "build" }
 
 func (serviceType) ValidateInterfaces(_ []manifest.Interface) error { return nil }
@@ -104,7 +108,55 @@ type renderer struct{}
 
 func (renderer) Name() string { return "bng-renderer" }
 
-func (renderer) Render(_ context.Context, input render.Input) (render.Result, error) {
+func (renderer) Render(ctx context.Context, input render.Input) (render.Result, error) {
+	if len(input.Service.Instances) == 0 {
+		return render.Result{}, fmt.Errorf("bng %q has no instances", input.Service.Name)
+	}
+	artifacts := []render.Artifact{}
+	services := map[string]any{}
+	networks := map[string]any{}
+	for _, inst := range input.Service.Instances {
+		one := input
+		one.Service.Instances = []plan.Instance{inst}
+		result, err := renderBNGInstance(ctx, one)
+		if err != nil {
+			return render.Result{}, err
+		}
+		for _, artifact := range result.Artifacts {
+			switch artifact.Key {
+			case "compose.yaml":
+				var doc map[string]map[string]any
+				if err := yaml.Unmarshal([]byte(artifact.Content), &doc); err != nil {
+					return render.Result{}, fmt.Errorf("parse bng instance compose: %w", err)
+				}
+				for name, svc := range doc["services"] {
+					services[name] = svc
+				}
+				for name, network := range doc["networks"] {
+					networks[name] = network
+				}
+			case "compose.env":
+				if inst.Index == 0 {
+					artifacts = append(artifacts, artifact)
+				}
+				artifacts = append(artifacts, render.Artifact{Key: fmt.Sprintf("instances/%d/compose.env", inst.Index+1), Content: artifact.Content})
+			default:
+				if inst.Index == 0 {
+					artifacts = append(artifacts, artifact)
+				}
+				artifacts = append(artifacts, render.Artifact{Key: fmt.Sprintf("instances/%d/%s", inst.Index+1, artifact.Key), Content: artifact.Content})
+			}
+		}
+	}
+	compose, err := yaml.Marshal(map[string]any{"services": services, "networks": networks})
+	if err != nil {
+		return render.Result{}, fmt.Errorf("marshal bng compose: %w", err)
+	}
+	artifacts = append(artifacts, render.Artifact{Key: "compose.yaml", Content: string(compose)})
+	return render.Result{Renderer: "bng-renderer", Artifacts: artifacts}, nil
+}
+
+func renderBNGInstance(_ context.Context, input render.Input) (render.Result, error) {
 	var cfg Config
 	if err := typeregistry.StrictDecode(input.Service.Config, &cfg); err != nil {
 		return render.Result{}, fmt.Errorf("bng %q: %w", input.Service.Name, err)
@@ -157,7 +209,7 @@ func (renderer) Render(_ context.Context, input render.Input) (render.Result, er
 			ipamNone[n.Role] = true
 		}
 	}
-	composeYAML := renderBNGCompose(input.Service.Name, inst.Interfaces, input.Service.Volumes, ipamNone)
+	composeYAML := renderBNGCompose(input, inst, ipamNone)
 
 	if len(cfg.Env) > 0 {
 		extra := make([]string, 0, len(cfg.Env))
@@ -389,36 +441,50 @@ func renderDnsmasqConf(ipByRole map[string]string, dep plan.Deployment) string {
 
 	// Emit CNAME aliases for WebPA virtual hostnames so they follow the
 	// webpa container's live IP (resolved via aardvark-dns) without needing
-	// a planned IP baked into the static hosts file.
+	// a planned IP baked into the static hosts file. The target is the actual
+	// compose/aardvark instance alias (e.g. "webpa-1"), not the bare manifest
+	// service name, which curated renderers no longer register as a network
+	// alias.
 	for _, svc := range dep.Services {
 		if svc.Type != "webpa" {
 			continue
 		}
-		for _, alias := range webpaVirtualHosts {
-			if alias == svc.Name {
-				continue // the container name itself resolves via aardvark
+		alias := firstInstanceAlias(svc)
+		for _, hostname := range webpaVirtualHosts {
+			if hostname == alias {
+				continue // the instance alias itself resolves via aardvark
 			}
-			fmt.Fprintf(&b, "cname=%s,%s\n", alias, svc.Name)
+			fmt.Fprintf(&b, "cname=%s,%s\n", hostname, alias)
 		}
 		// Clients on Podman-managed networks receive "search dns.podman" in
-		// their resolv.conf, causing "webpa" to resolve as "webpa.dns.podman"
-		// first. Podman's aardvark-dns answers with the IPAM address (e.g.
-		// 10.10.10.2), but BNG DHCP replaces that address with a lease from
-		// our pool (e.g. 10.10.10.149), leaving 10.10.10.2 unreachable.
-		// Override all *.dns.podman names for every webpa virtual host so
-		// queries that arrive here return the live DHCP-assigned IP instead.
-		for _, alias := range webpaVirtualHosts {
-			podmanName := alias + ".dns.podman"
-			fmt.Fprintf(&b, "cname=%s,%s\n", podmanName, svc.Name)
+		// their resolv.conf, causing a bare hostname to resolve as
+		// "<name>.dns.podman" first. Podman's aardvark-dns answers with the
+		// IPAM address, but BNG DHCP replaces that address with a lease from
+		// our pool, leaving the IPAM address unreachable. Override all
+		// *.dns.podman names for every webpa virtual host so queries that
+		// arrive here return the live DHCP-assigned IP instead.
+		for _, hostname := range webpaVirtualHosts {
+			podmanName := hostname + ".dns.podman"
+			fmt.Fprintf(&b, "cname=%s,%s\n", podmanName, alias)
 		}
 		break
 	}
 	return b.String()
 }
 
+// firstInstanceAlias returns the compose service key / aardvark-dns network
+// alias for a service's first instance, matching the "<name>-<index+1>"
+// convention every curated and generic renderer uses.
+func firstInstanceAlias(svc plan.Service) string {
+	return fmt.Sprintf("%s-%d", svc.Name, svc.Instances[0].Index+1)
+}
+
 // renderDnsmasqHosts emits a hosts file entry for every deployment peer that
-// has a mgmt-network interface, using the IPAM-assigned IP. The webpa service
-// type is registered by its container name only; virtual hostnames
+// has a mgmt-network interface, using the IPAM-assigned IP. The hostname is
+// the peer's compose/aardvark instance alias (e.g. "webpa-1"): the entrypoint
+// resolves each of these names via aardvark-dns at boot to seed the dynamic
+// hosts file, and a bare service name is no longer a registered network
+// alias, so using it here would leave the lookup empty. Virtual hostnames
 // (consul, talaria, etc.) are handled as dnsmasq CNAMEs in dnsmasq.conf so
 // they track the live IP without requiring a planned-IP bake-in.
 func renderDnsmasqHosts(input render.Input) string {
@@ -440,9 +506,7 @@ func renderDnsmasqHosts(input render.Input) string {
 		if mgmtIP == "" {
 			continue
 		}
-		// Register only the canonical service name; webpa virtual hostnames
-		// (consul, talaria, etc.) are emitted as cname= entries in dnsmasq.conf.
-		fmt.Fprintf(&b, "%s %s\n", mgmtIP, svc.Name)
+		fmt.Fprintf(&b, "%s %s\n", mgmtIP, firstInstanceAlias(svc))
 	}
 	return b.String()
 }
@@ -473,35 +537,44 @@ func renderDnsmasqSubnetsMap(dep plan.Deployment) string {
 // every interface from the resolved instance, regardless of role name. This
 // replaces the curated services/bng/compose.yaml for deployments where the BNG
 // connects to more than the standard mgmt/wan/cm trio.
-func renderBNGCompose(svcName string, ifaces []plan.Interface, extraVolumes []string, ipamNone map[string]bool) string {
+func renderBNGCompose(input render.Input, inst plan.Instance, ipamNone map[string]bool) string {
 	svcNets := map[string]any{}
 	topNets := map[string]any{}
-	for _, iface := range ifaces {
-		key := strings.ToUpper(strings.ReplaceAll(iface.Role, "-", "_"))
+	for _, iface := range inst.Interfaces {
 		entry := map[string]any{
-			"mac_address": "${IFACE_" + key + "_MAC}",
+			"mac_address": iface.MAC,
 		}
 		if !ipamNone[iface.Role] {
-			entry["ipv4_address"] = "${IFACE_" + key + "_IPV4}"
+			entry["ipv4_address"] = iface.IPv4
 		}
 		svcNets[iface.Role] = entry
 		topNets[iface.Role] = map[string]any{
 			"external": true,
-			"name":     "${IFACE_" + key + "_NETWORK}",
+			"name":     iface.Network,
 		}
+	}
+	instanceName := fmt.Sprintf("%s-%d", input.Service.Name, inst.Index+1)
+	volumes := append([]string{fmt.Sprintf("./instances/%d:/runtime-config:ro", inst.Index+1)}, input.Service.Volumes...)
+	svc := map[string]any{
+		"image":          render.ImageRef(input.Service.Image),
+		"container_name": input.Deployment.Name + "-" + instanceName,
+		"hostname":       instanceName,
+		"privileged":     true,
+		"cap_add":        []string{"NET_ADMIN", "NET_RAW"},
+		"env_file":       []string{fmt.Sprintf("instances/%d/compose.env", inst.Index+1)},
+		"volumes":        volumes,
+		"networks":       svcNets,
+	}
+	ports := append([]string(nil), input.Service.Ports...)
+	if healthPort := input.HealthPorts[inst.Index]; healthPort != 0 {
+		ports = append(ports, fmt.Sprintf("127.0.0.1:%d:9878", healthPort))
+	}
+	if len(ports) > 0 {
+		svc["ports"] = ports
 	}
 	doc := map[string]any{
 		"services": map[string]any{
-			svcName: map[string]any{
-				"image":          "${IMAGE}",
-				"container_name": "${DEPLOYMENT_NAME}-${SERVICE_NAME}",
-				"hostname":       "${SERVICE_NAME}",
-				"privileged":     true,
-				"cap_add":        []string{"NET_ADMIN", "NET_RAW"},
-				"env_file":       []string{"compose.env"},
-				"volumes":        append([]string{".:/runtime-config:ro"}, extraVolumes...),
-				"networks":       svcNets,
-			},
+			instanceName: svc,
 		},
 		"networks": topNets,
 	}

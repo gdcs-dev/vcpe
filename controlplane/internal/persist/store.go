@@ -24,6 +24,20 @@ type IPAMLease struct {
 	CIDR       string
 }
 
+const (
+	HealthPortMin = 47000
+	HealthPortMax = 47999
+)
+
+// HealthEndpoint is a loopback-published health endpoint reserved for one
+// deployment service replica.
+type HealthEndpoint struct {
+	Deployment string
+	Service    string
+	Replica    int
+	HostPort   int
+}
+
 type OperationTimelineEntry struct {
 	OperationID string `json:"operationId"`
 	Command     string `json:"command"`
@@ -104,6 +118,14 @@ CREATE TABLE IF NOT EXISTS ipam_leases (
   PRIMARY KEY(customer_id, role)
 );
 
+CREATE TABLE IF NOT EXISTS health_endpoints (
+	customer_id TEXT NOT NULL,
+	service_name TEXT NOT NULL,
+	replica_index INTEGER NOT NULL,
+	host_port INTEGER NOT NULL UNIQUE,
+	PRIMARY KEY(customer_id, service_name, replica_index)
+);
+
 CREATE TABLE IF NOT EXISTS checkpoints (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL,
@@ -144,7 +166,7 @@ func (s *Store) ensureSchemaVersion() error {
 // Reset clears all persisted state and re-stamps the schema version. It backs
 // the `vcpe state reset` command.
 func (s *Store) Reset() error {
-	tables := []string{"operations", "operation_journal", "desired_snapshots", "ipam_leases", "checkpoints", "meta"}
+	tables := []string{"operations", "operation_journal", "desired_snapshots", "ipam_leases", "health_endpoints", "checkpoints", "meta"}
 	tx, err := s.db.Begin()
 	if err != nil {
 		return fmt.Errorf("begin reset tx: %w", err)
@@ -499,6 +521,89 @@ func (s *Store) DeleteReplicaCounts(deployment string) error {
 	prefix := "replica_count/" + deployment + "/%"
 	if _, err := s.db.Exec(`DELETE FROM checkpoints WHERE key LIKE ?`, prefix); err != nil {
 		return fmt.Errorf("delete replica counts for %s: %w", deployment, err)
+	}
+	return nil
+}
+
+// ReserveHealthEndpoint returns a stable loopback host-port reservation for a
+// deployment service replica. Reservations remain stable across reconciles and
+// are globally unique inside the control-plane-owned range.
+func (s *Store) ReserveHealthEndpoint(deployment, service string, replica int) (HealthEndpoint, error) {
+	if deployment == "" || service == "" || replica < 0 {
+		return HealthEndpoint{}, fmt.Errorf("invalid health endpoint identity %q/%q/%d", deployment, service, replica)
+	}
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return HealthEndpoint{}, fmt.Errorf("begin health endpoint reservation: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	endpoint := HealthEndpoint{Deployment: deployment, Service: service, Replica: replica}
+	err = tx.QueryRow(`
+		SELECT host_port FROM health_endpoints
+		WHERE customer_id = ? AND service_name = ? AND replica_index = ?
+	`, deployment, service, replica).Scan(&endpoint.HostPort)
+	if err == nil {
+		if err := tx.Commit(); err != nil {
+			return HealthEndpoint{}, fmt.Errorf("commit health endpoint reservation: %w", err)
+		}
+		return endpoint, nil
+	}
+	if err != sql.ErrNoRows {
+		return HealthEndpoint{}, fmt.Errorf("lookup health endpoint %s/%s/%d: %w", deployment, service, replica, err)
+	}
+
+	for port := HealthPortMin; port <= HealthPortMax; port++ {
+		_, err = tx.Exec(`
+			INSERT INTO health_endpoints(customer_id, service_name, replica_index, host_port)
+			VALUES(?, ?, ?, ?)
+		`, deployment, service, replica, port)
+		if err == nil {
+			endpoint.HostPort = port
+			if err := tx.Commit(); err != nil {
+				return HealthEndpoint{}, fmt.Errorf("commit health endpoint reservation: %w", err)
+			}
+			return endpoint, nil
+		}
+	}
+	return HealthEndpoint{}, fmt.Errorf("health endpoint port range %d-%d is exhausted", HealthPortMin, HealthPortMax)
+}
+
+// ListHealthEndpoints returns reserved endpoints for a deployment in stable
+// service/replica order. A deployment created before health support returns an
+// empty list.
+func (s *Store) ListHealthEndpoints(deployment string) ([]HealthEndpoint, error) {
+	rows, err := s.db.Query(`
+		SELECT customer_id, service_name, replica_index, host_port
+		FROM health_endpoints
+		WHERE customer_id = ?
+		ORDER BY service_name, replica_index
+	`, deployment)
+	if err != nil {
+		return nil, fmt.Errorf("list health endpoints for %s: %w", deployment, err)
+	}
+	defer rows.Close()
+
+	var endpoints []HealthEndpoint
+	for rows.Next() {
+		var endpoint HealthEndpoint
+		if err := rows.Scan(&endpoint.Deployment, &endpoint.Service, &endpoint.Replica, &endpoint.HostPort); err != nil {
+			return nil, fmt.Errorf("scan health endpoint: %w", err)
+		}
+		endpoints = append(endpoints, endpoint)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate health endpoints: %w", err)
+	}
+	return endpoints, nil
+}
+
+// DeleteHealthEndpoints releases all health endpoint reservations for a
+// deployment after its compose projects have been torn down.
+func (s *Store) DeleteHealthEndpoints(deployment string) error {
+	if _, err := s.db.Exec(`DELETE FROM health_endpoints WHERE customer_id = ?`, deployment); err != nil {
+		return fmt.Errorf("delete health endpoints for %s: %w", deployment, err)
 	}
 	return nil
 }

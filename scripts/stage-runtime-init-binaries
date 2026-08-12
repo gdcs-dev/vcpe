@@ -19,13 +19,15 @@ if [[ -z "${TARGET_GOARCH:-}" ]]; then
             ;;
     esac
 fi
+echo "TARGET_GOARCH: $TARGET_GOARCH"
+
 ARTIFACT_BIN_DIR="$REPO_ROOT/.local/artifacts/runtime-init/${TARGET_GOOS}-${TARGET_GOARCH}/bin"
 
 usage() {
     cat <<'EOF'
 Usage: scripts/stage-runtime-init-binaries [service ...]
 
-Builds runtime-init binaries from controlplane/cmd/runtime-init-* and stages them
+Builds runtime-init binaries and vcpe-healthd from controlplane/cmd and stages them
 into:
     - .local/artifacts/runtime-init/<goos>-<goarch>/bin
   - services/<service>/container/runtime-init-<service> (when service image exists)
@@ -34,16 +36,17 @@ By default builds linux/amd64 binaries. Override with:
     TARGET_GOOS=<goos> TARGET_GOARCH=<goarch>
 
 If no services are provided, stages all known services.
-Known services: bng gateway routerd webpa xb10 client
+Known services: bng event-sink gateway oktopus routerd webpa xb10 client
 EOF
 }
 
-known_services=(bng event-sink gateway routerd webpa xb10 client)
+runtime_init_services=(bng event-sink gateway routerd webpa xb10 client)
+health_services=(bng event-sink gateway oktopus routerd webpa xb10)
 
 is_known_service() {
     local name=$1
     local service
-    for service in "${known_services[@]}"; do
+    for service in "${runtime_init_services[@]}" "${health_services[@]}"; do
         if [[ "$service" == "$name" ]]; then
             return 0
         fi
@@ -58,10 +61,16 @@ fi
 
 services=("$@")
 if [[ ${#services[@]} -eq 0 ]]; then
-    services=("${known_services[@]}")
+    services=("${runtime_init_services[@]}" oktopus)
 fi
 
 mkdir -p "$ARTIFACT_BIN_DIR"
+
+healthd_bin="$ARTIFACT_BIN_DIR/vcpe-healthd"
+(
+    cd "$CONTROLPLANE_ROOT"
+    CGO_ENABLED=0 GOOS="$TARGET_GOOS" GOARCH="$TARGET_GOARCH" go build -o "$healthd_bin" ./cmd/vcpe-healthd
+)
 
 for service in "${services[@]}"; do
     if ! is_known_service "$service"; then
@@ -70,16 +79,26 @@ for service in "${services[@]}"; do
         exit 1
     fi
 
+    service_container_dir="$REPO_ROOT/services/$service/container"
+    if [[ " ${health_services[*]} " == *" $service "* ]]; then
+        mkdir -p "$service_container_dir"
+        cp "$healthd_bin" "$service_container_dir/vcpe-healthd"
+        chmod +x "$service_container_dir/vcpe-healthd"
+        echo "staged vcpe-healthd -> services/$service/container/vcpe-healthd"
+    fi
+
+    if [[ " ${runtime_init_services[*]} " != *" $service "* ]]; then
+        continue
+    fi
+
     bin_name="runtime-init-$service"
     src_pkg="./cmd/$bin_name"
     out_bin="$ARTIFACT_BIN_DIR/$bin_name"
-
     (
         cd "$CONTROLPLANE_ROOT"
         CGO_ENABLED=0 GOOS="$TARGET_GOOS" GOARCH="$TARGET_GOARCH" go build -o "$out_bin" "$src_pkg"
     )
 
-    service_container_dir="$REPO_ROOT/services/$service/container"
     if [[ -d "$service_container_dir" ]]; then
         cp "$out_bin" "$service_container_dir/$bin_name"
         chmod +x "$service_container_dir/$bin_name"

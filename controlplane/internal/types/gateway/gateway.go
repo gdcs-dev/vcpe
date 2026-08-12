@@ -71,6 +71,10 @@ func (serviceType) ExpectedRoles() []typeregistry.RoleRequirement {
 	}
 }
 
+func (serviceType) Health() typeregistry.HealthBehavior {
+	return typeregistry.HealthBehavior{Mode: typeregistry.HealthModeCurated, ContainerPort: 9878}
+}
+
 func (serviceType) DefaultImagePolicy() string { return "build" }
 
 func (serviceType) ValidateInterfaces(_ []manifest.Interface) error { return nil }
@@ -85,7 +89,50 @@ type renderer struct{}
 
 func (renderer) Name() string { return "gateway-renderer" }
 
-func (renderer) Render(_ context.Context, input render.Input) (render.Result, error) {
+func (renderer) Render(ctx context.Context, input render.Input) (render.Result, error) {
+	if len(input.Service.Instances) == 0 {
+		return render.Result{}, fmt.Errorf("gateway %q has no instances", input.Service.Name)
+	}
+	artifacts := []render.Artifact{}
+	services := map[string]any{}
+	networks := map[string]any{}
+	for _, inst := range input.Service.Instances {
+		one := input
+		one.Service.Instances = []plan.Instance{inst}
+		result, err := renderGatewayInstance(ctx, one)
+		if err != nil {
+			return render.Result{}, err
+		}
+		for _, artifact := range result.Artifacts {
+			switch artifact.Key {
+			case "compose.env":
+				if inst.Index == 0 {
+					artifacts = append(artifacts, artifact)
+				}
+				artifacts = append(artifacts, render.Artifact{Key: fmt.Sprintf("instances/%d/compose.env", inst.Index+1), Content: artifact.Content})
+			case "compose.yaml":
+				var doc map[string]map[string]any
+				if err := yaml.Unmarshal([]byte(artifact.Content), &doc); err != nil {
+					return render.Result{}, fmt.Errorf("parse gateway instance compose: %w", err)
+				}
+				for name, svc := range doc["services"] {
+					services[name] = svc
+				}
+				for name, network := range doc["networks"] {
+					networks[name] = network
+				}
+			}
+		}
+	}
+	compose, err := yaml.Marshal(map[string]any{"services": services, "networks": networks})
+	if err != nil {
+		return render.Result{}, fmt.Errorf("marshal gateway compose: %w", err)
+	}
+	artifacts = append(artifacts, render.Artifact{Key: "compose.yaml", Content: string(compose)})
+	return render.Result{Renderer: "gateway-renderer", Artifacts: artifacts}, nil
+}
+
+func renderGatewayInstance(_ context.Context, input render.Input) (render.Result, error) {
 	var cfg Config
 	if err := typeregistry.StrictDecode(input.Service.Config, &cfg); err != nil {
 		return render.Result{}, fmt.Errorf("gateway %q: %w", input.Service.Name, err)
@@ -219,7 +266,7 @@ func (renderer) Render(_ context.Context, input render.Input) (render.Result, er
 		env = append(env, extra...)
 	}
 
-	composeYAML := renderGatewayCompose(input.Service.Name, inst.Interfaces, input.Service.Volumes, input.Service.Ports)
+	composeYAML := renderGatewayCompose(input, inst)
 
 	return render.Result{
 		Renderer: "gateway-renderer",
@@ -249,40 +296,76 @@ func ipWithPrefix(ip, cidr string) string {
 // to the exact interfaces from the resolved instance. This replaces the curated
 // services/gateway/compose.yaml when the gateway connects to non-standard roles
 // (e.g. lan-7-p1 instead of lan-p1).
-func renderGatewayCompose(svcName string, ifaces []plan.Interface, extraVolumes []string, ports []string) string {
+func renderGatewayCompose(input render.Input, inst plan.Instance) string {
 	svcNets := map[string]any{}
 	topNets := map[string]any{}
-	for _, iface := range ifaces {
-		key := strings.ToUpper(strings.ReplaceAll(iface.Role, "-", "_"))
+	for _, iface := range inst.Interfaces {
 		svcNets[iface.Role] = map[string]any{
-			"mac_address": "${IFACE_" + key + "_MAC}",
+			"mac_address": iface.MAC,
 		}
 		topNets[iface.Role] = map[string]any{
 			"external": true,
-			"name":     "${IFACE_" + key + "_NETWORK}",
+			"name":     iface.Network,
 		}
 	}
+	instanceName := fmt.Sprintf("%s-%d", input.Service.Name, inst.Index+1)
 	svc := map[string]any{
-		"image":          "${IMAGE}",
-		"container_name": "${DEPLOYMENT_NAME}-${SERVICE_NAME}",
-		"hostname":       "${SERVICE_NAME}",
+		"image":          render.ImageRef(input.Service.Image),
+		"container_name": input.Deployment.Name + "-" + instanceName,
+		"hostname":       instanceName,
 		"privileged":     true,
 		"cap_add":        []string{"NET_ADMIN", "NET_RAW"},
-		"env_file":       []string{"compose.env"},
+		"env_file":       []string{fmt.Sprintf("instances/%d/compose.env", inst.Index+1)},
 		"networks":       svcNets,
 	}
-	if len(extraVolumes) > 0 {
-		svc["volumes"] = extraVolumes
+	if len(input.Service.Volumes) > 0 {
+		svc["volumes"] = input.Service.Volumes
 	}
+	ports := append([]string(nil), input.Service.Ports...)
 	if len(ports) > 0 {
 		svc["ports"] = ports
 	}
+	services := map[string]any{instanceName: svc}
+	// The manifest opts a self-addressed gateway into a health transport
+	// sidecar by marking one interface healthUpstream; which role it names
+	// does not matter here since the workload and its sidecar reach each
+	// other over the shared, Podman-managed health network by service name.
+	if healthPort := input.HealthPorts[inst.Index]; healthPort != 0 && hasHealthUpstream(inst.Interfaces) {
+		healthNetworkName := input.Deployment.Name + "-00-health"
+		topNets["aa-health"] = map[string]any{"external": true, "name": healthNetworkName}
+		svcNets["aa-health"] = map[string]any{}
+		healthServiceName := instanceName + "-health"
+		svc["depends_on"] = []string{healthServiceName}
+		services[healthServiceName] = map[string]any{
+			"image":          render.ImageRef(input.Service.Image),
+			"container_name": input.Deployment.Name + "-" + instanceName + "-health",
+			"entrypoint":     []string{"/usr/local/bin/vcpe-healthd"},
+			// The upstream's own checks run sequentially and can each take up
+			// to its own probe timeout, so the proxy waits longer than any
+			// single check to avoid timing out on a slow-but-valid response.
+			"command":  []string{"--proxy-url", "http://" + instanceName + ":9878/health", "--timeout", "10s"},
+			"networks": map[string]any{"aa-health": map[string]any{}},
+			"ports":    []string{fmt.Sprintf("127.0.0.1:%d:9878", healthPort)},
+			"restart":  "unless-stopped",
+		}
+	}
 	doc := map[string]any{
-		"services": map[string]any{svcName: svc},
+		"services": services,
 		"networks": topNets,
 	}
 	out, _ := yaml.Marshal(doc)
 	return string(out)
+}
+
+// hasHealthUpstream reports whether the manifest opted this instance into a
+// health transport sidecar by marking one of its interfaces healthUpstream.
+func hasHealthUpstream(interfaces []plan.Interface) bool {
+	for _, iface := range interfaces {
+		if iface.HealthUpstream {
+			return true
+		}
+	}
+	return false
 }
 
 // Register wires this service type into the global registry. It is idempotent.
