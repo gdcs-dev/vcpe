@@ -6,15 +6,13 @@ package gateway
 import (
 	"context"
 	"fmt"
-	"net"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
 
-	"github.com/gdcs-dev/vcpe/controlplane/internal/manifest"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/plan"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/render"
+	"github.com/gdcs-dev/vcpe/controlplane/internal/render/servicetemplate"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/typeregistry"
 	"gopkg.in/yaml.v3"
 )
@@ -52,7 +50,9 @@ type ErouterConfig struct {
 	VLAN      int    `yaml:"vlan,omitempty"`
 }
 
-type serviceType struct{}
+type serviceType struct{ typeregistry.BaseServiceType }
+
+var _ typeregistry.ServiceType = serviceType{}
 
 func (serviceType) Type() string { return TypeName }
 
@@ -61,7 +61,14 @@ func (serviceType) ValidateConfig(node yaml.Node) error {
 	return typeregistry.StrictDecode(node, &cfg)
 }
 
-func (serviceType) Renderer() render.Renderer { return renderer{} }
+func (serviceType) Renderer() render.Renderer {
+	return servicetemplate.New(servicetemplate.Hooks[Config]{
+		Name:           "gateway-renderer",
+		Mode:           servicetemplate.PerInstance,
+		DecodeConfig:   decodeConfig,
+		RenderInstance: renderGatewayInstance,
+	})
+}
 
 func (serviceType) ExpectedRoles() []typeregistry.RoleRequirement {
 	return []typeregistry.RoleRequirement{
@@ -71,75 +78,21 @@ func (serviceType) ExpectedRoles() []typeregistry.RoleRequirement {
 	}
 }
 
-func (serviceType) Health() typeregistry.HealthBehavior {
-	return typeregistry.HealthBehavior{Mode: typeregistry.HealthModeCurated, ContainerPort: 9878}
-}
-
-func (serviceType) DefaultImagePolicy() string { return "build" }
-
-func (serviceType) ValidateInterfaces(_ []manifest.Interface) error { return nil }
-
 func (serviceType) Description() string {
 	return "Cable-modem / CPE simulator with LAN bridging"
 }
 
 func (serviceType) DefaultImage() string { return "ghcr.io/gdcs-dev/gateway" }
 
-type renderer struct{}
-
-func (renderer) Name() string { return "gateway-renderer" }
-
-func (renderer) Render(ctx context.Context, input render.Input) (render.Result, error) {
-	if len(input.Service.Instances) == 0 {
-		return render.Result{}, fmt.Errorf("gateway %q has no instances", input.Service.Name)
+func decodeConfig(node yaml.Node) (Config, error) {
+	var cfg Config
+	if err := typeregistry.StrictDecode(node, &cfg); err != nil {
+		return Config{}, err
 	}
-	artifacts := []render.Artifact{}
-	services := map[string]any{}
-	networks := map[string]any{}
-	for _, inst := range input.Service.Instances {
-		one := input
-		one.Service.Instances = []plan.Instance{inst}
-		result, err := renderGatewayInstance(ctx, one)
-		if err != nil {
-			return render.Result{}, err
-		}
-		for _, artifact := range result.Artifacts {
-			switch artifact.Key {
-			case "compose.env":
-				if inst.Index == 0 {
-					artifacts = append(artifacts, artifact)
-				}
-				artifacts = append(artifacts, render.Artifact{Key: fmt.Sprintf("instances/%d/compose.env", inst.Index+1), Content: artifact.Content})
-			case "compose.yaml":
-				var doc map[string]map[string]any
-				if err := yaml.Unmarshal([]byte(artifact.Content), &doc); err != nil {
-					return render.Result{}, fmt.Errorf("parse gateway instance compose: %w", err)
-				}
-				for name, svc := range doc["services"] {
-					services[name] = svc
-				}
-				for name, network := range doc["networks"] {
-					networks[name] = network
-				}
-			}
-		}
-	}
-	compose, err := yaml.Marshal(map[string]any{"services": services, "networks": networks})
-	if err != nil {
-		return render.Result{}, fmt.Errorf("marshal gateway compose: %w", err)
-	}
-	artifacts = append(artifacts, render.Artifact{Key: "compose.yaml", Content: string(compose)})
-	return render.Result{Renderer: "gateway-renderer", Artifacts: artifacts}, nil
+	return cfg, nil
 }
 
-func renderGatewayInstance(_ context.Context, input render.Input) (render.Result, error) {
-	var cfg Config
-	if err := typeregistry.StrictDecode(input.Service.Config, &cfg); err != nil {
-		return render.Result{}, fmt.Errorf("gateway %q: %w", input.Service.Name, err)
-	}
-	if len(input.Service.Instances) == 0 {
-		return render.Result{}, fmt.Errorf("gateway %q has no instances", input.Service.Name)
-	}
+func renderGatewayInstance(_ context.Context, input render.Input, cfg Config) (render.Result, error) {
 
 	env := render.IfaceEnv(input.Deployment, input.Service, input.Service.Instances[0])
 	if cfg.LAN.IPv4 != "" {
@@ -212,7 +165,7 @@ func renderGatewayInstance(_ context.Context, input render.Input) (render.Result
 	if n := input.Deployment.Network(wanRole); n != nil && n.IPv4 != nil {
 		wanCIDR = n.IPv4.CIDR
 	}
-	env = append(env, "EROUTER0_IPV4="+ipWithPrefix(wanIface.IPv4, wanCIDR))
+	env = append(env, "EROUTER0_IPV4="+render.IPWithPrefix(wanIface.IPv4, wanCIDR))
 	env = append(env, "EROUTER0_IPV6="+wanIface.IPv6)
 	env = append(env, "EROUTER0_IPV4_GATEWAY="+wanIface.Gateway4)
 	env = append(env, "EROUTER0_IPV6_GATEWAY="+wanIface.Gateway6)
@@ -257,14 +210,7 @@ func renderGatewayInstance(_ context.Context, input render.Input) (render.Result
 	}
 	env = append(env, "BNG_DNS_SERVER="+bngDNS)
 
-	if len(cfg.Env) > 0 {
-		extra := make([]string, 0, len(cfg.Env))
-		for k, v := range cfg.Env {
-			extra = append(extra, k+"="+v)
-		}
-		sort.Strings(extra)
-		env = append(env, extra...)
-	}
+	env = append(env, render.SortedEnv(cfg.Env)...)
 
 	composeYAML := renderGatewayCompose(input, inst)
 
@@ -275,21 +221,6 @@ func renderGatewayInstance(_ context.Context, input render.Input) (render.Result
 			{Key: "compose.env", Content: strings.Join(env, "\n") + "\n"},
 		},
 	}, nil
-}
-
-// ipWithPrefix returns ip with the prefix length extracted from cidr
-// (e.g. ip="10.1.2.3", cidr="10.1.2.0/24" → "10.1.2.3/24").
-// Returns ip unchanged if either argument is empty or cidr is malformed.
-func ipWithPrefix(ip, cidr string) string {
-	if ip == "" || cidr == "" {
-		return ip
-	}
-	_, ipNet, err := net.ParseCIDR(cidr)
-	if err != nil {
-		return ip
-	}
-	ones, _ := ipNet.Mask.Size()
-	return fmt.Sprintf("%s/%d", ip, ones)
 }
 
 // renderGatewayCompose generates a compose.yaml for the gateway service wired

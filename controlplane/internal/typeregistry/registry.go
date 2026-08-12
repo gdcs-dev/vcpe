@@ -1,7 +1,9 @@
 // Package typeregistry is the extension point for service types. Each service
 // type registers an implementation that knows how to validate its typed config,
-// render its artifacts, and declare the network roles it expects. New workloads
-// are added by registering here rather than by editing the planner or renderer.
+// render its artifacts, and declare the network roles it expects. BaseServiceType
+// supplies the common curated defaults; types override only metadata or
+// validation that differs. New workloads are added by registering here rather
+// than by editing the planner or renderer.
 package typeregistry
 
 import (
@@ -36,6 +38,21 @@ type HealthBehavior struct {
 	Mode          HealthMode
 	ContainerPort int
 }
+
+// BaseServiceType supplies the shared defaults for curated built-in services.
+// Concrete service types embed it and override only behavior that differs.
+type BaseServiceType struct{}
+
+// Health reports the standard curated health endpoint.
+func (BaseServiceType) Health() HealthBehavior {
+	return HealthBehavior{Mode: HealthModeCurated, ContainerPort: 9878}
+}
+
+// DefaultImagePolicy returns the standard build-if-missing policy alias.
+func (BaseServiceType) DefaultImagePolicy() string { return "build" }
+
+// ValidateInterfaces accepts all interfaces unless a concrete type overrides it.
+func (BaseServiceType) ValidateInterfaces(_ []manifest.Interface) error { return nil }
 
 // Valid reports whether the health metadata can be used by the renderer.
 func (h HealthBehavior) Valid() bool {

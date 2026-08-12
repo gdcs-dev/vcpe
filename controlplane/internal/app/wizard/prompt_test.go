@@ -4,7 +4,28 @@ import (
 	"bytes"
 	"strings"
 	"testing"
+
+	"github.com/gdcs-dev/vcpe/controlplane/internal/typeregistry"
+	"github.com/gdcs-dev/vcpe/controlplane/internal/types"
 )
+
+func TestDefaultRepoUsesRegistry(t *testing.T) {
+	types.Register()
+	for _, typeName := range typeregistry.Registered() {
+		t.Run(typeName, func(t *testing.T) {
+			registered, ok := typeregistry.Lookup(typeName)
+			if !ok {
+				t.Fatalf("%s is not registered", typeName)
+			}
+			if got, want := defaultRepo(typeName), registered.DefaultImage(); got != want {
+				t.Errorf("defaultRepo(%q) = %q, want registry default %q", typeName, got, want)
+			}
+		})
+	}
+	if got := defaultRepo("does-not-exist"); got != "" {
+		t.Errorf("defaultRepo(unknown) = %q, want empty", got)
+	}
+}
 
 func TestPromptReturnsDefault(t *testing.T) {
 	r := strings.NewReader("\n")

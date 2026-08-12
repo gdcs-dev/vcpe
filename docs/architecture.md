@@ -32,9 +32,32 @@ Service behavior is a compile-time registry rather than a per-deployment
 catalog. Each `services[].type` maps to a registered `ServiceType` that provides
 a config validator, a renderer, the expected host-network roles, and a default
 image policy. The registry holds no deployment-, customer-, or instance-derived
-data; "supported type" means "registered". The v1 type set is `bng`, `gateway`,
-`webpa`, and `generic-container`; new types register additively without schema
-changes.
+data; "supported type" means "registered". Curated types embed
+`typeregistry.BaseServiceType` for the common health, image-policy, and
+interface-validation defaults, overriding only behavior that differs. New
+workloads register additively without planner or renderer changes.
+
+## Renderer extension and artifacts
+
+New service renderers provide typed hooks to `render/servicetemplate`. The
+shared lifecycle decodes config, traverses resolved replicas, validates artifact
+keys, and aggregates Compose fragments. Service packages retain their own
+Compose fields, network attachments, health topology, commands, volumes, and
+generated configuration; there is no universal Compose policy.
+
+Per-instance renderers use root `compose.yaml` and `compose.env` artifacts plus
+one-based `instances/<n>/` artifacts, with first-instance auxiliary files
+mirrored at the root. Interpolated renderers validate their service-owned
+artifact layout without applying per-instance placement. These are internal
+generated-artifact conventions, not new external behavior.
+
+## Image backends
+
+`internal/image` owns lifecycle policy and its build, pull, push, and tag
+request types. Docker and Podman adapters implement that backend contract
+directly, while each adapter retains its runtime-specific command arguments and
+diagnostics. The application selects an adapter; it does not translate image
+requests through a forwarding wrapper.
 
 ## IPAM as the sole IP authority
 

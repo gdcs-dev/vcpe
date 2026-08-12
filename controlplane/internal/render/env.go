@@ -2,9 +2,11 @@ package render
 
 import (
 	"fmt"
+	"net"
 	"sort"
 	"strings"
 
+	"github.com/gdcs-dev/vcpe/controlplane/internal/imageref"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/manifest"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/plan"
 )
@@ -12,11 +14,49 @@ import (
 // ImageRef returns the fully qualified image reference, defaulting the tag to
 // "latest" when unset.
 func ImageRef(img manifest.Image) string {
-	tag := img.Tag
-	if strings.TrimSpace(tag) == "" {
-		tag = "latest"
+	return imageref.Format(img)
+}
+
+// IPWithPrefix appends the prefix length from cidr to ip. It returns ip
+// unchanged when either value is empty or cidr is invalid.
+func IPWithPrefix(ip, cidr string) string {
+	if ip == "" || cidr == "" {
+		return ip
 	}
-	return img.Repository + ":" + tag
+	_, ipNet, err := net.ParseCIDR(cidr)
+	if err != nil {
+		return ip
+	}
+	ones, _ := ipNet.Mask.Size()
+	return fmt.Sprintf("%s/%d", ip, ones)
+}
+
+// SortedEnv returns environment entries in lexicographic key order.
+func SortedEnv(values map[string]string) []string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	entries := make([]string, 0, len(keys))
+	for _, key := range keys {
+		entries = append(entries, key+"="+values[key])
+	}
+	return entries
+}
+
+// InstanceEnvArtifacts returns the conventional root and per-instance
+// compose.env artifacts for a service render input.
+func InstanceEnvArtifacts(input Input, entries func(plan.Instance) []string) []Artifact {
+	artifacts := make([]Artifact, 0, len(input.Service.Instances)+1)
+	for position, instance := range input.Service.Instances {
+		content := strings.Join(entries(instance), "\n") + "\n"
+		if position == 0 {
+			artifacts = append(artifacts, Artifact{Key: "compose.env", Content: content})
+		}
+		artifacts = append(artifacts, Artifact{Key: fmt.Sprintf("instances/%d/compose.env", instance.Index+1), Content: content})
+	}
+	return artifacts
 }
 
 // envKey normalizes a network role into an environment-variable-safe token:

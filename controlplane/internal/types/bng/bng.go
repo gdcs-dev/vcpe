@@ -12,9 +12,9 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/gdcs-dev/vcpe/controlplane/internal/manifest"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/plan"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/render"
+	"github.com/gdcs-dev/vcpe/controlplane/internal/render/servicetemplate"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/typeregistry"
 	"gopkg.in/yaml.v3"
 )
@@ -63,7 +63,9 @@ type RADVD struct {
 	RDNSS          []string `yaml:"rdnss,omitempty"`
 }
 
-type serviceType struct{}
+type serviceType struct{ typeregistry.BaseServiceType }
+
+var _ typeregistry.ServiceType = serviceType{}
 
 func (serviceType) Type() string { return TypeName }
 
@@ -80,7 +82,14 @@ func (serviceType) ValidateConfig(node yaml.Node) error {
 	return nil
 }
 
-func (serviceType) Renderer() render.Renderer { return renderer{} }
+func (serviceType) Renderer() render.Renderer {
+	return servicetemplate.New(servicetemplate.Hooks[Config]{
+		Name:           "bng-renderer",
+		Mode:           servicetemplate.PerInstance,
+		DecodeConfig:   decodeConfig,
+		RenderInstance: renderBNGInstance,
+	})
+}
 
 func (serviceType) ExpectedRoles() []typeregistry.RoleRequirement {
 	return []typeregistry.RoleRequirement{
@@ -90,80 +99,21 @@ func (serviceType) ExpectedRoles() []typeregistry.RoleRequirement {
 	}
 }
 
-func (serviceType) Health() typeregistry.HealthBehavior {
-	return typeregistry.HealthBehavior{Mode: typeregistry.HealthModeCurated, ContainerPort: 9878}
-}
-
-func (serviceType) DefaultImagePolicy() string { return "build" }
-
-func (serviceType) ValidateInterfaces(_ []manifest.Interface) error { return nil }
-
 func (serviceType) Description() string {
 	return "Broadband Network Gateway — DHCP4/RADVD/DNS on WAN and CM segments"
 }
 
 func (serviceType) DefaultImage() string { return "ghcr.io/gdcs-dev/bng" }
 
-type renderer struct{}
-
-func (renderer) Name() string { return "bng-renderer" }
-
-func (renderer) Render(ctx context.Context, input render.Input) (render.Result, error) {
-	if len(input.Service.Instances) == 0 {
-		return render.Result{}, fmt.Errorf("bng %q has no instances", input.Service.Name)
+func decodeConfig(node yaml.Node) (Config, error) {
+	var cfg Config
+	if err := typeregistry.StrictDecode(node, &cfg); err != nil {
+		return Config{}, err
 	}
-	artifacts := []render.Artifact{}
-	services := map[string]any{}
-	networks := map[string]any{}
-	for _, inst := range input.Service.Instances {
-		one := input
-		one.Service.Instances = []plan.Instance{inst}
-		result, err := renderBNGInstance(ctx, one)
-		if err != nil {
-			return render.Result{}, err
-		}
-		for _, artifact := range result.Artifacts {
-			switch artifact.Key {
-			case "compose.yaml":
-				var doc map[string]map[string]any
-				if err := yaml.Unmarshal([]byte(artifact.Content), &doc); err != nil {
-					return render.Result{}, fmt.Errorf("parse bng instance compose: %w", err)
-				}
-				for name, svc := range doc["services"] {
-					services[name] = svc
-				}
-				for name, network := range doc["networks"] {
-					networks[name] = network
-				}
-			case "compose.env":
-				if inst.Index == 0 {
-					artifacts = append(artifacts, artifact)
-				}
-				artifacts = append(artifacts, render.Artifact{Key: fmt.Sprintf("instances/%d/compose.env", inst.Index+1), Content: artifact.Content})
-			default:
-				if inst.Index == 0 {
-					artifacts = append(artifacts, artifact)
-				}
-				artifacts = append(artifacts, render.Artifact{Key: fmt.Sprintf("instances/%d/%s", inst.Index+1, artifact.Key), Content: artifact.Content})
-			}
-		}
-	}
-	compose, err := yaml.Marshal(map[string]any{"services": services, "networks": networks})
-	if err != nil {
-		return render.Result{}, fmt.Errorf("marshal bng compose: %w", err)
-	}
-	artifacts = append(artifacts, render.Artifact{Key: "compose.yaml", Content: string(compose)})
-	return render.Result{Renderer: "bng-renderer", Artifacts: artifacts}, nil
+	return cfg, nil
 }
 
-func renderBNGInstance(_ context.Context, input render.Input) (render.Result, error) {
-	var cfg Config
-	if err := typeregistry.StrictDecode(input.Service.Config, &cfg); err != nil {
-		return render.Result{}, fmt.Errorf("bng %q: %w", input.Service.Name, err)
-	}
-	if len(input.Service.Instances) == 0 {
-		return render.Result{}, fmt.Errorf("bng %q has no instances", input.Service.Name)
-	}
+func renderBNGInstance(_ context.Context, input render.Input, cfg Config) (render.Result, error) {
 	inst := input.Service.Instances[0]
 	devByRole := map[string]string{}
 	ipByRole := map[string]string{}
@@ -211,14 +161,7 @@ func renderBNGInstance(_ context.Context, input render.Input) (render.Result, er
 	}
 	composeYAML := renderBNGCompose(input, inst, ipamNone)
 
-	if len(cfg.Env) > 0 {
-		extra := make([]string, 0, len(cfg.Env))
-		for k, v := range cfg.Env {
-			extra = append(extra, k+"="+v)
-		}
-		sort.Strings(extra)
-		env = append(env, extra...)
-	}
+	env = append(env, render.SortedEnv(cfg.Env)...)
 
 	return render.Result{
 		Renderer: "bng-renderer",

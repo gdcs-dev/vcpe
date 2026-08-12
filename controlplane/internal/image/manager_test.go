@@ -13,6 +13,26 @@ type fakeBackend struct {
 	pulls       []PullRequest
 }
 
+func TestImageReferenceCurrentBehavior(t *testing.T) {
+	tests := []struct {
+		name  string
+		image manifest.Image
+		want  string
+	}{
+		{name: "empty repository", want: ""},
+		{name: "omitted tag", image: manifest.Image{Repository: "example/workload"}, want: "example/workload:latest"},
+		{name: "whitespace-only tag", image: manifest.Image{Repository: "example/workload", Tag: "  "}, want: "example/workload:latest"},
+		{name: "explicit tag", image: manifest.Image{Repository: "example/workload", Tag: "v2"}, want: "example/workload:v2"},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			if got := ImageReference(testCase.image); got != testCase.want {
+				t.Errorf("ImageReference(%+v) = %q, want %q", testCase.image, got, testCase.want)
+			}
+		})
+	}
+}
+
 func (f *fakeBackend) ImageExists(_ context.Context, reference string) (bool, error) {
 	return f.existsByRef[reference], nil
 }

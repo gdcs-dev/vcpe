@@ -1,11 +1,132 @@
 package typeregistry_test
 
 import (
+	"reflect"
 	"testing"
 
+	"github.com/gdcs-dev/vcpe/controlplane/internal/manifest"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/typeregistry"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/types"
 )
+
+func TestBaseServiceTypeDefaults(t *testing.T) {
+	var base typeregistry.BaseServiceType
+	if got, want := base.Health(), (typeregistry.HealthBehavior{Mode: typeregistry.HealthModeCurated, ContainerPort: 9878}); got != want {
+		t.Errorf("Health() = %+v, want %+v", got, want)
+	}
+	if got := base.DefaultImagePolicy(); got != "build" {
+		t.Errorf("DefaultImagePolicy() = %q, want build", got)
+	}
+	if err := base.ValidateInterfaces([]manifest.Interface{{Role: "mgmt"}}); err != nil {
+		t.Errorf("ValidateInterfaces() error = %v, want nil", err)
+	}
+}
+
+func TestBuiltInMetadata(t *testing.T) {
+	types.Register()
+	tests := []struct {
+		name         string
+		health       typeregistry.HealthBehavior
+		imagePolicy  string
+		description  string
+		defaultImage string
+		roles        []typeregistry.RoleRequirement
+		renderer     string
+	}{
+		{
+			name:         "bng",
+			health:       typeregistry.HealthBehavior{Mode: typeregistry.HealthModeCurated, ContainerPort: 9878},
+			imagePolicy:  "build",
+			description:  "Broadband Network Gateway — DHCP4/RADVD/DNS on WAN and CM segments",
+			defaultImage: "ghcr.io/gdcs-dev/bng",
+			roles:        []typeregistry.RoleRequirement{{Role: "wan"}, {Role: "cm"}, {Role: "mgmt"}},
+			renderer:     "bng-renderer",
+		},
+		{
+			name:         "event-sink",
+			health:       typeregistry.HealthBehavior{Mode: typeregistry.HealthModeCurated, ContainerPort: 9878},
+			imagePolicy:  "build",
+			description:  "Generic XMiDT webhook consumer and event logger",
+			defaultImage: "ghcr.io/gdcs-dev/event-sink",
+			roles:        []typeregistry.RoleRequirement{{Role: "mgmt", Required: true}},
+			renderer:     "event-sink-renderer",
+		},
+		{
+			name:         "gateway",
+			health:       typeregistry.HealthBehavior{Mode: typeregistry.HealthModeCurated, ContainerPort: 9878},
+			imagePolicy:  "build",
+			description:  "Cable-modem / CPE simulator with LAN bridging",
+			defaultImage: "ghcr.io/gdcs-dev/gateway",
+			roles:        []typeregistry.RoleRequirement{{Role: "wan"}, {Role: "cm"}, {Role: "lan-p1"}},
+			renderer:     "gateway-renderer",
+		},
+		{
+			name:        "generic-container",
+			health:      typeregistry.HealthBehavior{Mode: typeregistry.HealthModeOptional, ContainerPort: 9878},
+			imagePolicy: "build",
+			description: "Catch-all generic container workload",
+			renderer:    "generic-container-renderer",
+		},
+		{
+			name:        "oktopus",
+			health:      typeregistry.HealthBehavior{Mode: typeregistry.HealthModeCurated, ContainerPort: 9878},
+			imagePolicy: "build",
+			description: "Oktopus USP controller — cloud-native device management platform",
+			roles:       []typeregistry.RoleRequirement{{Role: "mgmt", Required: true}},
+			renderer:    "oktopus-renderer",
+		},
+		{
+			name:         "webpa",
+			health:       typeregistry.HealthBehavior{Mode: typeregistry.HealthModeCurated, ContainerPort: 9878},
+			imagePolicy:  "build",
+			description:  "USP/WebPA device-management server",
+			defaultImage: "ghcr.io/gdcs-dev/webpa",
+			roles:        []typeregistry.RoleRequirement{{Role: "mgmt"}},
+			renderer:     "webpa-renderer",
+		},
+		{
+			name:         "xb10",
+			health:       typeregistry.HealthBehavior{Mode: typeregistry.HealthModeCurated, ContainerPort: 9878},
+			imagePolicy:  "build",
+			description:  "XB10 CPE gateway simulator",
+			defaultImage: "ghcr.io/gdcs-dev/xb10",
+			roles:        []typeregistry.RoleRequirement{{Role: "wan"}, {Role: "cm"}},
+			renderer:     "xb10-renderer",
+		},
+	}
+	if registered := typeregistry.Registered(); len(registered) != len(tests) {
+		t.Fatalf("registered type count = %d, want %d: %v", len(registered), len(tests), registered)
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			registered, ok := typeregistry.Lookup(testCase.name)
+			if !ok {
+				t.Fatalf("%s is not registered", testCase.name)
+			}
+			if got := registered.Health(); got != testCase.health {
+				t.Errorf("Health() = %+v, want %+v", got, testCase.health)
+			}
+			if got := registered.DefaultImagePolicy(); got != testCase.imagePolicy {
+				t.Errorf("DefaultImagePolicy() = %q, want %q", got, testCase.imagePolicy)
+			}
+			if got := registered.Description(); got != testCase.description {
+				t.Errorf("Description() = %q, want %q", got, testCase.description)
+			}
+			if got := registered.DefaultImage(); got != testCase.defaultImage {
+				t.Errorf("DefaultImage() = %q, want %q", got, testCase.defaultImage)
+			}
+			if got := registered.ExpectedRoles(); !reflect.DeepEqual(got, testCase.roles) {
+				t.Errorf("ExpectedRoles() = %#v, want %#v", got, testCase.roles)
+			}
+			if got := registered.Renderer().Name(); got != testCase.renderer {
+				t.Errorf("Renderer().Name() = %q, want %q", got, testCase.renderer)
+			}
+			if err := registered.ValidateInterfaces([]manifest.Interface{{Role: "mgmt"}}); err != nil {
+				t.Errorf("ValidateInterfaces() error = %v, want nil", err)
+			}
+		})
+	}
+}
 
 // TestRegistryCompleteness asserts that every registered service type supplies
 // the full behavior contract: a validator, a renderer, and an expected-roles
