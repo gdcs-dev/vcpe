@@ -59,6 +59,26 @@ func TestRegister_ContextCancelled(t *testing.T) {
 	}
 }
 
+// TestRegister_NonSuccessResponseDoesNotPanic covers the actual production
+// crash: chrysom's BasicClient logs a non-2xx Argus response via the
+// getLogger callback we hand to ancla.NewService with no nil check on its
+// side, so passing nil there panics instead of returning an error.
+func TestRegister_NonSuccessResponseDoesNotPanic(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+	}))
+	defer srv.Close()
+
+	cfg := testConfig(srv.URL)
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	defer cancel()
+
+	err := Register(ctx, cfg)
+	if err == nil {
+		t.Fatal("expected an error from a non-2xx Argus response")
+	}
+}
+
 func TestNewAnclaService_PrefixesBasicIfNeeded(t *testing.T) {
 	// WithPrefix
 	cfg := testConfig("http://localhost:6600")

@@ -6,6 +6,7 @@ require (
 	github.com/xmidt-org/ancla v0.3.12
 	github.com/xmidt-org/argus v0.9.10
 	github.com/xmidt-org/wrp-go/v3 v3.1.6
+	go.uber.org/zap v1.26.0
 )
 
 require (
@@ -82,7 +83,6 @@ require (
 	go.uber.org/dig v1.17.0 // indirect
 	go.uber.org/fx v1.20.1 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
-	go.uber.org/zap v1.26.0 // indirect
 	golang.org/x/crypto v0.11.0 // indirect
 	golang.org/x/net v0.13.0 // indirect
 	golang.org/x/sys v0.11.0 // indirect

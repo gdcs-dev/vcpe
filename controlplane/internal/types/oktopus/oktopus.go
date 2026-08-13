@@ -110,6 +110,16 @@ func generateCompose(input render.Input, inst plan.Instance) string {
 		svc["ports"] = ports
 	}
 	svcNets, _ := svc["networks"].(map[string]any)
+	// Register the bare "oktopus" hostname as an aardvark-dns network alias
+	// on mgmt so devices attached directly to the mgmt network (not just BNG
+	// DHCP clients relaying through BNG's dnsmasq CNAME) can resolve it. Only
+	// the first instance claims the alias, matching the firstInstanceAlias
+	// convention used elsewhere (bng.go) to avoid ambiguity across replicas.
+	if inst.Index == 0 {
+		if mgmt, ok := svcNets["mgmt"].(map[string]any); ok {
+			mgmt["aliases"] = []string{"oktopus"}
+		}
+	}
 	servicetemplate.AttachHealthPublication(input, inst, input.HealthPorts[inst.Index], networks, svcNets, svc)
 	instanceName := fmt.Sprintf("%s-%d", input.Service.Name, inst.Index+1)
 	out, _ := yaml.Marshal(map[string]any{"services": map[string]any{instanceName: svc}, "networks": networks})

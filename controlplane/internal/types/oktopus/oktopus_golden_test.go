@@ -80,4 +80,37 @@ func TestOktopusStaticAddressingPinsIPv4(t *testing.T) {
 	if !strings.Contains(compose, "ipv4_address: 10.10.10.7") {
 		t.Fatalf("compose.yaml missing pinned ipv4_address:\n%s", compose)
 	}
+	if !strings.Contains(compose, "aliases") || !strings.Contains(compose, "- oktopus") {
+		t.Fatalf("compose.yaml should register a bare \"oktopus\" mgmt network alias, got:\n%s", compose)
+	}
+}
+
+// TestOktopusComposeAliasOnlyFirstInstance verifies the bare "oktopus" mgmt
+// alias is registered once, on the first instance/replica only.
+func TestOktopusComposeAliasOnlyFirstInstance(t *testing.T) {
+	oktopus.Register()
+	st, _ := typeregistry.Lookup("oktopus")
+
+	dep := plan.Deployment{Name: "edge", Networks: []plan.Network{{Role: "mgmt", Bridge: "edge-mgmt"}}}
+	svc := plan.Service{
+		Name: "oktopus", Type: "oktopus", Image: manifest.Image{Repository: "ghcr.io/gdcs-dev/oktopus", Tag: "dev"},
+		Instances: []plan.Instance{
+			{Index: 0, Interfaces: []plan.Interface{{Role: "mgmt", Network: "edge-mgmt", MAC: "02:00:00:00:00:01", IPv4: "10.0.0.2"}}},
+			{Index: 1, Interfaces: []plan.Interface{{Role: "mgmt", Network: "edge-mgmt", MAC: "02:00:00:00:00:02", IPv4: "10.0.0.3"}}},
+		},
+	}
+
+	result, err := st.Renderer().Render(context.Background(), render.Input{Deployment: dep, Service: svc, HealthPorts: map[int]int{0: 47000, 1: 47001}})
+	if err != nil {
+		t.Fatalf("render oktopus replicas: %v", err)
+	}
+	var compose string
+	for _, a := range result.Artifacts {
+		if a.Key == "compose.yaml" {
+			compose = a.Content
+		}
+	}
+	if strings.Count(compose, "aliases:") != 1 {
+		t.Errorf("expected exactly one mgmt network alias block (first instance only), got:\n%s", compose)
+	}
 }

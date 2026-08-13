@@ -67,6 +67,11 @@ func TestWebPAGoldenComposeEnv(t *testing.T) {
 	if !strings.Contains(composeYAML, "name: edge-mgmt") {
 		t.Errorf("compose.yaml should contain the resolved mgmt network, got:\n%s", composeYAML)
 	}
+	for _, host := range []string{"webpa", "consul", "talaria", "scytale", "tr1d1um", "argus", "caduceus", "petasos", "themis"} {
+		if !strings.Contains(composeYAML, "- "+host) {
+			t.Errorf("compose.yaml should register a %q mgmt network alias, got:\n%s", host, composeYAML)
+		}
+	}
 }
 
 // TestWebPADefaultAddressingIsDHCP verifies an interface with no explicit
@@ -146,5 +151,10 @@ func TestWebPAComposeReplicasHaveDistinctHealthPorts(t *testing.T) {
 		if !strings.Contains(compose, want) {
 			t.Errorf("compose.yaml missing %q:\n%s", want, compose)
 		}
+	}
+	// Only the first instance should claim the bare "webpa" mgmt alias, to
+	// avoid an ambiguous alias across replicas.
+	if strings.Count(compose, "aliases:") != 1 {
+		t.Errorf("expected exactly one mgmt network alias block (first instance only), got:\n%s", compose)
 	}
 }

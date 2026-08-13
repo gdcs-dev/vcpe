@@ -92,11 +92,27 @@ func renderWebPACompose(input render.Input, inst plan.Instance) string {
 		svc["ports"] = ports
 	}
 	svcNets, _ := svc["networks"].(map[string]any)
+	// Register the virtual hostnames as aardvark-dns network aliases on mgmt
+	// so devices attached directly to the mgmt network (not just BNG DHCP
+	// clients relaying through BNG's dnsmasq CNAME) can resolve them. Only
+	// the first instance claims the aliases, matching the firstInstanceAlias
+	// convention used elsewhere (bng.go) to avoid ambiguity across replicas.
+	if inst.Index == 0 {
+		if mgmt, ok := svcNets["mgmt"].(map[string]any); ok {
+			mgmt["aliases"] = append([]string(nil), virtualHosts...)
+		}
+	}
 	servicetemplate.AttachHealthPublication(input, inst, input.HealthPorts[inst.Index], topNets, svcNets, svc)
 	instanceName := fmt.Sprintf("%s-%d", input.Service.Name, inst.Index+1)
 	doc := map[string]any{"services": map[string]any{instanceName: svc}, "networks": topNets}
 	out, _ := yaml.Marshal(doc)
 	return string(out)
+}
+
+// virtualHosts lists the virtual service hostnames that all resolve to the
+// WebPA server. Must be kept in sync with bng.go's webpaVirtualHosts.
+var virtualHosts = []string{
+	"webpa", "consul", "talaria", "scytale", "tr1d1um", "argus", "caduceus", "petasos", "themis",
 }
 
 // Register wires this service type into the global registry. It is idempotent.

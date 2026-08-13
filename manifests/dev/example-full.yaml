@@ -146,6 +146,12 @@ spec:
         containerfile: services/event-sink/Containerfile
       interfaces:
         - { role: mgmt }
+      config:
+        env:
+          # Must match webpa's baked-in dev Argus credentials
+          # (services/webpa/assets/argus.yaml authx.inbound.basic).
+          ARGUS_BASIC_AUTH: "dXNlcjpwYXNz"
+          WEBHOOK_SECRET: "vcpe-dev-webhook-secret"
       dependsOn:
         - bng
     - name: oktopus

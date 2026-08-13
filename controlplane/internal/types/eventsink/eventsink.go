@@ -90,6 +90,18 @@ func renderInstance(_ context.Context, input render.Input, cfg Config) (render.R
 		svc["ports"] = ports
 	}
 	svcNets, _ := svc["networks"].(map[string]any)
+	// Register the bare "event-sink" hostname as an aardvark-dns network
+	// alias on mgmt so devices attached directly to the mgmt network (not
+	// just BNG DHCP clients relaying through BNG's dnsmasq CNAME) — including
+	// Caduceus delivering webhook callbacks to WEBHOOK_URL — can resolve it.
+	// Only the first instance claims the alias, matching the
+	// firstInstanceAlias convention used elsewhere (bng.go) to avoid
+	// ambiguity across replicas.
+	if instance.Index == 0 {
+		if mgmt, ok := svcNets["mgmt"].(map[string]any); ok {
+			mgmt["aliases"] = []string{"event-sink"}
+		}
+	}
 	servicetemplate.AttachHealthPublication(input, instance, input.HealthPorts[instance.Index], networks, svcNets, svc)
 	services := map[string]any{instanceName: svc}
 	compose, err := yaml.Marshal(map[string]any{"services": services, "networks": networks})

@@ -14,7 +14,22 @@ import (
 
 	"github.com/xmidt-org/ancla"
 	"github.com/xmidt-org/argus/chrysom"
+	"go.uber.org/zap"
 )
+
+// argusLogger is handed to ancla/chrysom as the required getLogger callback.
+// chrysom.BasicClient stores this with no nil check and calls it
+// unconditionally whenever Argus responds with a non-2xx status, so passing
+// nil (as ancla.NewService(cfg, nil) would) panics on the first non-success
+// response instead of just logging it.
+var argusLogger = newArgusLogger()
+
+func newArgusLogger() *zap.Logger {
+	if logger, err := zap.NewProduction(); err == nil {
+		return logger
+	}
+	return zap.NewNop()
+}
 
 const (
 	hookDuration       = 12 * time.Hour
@@ -50,7 +65,7 @@ func newAnclaService(cfg Config) (ancla.Service, error) {
 			},
 		},
 	}
-	return ancla.NewService(anclaConfig, nil)
+	return ancla.NewService(anclaConfig, func(context.Context) *zap.Logger { return argusLogger })
 }
 
 func buildHook(cfg Config) ancla.InternalWebhook {

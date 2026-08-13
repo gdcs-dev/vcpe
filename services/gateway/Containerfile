@@ -7,7 +7,7 @@ RUN echo "deb [trusted=yes] https://gdcs-dev.github.io/debian stable main" | tee
 
 RUN apt-get update && \
    DEBIAN_FRONTEND=noninteractive apt-get -y install \
-   rbus parodus rbus-elements telemetry utopia webcfg parodus2rbus \
+   rbus parodus rbus-elements telemetry utopia webcfg parodus2rbus apparmor-simulator \
    iptables net-tools dnsutils dnsmasq systemd-sysv iputils-ping syslog-ng jq netplan.io \
    isc-dhcp-client \
    libcjson1 libmsgpackc2 curl liblog4c3t64 libjansson4 libspdlog-dev && \
@@ -19,6 +19,7 @@ COPY --chmod=644 container/output.json /opt/
 RUN systemctl enable parodus
 RUN systemctl enable parodus2rbus
 RUN systemctl enable rbus
+RUN systemctl enable apparmor-simulator
 RUN systemctl enable rbus-elements
 COPY --chmod=644 container/syscfg.service /usr/lib/systemd/system/
 COPY --chmod=755 container/syscfg_init.sh /usr/local/bin/
