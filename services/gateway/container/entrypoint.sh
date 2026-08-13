@@ -5,7 +5,7 @@ rename_interfaces_by_mac() {
     declare -A current_by_mac=()
     declare -A target_by_mac=()
     declare -A temp_by_target=()
-    local name mac role_key device_var device
+    local name mac role_key device_var device stripped
 
     # Build rename table from IFACE_*_MAC + IFACE_*_DEVICE env vars.
     # No legacy aliases (LAN1_MAC, EROUTER0_MAC, WAN0_MAC) are used.
@@ -24,6 +24,14 @@ rename_interfaces_by_mac() {
         name=$(basename "$path")
         [[ "$name" == lo ]] && continue
         mac=$(cat "$path/address")
+        # Kernel tunnel pseudo-devices (gre0, gretap0, erspan0, sit0, ...) are
+        # not real network attachments and report an all-zero address (some
+        # in 6-octet MAC form, some in a shorter 4-octet form); excluding
+        # them keeps this map limited to actual veth/ethernet interfaces so
+        # the unmatched-interface search below can't grab one of them
+        # instead of the real managed health attachment.
+        stripped="${mac//[:.]/}"
+        [[ "$stripped" =~ ^0+$ ]] && continue
         current_by_mac["${mac,,}"]=$name
     done
 
@@ -53,6 +61,29 @@ rename_interfaces_by_mac() {
     for target in "${!temp_by_target[@]}"; do
         ip link set "${temp_by_target[$target]}" name "$target"
     done
+
+    preserve_health_default_route
+}
+
+# preserve_health_default_route keeps the managed aa-health attachment
+# (renamed to vcpe-health0 above) reachable for connections that terminate
+# locally on its own address, independent of whatever global default route
+# configure_networking later installs for erouter0 (gateway's own WAN
+# uplink). Without this, a health-check reply whose destination address
+# isn't in any locally-attached subnet — e.g. a request forwarded through
+# Podman Machine's host<->VM tunnel — falls through to the global default
+# route and is black-holed via erouter0 instead of returning via
+# vcpe-health0. It is a no-op when no vcpe-health0 interface exists (i.e.
+# every topology attachment is already Podman-managed).
+preserve_health_default_route() {
+    local health_default health_gw health_ip
+    health_default=$(ip route show default dev vcpe-health0 2>/dev/null | head -1)
+    [[ -n "$health_default" ]] || return 0
+    health_gw=$(awk '{print $3}' <<<"$health_default")
+    health_ip=$(ip -4 -o addr show vcpe-health0 | awk '{print $4}' | cut -d/ -f1)
+    [[ -n "$health_gw" && -n "$health_ip" ]] || return 0
+    ip rule add from "$health_ip" table 100 priority 100 2>/dev/null || true
+    ip route add default via "$health_gw" dev vcpe-health0 table 100 2>/dev/null || true
 }
 
 configure_networking() {
@@ -207,7 +238,13 @@ EOF
         has_config=1
     fi
 
-    [[ $has_config -eq 1 ]] && dnsmasq --conf-file="$conf"
+    # Note: this must not be a bare `[[ ]] && cmd` statement — under set -e, a
+    # false test here would make this the function's (and thus main's) exit
+    # status, silently terminating the script before it reaches `exec
+    # /sbin/init` whenever no bridge has DHCP configured.
+    if [[ $has_config -eq 1 ]]; then
+        dnsmasq --conf-file="$conf"
+    fi
 }
 
 main() {

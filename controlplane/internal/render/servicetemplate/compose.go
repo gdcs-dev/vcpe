@@ -59,31 +59,27 @@ func BuildComposeService(input render.Input, instance plan.Instance, attach Netw
 	return svc, externalNetworks
 }
 
-// AttachProxySidecar adds a health-transport proxy sidecar reachable by
-// service name over the shared external health network, and wires the
-// workload's own svc/svcNets to depend on and reach it. It is a no-op when
-// healthPort is 0.
-func AttachProxySidecar(input render.Input, instanceName string, healthPort int, services, topNets, svcNets, svc map[string]any) {
+// AttachHealthPublication publishes an instance's own standard health
+// endpoint directly: it adds the reserved loopback mapping to the workload's
+// ports and, only when none of the instance's topology interfaces already has
+// a Podman-managed network, attaches the workload to the deployment's shared
+// private `aa-health` network so Podman can still forward the host port. It
+// creates no separate transport proxy service. It is a no-op when healthPort
+// is 0.
+func AttachHealthPublication(input render.Input, instance plan.Instance, healthPort int, topNets, svcNets, svc map[string]any) {
 	if healthPort == 0 {
 		return
+	}
+	ports, _ := svc["ports"].([]string)
+	svc["ports"] = append(ports, fmt.Sprintf("127.0.0.1:%d:9878", healthPort))
+	for _, iface := range instance.Interfaces {
+		if isManaged(input.Deployment, iface.Role) {
+			return
+		}
 	}
 	healthNetworkName := input.Deployment.Name + "-00-health"
 	topNets["aa-health"] = map[string]any{"external": true, "name": healthNetworkName}
 	svcNets["aa-health"] = map[string]any{}
-	sidecarName := instanceName + "-health"
-	svc["depends_on"] = []string{sidecarName}
-	services[sidecarName] = map[string]any{
-		"image":          render.ImageRef(input.Service.Image),
-		"container_name": input.Deployment.Name + "-" + instanceName + "-health",
-		"entrypoint":     []string{"/usr/local/bin/vcpe-healthd"},
-		// The upstream's own checks run sequentially and can each take up to
-		// its own probe timeout, so the proxy waits longer than any single
-		// check to avoid timing out on a slow-but-valid response.
-		"command":  []string{"--proxy-url", "http://" + instanceName + ":9878/health", "--timeout", "10s"},
-		"networks": map[string]any{"aa-health": map[string]any{}},
-		"ports":    []string{fmt.Sprintf("127.0.0.1:%d:9878", healthPort)},
-		"restart":  "unless-stopped",
-	}
 }
 
 // AttachProbeSidecar adds a probe-delegation health sidecar that shares the

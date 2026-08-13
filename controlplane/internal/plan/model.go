@@ -109,10 +109,6 @@ type Interface struct {
 	Gateway4     string
 	Gateway6     string
 	DefaultRoute bool
-	// HealthUpstream marks this interface's address as the manifest-declared
-	// target for the health transport proxy when no interface on this service
-	// has a Podman-managed network to publish the health endpoint on directly.
-	HealthUpstream bool
 	// Addressing is the resolved "dhcp" or "static" mode for this interface;
 	// see manifest.Interface.Addressing. Always normalized to a concrete value
 	// (never empty) by the planner.

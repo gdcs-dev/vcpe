@@ -82,25 +82,42 @@ func TestBuildComposeServiceStandardFields(t *testing.T) {
 	}
 }
 
-func TestAttachProxySidecarNoOpWhenHealthPortZero(t *testing.T) {
-	services, topNets, svcNets, svc := map[string]any{}, map[string]any{}, map[string]any{}, map[string]any{}
-	servicetemplate.AttachProxySidecar(render.Input{Deployment: plan.Deployment{Name: "edge"}}, "gateway-1", 0, services, topNets, svcNets, svc)
-	if len(services) != 0 || len(topNets) != 0 || len(svcNets) != 0 || len(svc) != 0 {
-		t.Fatalf("expected no-op when healthPort is 0, got services=%v topNets=%v svcNets=%v svc=%v", services, topNets, svcNets, svc)
+func TestAttachHealthPublicationNoOpWhenHealthPortZero(t *testing.T) {
+	topNets, svcNets, svc := map[string]any{}, map[string]any{}, map[string]any{}
+	input := render.Input{Deployment: plan.Deployment{Name: "edge"}}
+	instance := plan.Instance{Interfaces: []plan.Interface{{Role: "wan"}}}
+	servicetemplate.AttachHealthPublication(input, instance, 0, topNets, svcNets, svc)
+	if len(topNets) != 0 || len(svcNets) != 0 || len(svc) != 0 {
+		t.Fatalf("expected no-op when healthPort is 0, got topNets=%v svcNets=%v svc=%v", topNets, svcNets, svc)
 	}
 }
 
-func TestAttachProxySidecarShape(t *testing.T) {
-	input := render.Input{
-		Deployment: plan.Deployment{Name: "edge"},
-		Service:    plan.Service{Name: "gateway", Image: manifest.Image{Repository: "example/gateway", Tag: "test"}},
-	}
-	services, topNets, svcNets, svc := map[string]any{}, map[string]any{}, map[string]any{}, map[string]any{}
-	servicetemplate.AttachProxySidecar(input, "gateway-1", 47000, services, topNets, svcNets, svc)
+func TestAttachHealthPublicationManagedTopologySkipsPrivateNetwork(t *testing.T) {
+	input := render.Input{Deployment: plan.Deployment{Name: "edge", Networks: []plan.Network{{Role: "mgmt"}}}}
+	instance := plan.Instance{Interfaces: []plan.Interface{{Role: "mgmt"}}}
+	topNets, svcNets, svc := map[string]any{}, map[string]any{}, map[string]any{}
 
-	if svc["depends_on"].([]string)[0] != "gateway-1-health" {
-		t.Errorf("depends_on = %#v", svc["depends_on"])
+	servicetemplate.AttachHealthPublication(input, instance, 47000, topNets, svcNets, svc)
+
+	if _, ok := svcNets["aa-health"]; ok {
+		t.Errorf("expected no aa-health attachment for a managed topology interface, got %#v", svcNets)
 	}
+	if len(topNets) != 0 {
+		t.Errorf("expected no aa-health network declared, got %#v", topNets)
+	}
+	ports, ok := svc["ports"].([]string)
+	if !ok || len(ports) != 1 || ports[0] != "127.0.0.1:47000:9878" {
+		t.Errorf("svc ports = %#v", svc["ports"])
+	}
+}
+
+func TestAttachHealthPublicationSelfAddressedUsesPrivateNetwork(t *testing.T) {
+	input := render.Input{Deployment: plan.Deployment{Name: "edge", Networks: []plan.Network{{Role: "wan", IPAMDriver: "none"}}}}
+	instance := plan.Instance{Interfaces: []plan.Interface{{Role: "wan"}}}
+	topNets, svcNets, svc := map[string]any{}, map[string]any{}, map[string]any{}
+
+	servicetemplate.AttachHealthPublication(input, instance, 47000, topNets, svcNets, svc)
+
 	if _, ok := svcNets["aa-health"]; !ok {
 		t.Errorf("workload networks missing aa-health entry: %#v", svcNets)
 	}
@@ -108,26 +125,40 @@ func TestAttachProxySidecarShape(t *testing.T) {
 	if !ok || healthNet["external"] != true || healthNet["name"] != "edge-00-health" {
 		t.Errorf("topNets[aa-health] = %#v", topNets["aa-health"])
 	}
-	sidecar, ok := services["gateway-1-health"].(map[string]any)
-	if !ok {
-		t.Fatalf("missing sidecar service, got %#v", services)
-	}
-	if sidecar["image"] != "example/gateway:test" {
-		t.Errorf("sidecar image = %#v", sidecar["image"])
-	}
-	if sidecar["container_name"] != "edge-gateway-1-health" {
-		t.Errorf("sidecar container_name = %#v", sidecar["container_name"])
-	}
-	command, ok := sidecar["command"].([]string)
-	if !ok || len(command) != 4 || command[0] != "--proxy-url" || command[1] != "http://gateway-1:9878/health" || command[2] != "--timeout" || command[3] != "10s" {
-		t.Errorf("sidecar command = %#v", sidecar["command"])
-	}
-	ports, ok := sidecar["ports"].([]string)
+	ports, ok := svc["ports"].([]string)
 	if !ok || len(ports) != 1 || ports[0] != "127.0.0.1:47000:9878" {
-		t.Errorf("sidecar ports = %#v", sidecar["ports"])
+		t.Errorf("svc ports = %#v", svc["ports"])
 	}
-	if sidecar["restart"] != "unless-stopped" {
-		t.Errorf("sidecar restart = %#v", sidecar["restart"])
+}
+
+func TestAttachHealthPublicationPreservesExistingApplicationPorts(t *testing.T) {
+	input := render.Input{Deployment: plan.Deployment{Name: "edge", Networks: []plan.Network{{Role: "mgmt"}}}}
+	instance := plan.Instance{Interfaces: []plan.Interface{{Role: "mgmt"}}}
+	topNets, svcNets := map[string]any{}, map[string]any{}
+	svc := map[string]any{"ports": []string{"8080:8080"}}
+
+	servicetemplate.AttachHealthPublication(input, instance, 47000, topNets, svcNets, svc)
+
+	ports, ok := svc["ports"].([]string)
+	if !ok || len(ports) != 2 || ports[0] != "8080:8080" || ports[1] != "127.0.0.1:47000:9878" {
+		t.Errorf("svc ports = %#v, want existing port preserved plus health mapping", svc["ports"])
+	}
+}
+
+func TestAttachHealthPublicationNoServicesMapMutated(t *testing.T) {
+	// The helper mutates only the selected workload's own maps; it never adds
+	// another service (no transport proxy).
+	input := render.Input{Deployment: plan.Deployment{Name: "edge", Networks: []plan.Network{{Role: "wan", IPAMDriver: "none"}}}}
+	instance := plan.Instance{Interfaces: []plan.Interface{{Role: "wan"}}}
+	topNets, svcNets, svc := map[string]any{}, map[string]any{}, map[string]any{}
+
+	servicetemplate.AttachHealthPublication(input, instance, 47000, topNets, svcNets, svc)
+
+	if _, ok := svc["depends_on"]; ok {
+		t.Errorf("expected no depends_on entry, got %#v", svc["depends_on"])
+	}
+	if len(topNets) != 1 {
+		t.Errorf("expected exactly one declared network (aa-health), got %#v", topNets)
 	}
 }
 

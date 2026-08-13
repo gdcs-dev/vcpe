@@ -88,12 +88,11 @@ func renderWebPACompose(input render.Input, inst plan.Instance) string {
 	svc["privileged"] = true
 	svc["cap_add"] = []string{"NET_ADMIN", "NET_RAW"}
 	ports := append([]string(nil), input.Service.Ports...)
-	if healthPort := input.HealthPorts[inst.Index]; healthPort != 0 {
-		ports = append(ports, fmt.Sprintf("127.0.0.1:%d:9878", healthPort))
-	}
 	if len(ports) > 0 {
 		svc["ports"] = ports
 	}
+	svcNets, _ := svc["networks"].(map[string]any)
+	servicetemplate.AttachHealthPublication(input, inst, input.HealthPorts[inst.Index], topNets, svcNets, svc)
 	instanceName := fmt.Sprintf("%s-%d", input.Service.Name, inst.Index+1)
 	doc := map[string]any{"services": map[string]any{instanceName: svc}, "networks": topNets}
 	out, _ := yaml.Marshal(doc)

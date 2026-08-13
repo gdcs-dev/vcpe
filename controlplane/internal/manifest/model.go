@@ -116,11 +116,6 @@ type Interface struct {
 	IPv4         string `json:"ipv4,omitempty" yaml:"ipv4,omitempty"`
 	IPv6         string `json:"ipv6,omitempty" yaml:"ipv6,omitempty"`
 	DefaultRoute bool   `json:"defaultRoute,omitempty" yaml:"defaultRoute,omitempty"`
-	// HealthUpstream marks this interface's resolved address as the one the
-	// health transport should reach when the service has no Podman-managed
-	// network to publish its health endpoint on directly. At most one
-	// interface per service may set this.
-	HealthUpstream bool `json:"healthUpstream,omitempty" yaml:"healthUpstream,omitempty"`
 	// Addressing selects how this interface obtains its address at runtime:
 	// "dhcp" (the default, applied when empty) runs a real DHCP client
 	// against the interface's device; "static" applies the manifest's ipv4/

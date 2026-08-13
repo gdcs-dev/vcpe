@@ -337,3 +337,62 @@ func TestGenericContainerWithoutHealthHasNoEndpoint(t *testing.T) {
 		}
 	}
 }
+
+// TestGenericContainerProbeHelperInheritsWorkloadTransport verifies the
+// namespace-sharing probe helper carries only network_mode: it must not
+// declare its own networks or ports, since it inherits both the managed
+// health attachment and published endpoint from the workload it shares a
+// namespace with.
+func TestGenericContainerProbeHelperInheritsWorkloadTransport(t *testing.T) {
+	genericcontainer.Register()
+	st, _ := typeregistry.Lookup("generic-container")
+	var config yaml.Node
+	if err := yaml.Unmarshal([]byte("health: { http: { url: http://127.0.0.1:8080/ready, expectedStatus: 204 }, timeoutSeconds: 3 }"), &config); err != nil {
+		t.Fatal(err)
+	}
+	service := plan.Service{
+		Name: "client", Type: "generic-container", Image: manifest.Image{Repository: "example/client", Tag: "test"}, Config: config,
+		Instances: []plan.Instance{{Index: 0, Interfaces: []plan.Interface{{Role: "lan", Network: "edge-lan", Device: "eth0", MAC: "02:00:00:00:00:0a"}}}},
+	}
+	result, err := st.Renderer().Render(context.Background(), render.Input{Deployment: plan.Deployment{Name: "edge"}, Service: service, HealthPorts: map[int]int{0: 47000}})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	var compose string
+	for _, artifact := range result.Artifacts {
+		if artifact.Key == "compose.yaml" {
+			compose = artifact.Content
+		}
+	}
+	var document map[string]any
+	if err := yaml.Unmarshal([]byte(compose), &document); err != nil {
+		t.Fatalf("parse compose.yaml: %v", err)
+	}
+	services, ok := document["services"].(map[string]any)
+	if !ok {
+		t.Fatalf("compose.yaml services must be a mapping, got %#v", document["services"])
+	}
+	probe, ok := services["client-health-1"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing probe helper service, got %#v", services)
+	}
+	if probe["network_mode"] != "service:client-1" {
+		t.Errorf("probe network_mode = %#v, want service:client-1", probe["network_mode"])
+	}
+	if _, ok := probe["networks"]; ok {
+		t.Errorf("probe helper must not declare its own networks entry, got %#v", probe["networks"])
+	}
+	if _, ok := probe["ports"]; ok {
+		t.Errorf("probe helper must not declare its own ports entry, got %#v", probe["ports"])
+	}
+	workload, ok := services["client-1"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing workload service, got %#v", services)
+	}
+	if _, ok := workload["networks"]; !ok {
+		t.Errorf("workload service missing its own networks entry: %#v", workload)
+	}
+	if _, ok := workload["ports"]; !ok {
+		t.Errorf("workload service missing its own published ports: %#v", workload)
+	}
+}

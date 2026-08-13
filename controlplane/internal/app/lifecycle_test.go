@@ -273,3 +273,70 @@ func TestTeardownCallsComposeDown(t *testing.T) {
 		t.Errorf("expected reverse-order teardown [edge-gateway, edge-bng], got %v", cmpStub.downCalls)
 	}
 }
+
+// TestTeardownNetworksRemovesPrivateHealthNetwork verifies teardownNetworks
+// removes the deployment's private health network in addition to its
+// topology networks, mirroring the EnsureNetwork calls made on apply (see
+// TestLifecycleEnsuresPodmanNetworksBeforeCompose) — regression coverage for
+// a bug where `vcpe down` never removed `<deployment>-00-health`.
+func TestTeardownNetworksRemovesPrivateHealthNetwork(t *testing.T) {
+	stateRoot := t.TempDir()
+	netStub, _ := stubLifecycle(t)
+
+	ps, err := persist.Open(stateRoot)
+	if err != nil {
+		t.Fatalf("open persist: %v", err)
+	}
+	defer ps.Close()
+
+	manifestYAML := "apiVersion: vcpe.dev/v1\nkind: Deployment\nmetadata:\n  name: edge\nspec:\n  networks:\n    - role: wan\n      ipamDriver: none\n      ipv4: { cidr: 10.7.200.0/24, gateway: 10.7.200.1 }\n  services:\n    - name: gateway\n      type: gateway\n      replicas: 1\n      image: { repository: ghcr.io/gdcs-dev/gateway, tag: dev }\n      interfaces:\n        - { role: wan, device: erouter0, ipv4: \"10.7.200.10\", addressing: static }\n"
+	if err := ps.SaveDesiredSnapshot("edge", []byte(manifestYAML)); err != nil {
+		t.Fatalf("save desired snapshot: %v", err)
+	}
+
+	teardownNetworks(context.Background(), ps, "edge", netStub)
+
+	if len(netStub.removeCalls) != 2 {
+		t.Fatalf("expected 2 RemoveNetwork calls, got %v", netStub.removeCalls)
+	}
+	for _, want := range []string{"edge-wan", "edge-00-health"} {
+		found := false
+		for _, call := range netStub.removeCalls {
+			if call == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("expected RemoveNetwork call %q, got: %v", want, netStub.removeCalls)
+		}
+	}
+}
+
+// TestTeardownNetworksSkipsPrivateHealthNetworkWhenUnused verifies
+// teardownNetworks does not attempt to remove the private health network for
+// a deployment whose only service already has a Podman-managed topology
+// attachment (so the network was never created on apply).
+func TestTeardownNetworksSkipsPrivateHealthNetworkWhenUnused(t *testing.T) {
+	stateRoot := t.TempDir()
+	netStub, _ := stubLifecycle(t)
+
+	ps, err := persist.Open(stateRoot)
+	if err != nil {
+		t.Fatalf("open persist: %v", err)
+	}
+	defer ps.Close()
+
+	manifestYAML := "apiVersion: vcpe.dev/v1\nkind: Deployment\nmetadata:\n  name: edge\nspec:\n  networks:\n    - role: mgmt\n      ipv4: { cidr: 10.10.10.0/24, gateway: 10.10.10.1 }\n  services:\n    - name: bng\n      type: bng\n      replicas: 1\n      image: { repository: ghcr.io/gdcs-dev/bng, tag: dev }\n      interfaces:\n        - { role: mgmt }\n"
+	if err := ps.SaveDesiredSnapshot("edge", []byte(manifestYAML)); err != nil {
+		t.Fatalf("save desired snapshot: %v", err)
+	}
+
+	teardownNetworks(context.Background(), ps, "edge", netStub)
+
+	for _, call := range netStub.removeCalls {
+		if call == "edge-00-health" {
+			t.Fatalf("expected no health network removal when never provisioned, got: %v", netStub.removeCalls)
+		}
+	}
+}

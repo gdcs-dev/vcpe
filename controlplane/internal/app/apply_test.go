@@ -198,52 +198,60 @@ func TestApplySkipsPrivateHealthNetworkWhenPodmanIPAMIsAvailable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read rendered compose: %v", err)
 	}
-	if strings.Contains(string(compose), "zz-health:") {
+	if strings.Contains(string(compose), "aa-health:") {
 		t.Fatalf("rendered Compose unexpectedly added private health network:\n%s", compose)
 	}
 }
 
-func TestApplyReservesGatewayHealthEndpointOnlyWhenHealthUpstreamDeclared(t *testing.T) {
-	for _, testCase := range []struct {
-		name           string
-		healthUpstream string
-		wantEndpoints  int
-	}{
-		{name: "undeclared", wantEndpoints: 0},
-		{name: "declared", healthUpstream: ", healthUpstream: true", wantEndpoints: 1},
-	} {
-		t.Run(testCase.name, func(t *testing.T) {
-			stateRoot := t.TempDir()
-			manifestPath := filepath.Join(t.TempDir(), "manifest.yaml")
-			content := "apiVersion: vcpe.dev/v1\nkind: Deployment\nmetadata:\n  name: edge\nspec:\n  networks:\n    - role: wan\n      ipamDriver: none\n      ipv4: { cidr: 10.7.200.0/24, gateway: 10.7.200.1 }\n  services:\n    - name: gateway\n      type: gateway\n      replicas: 1\n      image: { repository: ghcr.io/gdcs-dev/gateway, tag: dev }\n      interfaces:\n        - { role: wan, device: erouter0, ipv4: \"10.7.200.10\", addressing: static" + testCase.healthUpstream + " }\n"
-			if err := os.WriteFile(manifestPath, []byte(content), 0o644); err != nil {
-				t.Fatalf("write manifest: %v", err)
-			}
-			t.Setenv("VCPE_SKIP_HOSTNET_PREFLIGHT", "1")
-			t.Setenv("VCPE_SKIP_RUNTIME", "1")
-			if _, err := executeLocal(Options{Command: "apply", ManifestPath: manifestPath, StateRoot: stateRoot}); err != nil {
-				t.Fatalf("apply: %v", err)
-			}
-			store, err := persist.Open(stateRoot)
-			if err != nil {
-				t.Fatalf("open store: %v", err)
-			}
-			defer store.Close()
-			endpoints, err := store.ListHealthEndpoints("edge")
-			if err != nil {
-				t.Fatalf("list health endpoints: %v", err)
-			}
-			if len(endpoints) != testCase.wantEndpoints {
-				t.Fatalf("endpoints = %#v, want %d", endpoints, testCase.wantEndpoints)
-			}
-			response, err := executeLocal(Options{Command: "status", Name: "edge", StateRoot: stateRoot})
-			if err != nil {
-				t.Fatalf("status: %v", err)
-			}
-			if testCase.wantEndpoints == 0 && !strings.Contains(response.Message, "health gateway/0: not-configured") {
-				t.Fatalf("expected not-configured gateway health, got: %s", response.Message)
-			}
-		})
+// TestApplyReservesSelfAddressedGatewayHealthEndpointAutomatically verifies a
+// self-addressed gateway (no Podman-managed topology attachment) receives a
+// health endpoint reservation unconditionally — publication does not depend
+// on any manifest-declared transport hint.
+func TestApplyReservesSelfAddressedGatewayHealthEndpointAutomatically(t *testing.T) {
+	stateRoot := t.TempDir()
+	manifestPath := filepath.Join(t.TempDir(), "manifest.yaml")
+	content := "apiVersion: vcpe.dev/v1\nkind: Deployment\nmetadata:\n  name: edge\nspec:\n  networks:\n    - role: wan\n      ipamDriver: none\n      ipv4: { cidr: 10.7.200.0/24, gateway: 10.7.200.1 }\n  services:\n    - name: gateway\n      type: gateway\n      replicas: 1\n      image: { repository: ghcr.io/gdcs-dev/gateway, tag: dev }\n      interfaces:\n        - { role: wan, device: erouter0, ipv4: \"10.7.200.10\", addressing: static }\n"
+	if err := os.WriteFile(manifestPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+	t.Setenv("VCPE_SKIP_HOSTNET_PREFLIGHT", "1")
+	t.Setenv("VCPE_SKIP_RUNTIME", "1")
+	if _, err := executeLocal(Options{Command: "apply", ManifestPath: manifestPath, StateRoot: stateRoot}); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	store, err := persist.Open(stateRoot)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer store.Close()
+	endpoints, err := store.ListHealthEndpoints("edge")
+	if err != nil {
+		t.Fatalf("list health endpoints: %v", err)
+	}
+	if len(endpoints) != 1 {
+		t.Fatalf("endpoints = %#v, want exactly 1", endpoints)
+	}
+	operations, err := store.RecentOperations(1)
+	if err != nil || len(operations) != 1 {
+		t.Fatalf("operations = %#v, err = %v", operations, err)
+	}
+	composePath := filepath.Join(stateRoot, "artifacts", "v1", "operations", operations[0].OperationID, "runtime", "gateway", "compose.yaml")
+	compose, err := os.ReadFile(composePath)
+	if err != nil {
+		t.Fatalf("read rendered compose: %v", err)
+	}
+	if !strings.Contains(string(compose), "aa-health:") {
+		t.Fatalf("expected rendered Compose to attach the private health network for a self-addressed gateway:\n%s", compose)
+	}
+	if strings.Contains(string(compose), "vcpe-healthd") {
+		t.Fatalf("expected no per-instance health proxy service:\n%s", compose)
+	}
+	response, err := executeLocal(Options{Command: "status", Name: "edge", StateRoot: stateRoot})
+	if err != nil {
+		t.Fatalf("status: %v", err)
+	}
+	if strings.Contains(response.Message, "health gateway/0: not-configured") {
+		t.Fatalf("expected an automatically reserved gateway health endpoint, got: %s", response.Message)
 	}
 }
 
@@ -411,6 +419,72 @@ func TestApplyRollsBackOnRuntimeInitVerifyFailure(t *testing.T) {
 		if !strings.Contains(log, marker) {
 			t.Fatalf("expected phase %s in %s", marker, log)
 		}
+	}
+}
+
+// TestApplyPreservesStateOnLifecycleFailure covers a partial-failure deploy:
+// once the compose lifecycle phase begins, containers may already be running,
+// so a subsequent failure must not erase IPAM leases/desired snapshot — doing
+// so would strand running containers with no record for `vcpe down` to use.
+func TestApplyPreservesStateOnLifecycleFailure(t *testing.T) {
+	stateRoot := t.TempDir()
+	manifestPath := writeV1Manifest(t, "edge")
+	t.Setenv("VCPE_SKIP_HOSTNET_PREFLIGHT", "1")
+	t.Setenv("VCPE_SKIP_RUNTIME", "1")
+	t.Setenv("VCPE_FAIL_PHASE", "lifecycle")
+
+	if _, err := executeLocal(Options{Command: "apply", ManifestPath: manifestPath, StateRoot: stateRoot}); err == nil {
+		t.Fatal("expected apply to fail at lifecycle phase")
+	}
+
+	ps, err := persist.Open(stateRoot)
+	if err != nil {
+		t.Fatalf("open persist: %v", err)
+	}
+	defer ps.Close()
+
+	leases, err := ps.ListIPAMLeases()
+	if err != nil {
+		t.Fatalf("list leases: %v", err)
+	}
+	if len(leases) == 0 {
+		t.Fatal("expected leases to be preserved after a lifecycle-phase failure")
+	}
+
+	exists, err := ps.CustomerExists("edge")
+	if err != nil {
+		t.Fatalf("customer exists: %v", err)
+	}
+	if !exists {
+		t.Fatal("expected deployment to remain known so `vcpe down` can find it")
+	}
+
+	if _, ok, err := ps.LatestDesiredSnapshot("edge"); err != nil || !ok {
+		t.Fatalf("expected desired snapshot to be preserved: ok=%v err=%v", ok, err)
+	}
+
+	timeline, err := ps.RecentOperations(1)
+	if err != nil {
+		t.Fatalf("recent operations: %v", err)
+	}
+	log := phaseLog(t, ps, timeline[0].OperationID)
+	for _, marker := range []string{"lifecycle:failed", "rollback:skipped"} {
+		if !strings.Contains(log, marker) {
+			t.Fatalf("expected phase %s in %s", marker, log)
+		}
+	}
+
+	t.Setenv("VCPE_FAIL_PHASE", "")
+	if _, err := executeLocal(Options{Command: "down", Name: "edge", StateRoot: stateRoot}); err != nil {
+		t.Fatalf("expected vcpe down to tear down the partially-failed deployment: %v", err)
+	}
+
+	exists, err = ps.CustomerExists("edge")
+	if err != nil {
+		t.Fatalf("customer exists after down: %v", err)
+	}
+	if exists {
+		t.Fatal("expected deployment to be gone after vcpe down")
 	}
 }
 

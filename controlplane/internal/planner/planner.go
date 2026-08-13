@@ -287,7 +287,6 @@ func resolveInstance(deployment string, svc manifest.Service, index, replicas in
 			IPv4:           ipv4,
 			IPv6:           ipv6,
 			DefaultRoute:   iface.DefaultRoute,
-			HealthUpstream: iface.HealthUpstream,
 			Addressing:     addressing,
 			ManagedNetwork: net.IPAMDriver != "none",
 		}

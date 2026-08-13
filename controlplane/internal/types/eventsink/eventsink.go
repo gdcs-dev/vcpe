@@ -82,14 +82,15 @@ func renderInstance(_ context.Context, input render.Input, cfg Config) (render.R
 	env = append(env, render.SortedEnv(cfg.Env)...)
 
 	svc, networks := servicetemplate.BuildComposeService(input, instance, alwaysPinAttachment)
+	svc["privileged"] = true
+	svc["cap_add"] = []string{"NET_ADMIN", "NET_RAW"}
 	instanceName := fmt.Sprintf("%s-%d", input.Service.Name, instance.Index+1)
 	ports := append([]string(nil), input.Service.Ports...)
-	if healthPort := input.HealthPorts[instance.Index]; healthPort != 0 {
-		ports = append(ports, fmt.Sprintf("127.0.0.1:%d:9878", healthPort))
-	}
 	if len(ports) > 0 {
 		svc["ports"] = ports
 	}
+	svcNets, _ := svc["networks"].(map[string]any)
+	servicetemplate.AttachHealthPublication(input, instance, input.HealthPorts[instance.Index], networks, svcNets, svc)
 	services := map[string]any{instanceName: svc}
 	compose, err := yaml.Marshal(map[string]any{"services": services, "networks": networks})
 	if err != nil {

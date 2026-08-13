@@ -42,8 +42,11 @@ func failPhase(name string) bool {
 }
 
 // runApply executes the full reconcile pipeline for a v1 manifest. It is the
-// single mutating path; phases are journaled and a failure after allocation
-// triggers a bounded reverse-order rollback.
+// single mutating path; phases are journaled. A failure before the compose
+// lifecycle phase begins triggers a bounded reverse-order rollback of IPAM/
+// state; a failure at or after that point preserves persisted state instead,
+// since containers may have already been (partially) created, so `vcpe down`
+// can still find and tear the deployment down.
 func runApply(opts Options) (daemon.CommandResponse, error) {
 	if opts.ManifestPath == "" {
 		return daemon.CommandResponse{}, fmt.Errorf("apply requires --manifest <path>")
@@ -105,13 +108,26 @@ func runApply(opts Options) (daemon.CommandResponse, error) {
 
 	ctx := context.Background()
 	allocated := false
+	// livePodmanState becomes true once the compose-lifecycle phase begins, the
+	// point after which a failure may leave real containers/networks running.
+	// From that point on, fail() must not erase persisted state (IPAM leases,
+	// desired snapshot, health endpoints) — doing so would strand any
+	// partially-created resources with no record for `vcpe down` to find and
+	// tear down. Failures before that point are rolled back as before, since
+	// nothing has touched Podman yet.
+	livePodmanState := false
 	fail := func(phase string, cause error) (daemon.CommandResponse, error) {
 		_ = ps.RecordPhase(opID, phase, "failed", cause.Error())
-		if allocated {
+		if livePodmanState {
+			_ = ps.RecordPhase(opID, "rollback", "skipped", "compose lifecycle may have partially applied; state preserved so `vcpe down --name "+name+"` can tear it down")
+		} else if allocated {
 			rollback(ps, opID, name)
 		}
 		_ = ps.FinishOperation(opID, "failed", cause.Error())
 		observability.Log(observability.Event{Level: "ERROR", OperationID: opID, CustomerID: name, Phase: phase, Result: "failed", Message: cause.Error()})
+		if livePodmanState {
+			return daemon.CommandResponse{}, fmt.Errorf("apply %s: %s phase failed: %w (some containers may already be running; run `vcpe down --name %s` to tear it down)", name, phase, cause, name)
+		}
 		return daemon.CommandResponse{}, fmt.Errorf("apply %s: %s phase failed: %w", name, phase, cause)
 	}
 
@@ -155,6 +171,14 @@ func runApply(opts Options) (daemon.CommandResponse, error) {
 	}
 	_ = ps.RecordPhase(opID, "allocation", "succeeded", fmt.Sprintf("%v", conflicts))
 
+	// Save the desired snapshot as soon as real allocation happens, not only on
+	// full apply success, so a later-phase failure still leaves `vcpe down`/
+	// `vcpe list` able to identify and tear down this deployment.
+	manifestRaw, _ := os.ReadFile(opts.ManifestPath)
+	if err := ps.SaveDesiredSnapshot(name, manifestRaw); err != nil {
+		return fail("allocation", err)
+	}
+
 	healthPorts, err := reserveHealthPorts(ps, resolved)
 	if err != nil {
 		return fail("health-endpoints", err)
@@ -186,7 +210,9 @@ func runApply(opts Options) (daemon.CommandResponse, error) {
 	}
 	_ = ps.RecordPhase(opID, "runtime-init-verify", "succeeded", "startup contracts verified")
 
-	// Phase: compose lifecycle.
+	// Phase: compose lifecycle. Beyond this point a failure may leave real
+	// containers/networks created, so fail() stops rolling back persisted state.
+	livePodmanState = true
 	if failPhase("lifecycle") {
 		return fail("lifecycle", fmt.Errorf("VCPE_FAIL_PHASE=lifecycle"))
 	}
@@ -205,11 +231,6 @@ func runApply(opts Options) (daemon.CommandResponse, error) {
 		}
 	}
 
-	// Record desired snapshot keyed by deployment name and finish.
-	raw, _ := os.ReadFile(opts.ManifestPath)
-	if err := ps.SaveDesiredSnapshot(name, raw); err != nil {
-		return fail("record", err)
-	}
 	if err := ps.FinishOperation(opID, "succeeded", "apply converged"); err != nil {
 		return daemon.CommandResponse{}, err
 	}
@@ -334,18 +355,6 @@ func renderAll(ctx context.Context, stateRoot, opID string, dep plan.Deployment,
 		if err != nil {
 			return fmt.Errorf("render service %q: %w", svc.Name, err)
 		}
-		needsPrivateHealthNetwork, err := serviceNeedsPrivateHealthNetwork(dep, svc)
-		if err != nil {
-			return fmt.Errorf("render service %q health network: %w", svc.Name, err)
-		}
-		// Services whose manifest declares a healthUpstream interface render
-		// their own health transport (see the gateway renderer); the generic
-		// direct-attach path below is only for services with no such renderer.
-		if needsPrivateHealthNetwork && !serviceHasHealthUpstreamInterface(svc) && len(healthPorts[svc.Name]) > 0 {
-			if err := attachHealthNetwork(&result, healthNetworkName(dep.Name)); err != nil {
-				return fmt.Errorf("render service %q health network: %w", svc.Name, err)
-			}
-		}
 		producedKeys := map[string]bool{}
 		for _, artifact := range result.Artifacts {
 			producedKeys[artifact.Key] = true
@@ -377,53 +386,8 @@ func renderAll(ctx context.Context, stateRoot, opID string, dep plan.Deployment,
 	return nil
 }
 
-const healthNetworkAlias = "aa-health"
-
 func healthNetworkName(deployment string) string {
 	return deployment + "-00-health"
-}
-
-// attachHealthNetwork gives Podman a stable, private address for host-port
-// forwarding when workload interfaces are configured inside the container.
-func attachHealthNetwork(result *render.Result, networkName string) error {
-	for index := range result.Artifacts {
-		artifact := &result.Artifacts[index]
-		if artifact.Key != "compose.yaml" {
-			continue
-		}
-		var document map[string]any
-		if err := yaml.Unmarshal([]byte(artifact.Content), &document); err != nil {
-			return fmt.Errorf("parse compose.yaml: %w", err)
-		}
-		services, ok := document["services"].(map[string]any)
-		if !ok {
-			return fmt.Errorf("compose.yaml services must be a mapping")
-		}
-		networks, ok := document["networks"].(map[string]any)
-		if !ok {
-			networks = make(map[string]any)
-			document["networks"] = networks
-		}
-		networks[healthNetworkAlias] = map[string]any{"external": true, "name": networkName}
-		for serviceName, rawService := range services {
-			service, ok := rawService.(map[string]any)
-			if !ok {
-				return fmt.Errorf("compose service %q must be a mapping", serviceName)
-			}
-			serviceNetworks, ok := service["networks"].(map[string]any)
-			if !ok {
-				serviceNetworks = make(map[string]any)
-				service["networks"] = serviceNetworks
-			}
-			serviceNetworks[healthNetworkAlias] = map[string]any{}
-		}
-		content, err := yaml.Marshal(document)
-		if err != nil {
-			return fmt.Errorf("marshal compose.yaml: %w", err)
-		}
-		artifact.Content = string(content)
-	}
-	return nil
 }
 
 func healthNetworkRequired(dep plan.Deployment) (bool, error) {
@@ -453,20 +417,11 @@ func serviceNeedsPrivateHealthNetwork(dep plan.Deployment, svc plan.Service) (bo
 	return true, nil
 }
 
-// serviceHasHealthUpstreamInterface reports whether the manifest marked one
-// of this service's interfaces as the target for a health transport proxy.
-func serviceHasHealthUpstreamInterface(svc plan.Service) bool {
-	if len(svc.Instances) == 0 {
-		return false
-	}
-	for _, iface := range svc.Instances[0].Interfaces {
-		if iface.HealthUpstream {
-			return true
-		}
-	}
-	return false
-}
-
+// serviceHealthTransportRequired reports whether every instance of svc
+// receives a reserved health endpoint: every registered type with valid
+// health behavior, or a generic-container instance with a configured probe.
+// Publication is automatic — it does not depend on any manifest-declared
+// transport opt-in.
 func serviceHealthTransportRequired(svc plan.Service) (bool, error) {
 	st, ok := typeregistry.Lookup(svc.Type)
 	if !ok || !st.Health().Valid() || len(svc.Instances) == 0 {
@@ -487,28 +442,12 @@ func serviceHealthTransportRequired(svc plan.Service) (bool, error) {
 func reserveHealthPorts(ps *persist.Store, dep plan.Deployment) (map[string]map[int]int, error) {
 	ports := make(map[string]map[int]int)
 	for _, svc := range dep.Services {
-		st, ok := typeregistry.Lookup(svc.Type)
-		if !ok || !st.Health().Valid() {
-			continue
+		required, err := serviceHealthTransportRequired(svc)
+		if err != nil {
+			return nil, err
 		}
-		if svc.Type == genericcontainer.TypeName {
-			configured, err := genericcontainer.HasConfiguredHealth(svc.Config)
-			if err != nil {
-				return nil, fmt.Errorf("parse generic-container health for %s: %w", svc.Name, err)
-			}
-			if !configured {
-				continue
-			}
-		} else {
-			// A self-addressed service (no Podman-managed network) can only
-			// publish health when the manifest names an interface to proxy to.
-			needsPrivate, err := serviceNeedsPrivateHealthNetwork(dep, svc)
-			if err != nil {
-				return nil, err
-			}
-			if needsPrivate && !serviceHasHealthUpstreamInterface(svc) {
-				continue
-			}
+		if !required {
+			continue
 		}
 		servicePorts := make(map[int]int, len(svc.Instances))
 		for _, inst := range svc.Instances {
@@ -724,6 +663,16 @@ func teardownNetworks(ctx context.Context, ps *persist.Store, depName string, pr
 	for _, net := range dep.Networks {
 		if err := provisioner.RemoveNetwork(ctx, net.Bridge); err != nil {
 			fmt.Fprintf(os.Stderr, "warn: remove network %s: %v\n", net.Bridge, err)
+		}
+	}
+	needsHealthNetwork, err := healthNetworkRequired(dep)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warn: determine health network for teardown of %q: %v\n", depName, err)
+		return
+	}
+	if needsHealthNetwork {
+		if err := provisioner.RemoveNetwork(ctx, healthNetworkName(depName)); err != nil {
+			fmt.Fprintf(os.Stderr, "warn: remove health network %s: %v\n", healthNetworkName(depName), err)
 		}
 	}
 }

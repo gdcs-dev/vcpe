@@ -114,7 +114,7 @@ spec:
         pullPolicy: always-pull
         buildContext: services/gateway
       interfaces:
-        - { role: wan, device: erouter0, ipv4: "10.7.200.10", healthUpstream: false, addressing: static }
+        - { role: wan, device: erouter0, ipv4: "10.7.200.10", addressing: static }
         - { role: cm, device: wan0, ipv4: "10.7.201.10", addressing: static }
         - { role: lan-p1, device: eth0, bridge: brlan0 }
         - { role: lan-p2, device: eth1, bridge: brlan0 }
@@ -179,15 +179,3 @@ spec:
         command: ["sleep", "infinity"]
       dependsOn:
         - gateway
-    - name: oktopus
-      type: oktopus
-      replicas: 1
-      image:
-        repository: "ghcr.io/gdcs-dev/oktopus"
-        tag: v0.2.8
-        pullPolicy: always-pull
-        buildContext: services/oktopus
-      interfaces:
-        - role: mgmt
-      dependsOn:
-        - bng

@@ -39,7 +39,6 @@ func (probes *httpProbeFlags) Set(value string) error {
 func main() {
 	listen := flag.String("listen", ":9878", "health server listen address")
 	command := flag.String("command", "", "optional readiness command")
-	proxyURL := flag.String("proxy-url", "", "optional upstream health endpoint to proxy")
 	timeout := flag.Duration("timeout", 2*time.Second, "readiness command timeout")
 	run := flag.String("run", "", "optional workload command to supervise")
 	check := flag.Bool("check", false, "exit successfully only when the local health endpoint is healthy")
@@ -64,14 +63,6 @@ func main() {
 	}
 	if strings.TrimSpace(*command) != "" {
 		probe = commandProbe(*command, *timeout)
-	}
-	if strings.TrimSpace(*proxyURL) != "" {
-		var err error
-		probe, err = proxyProbe(*proxyURL, *timeout)
-		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(2)
-		}
 	}
 	if len(probes) > 0 {
 		var err error
@@ -159,32 +150,6 @@ func commandProbe(command string, timeout time.Duration) health.Probe {
 		}
 		return health.Response{SchemaVersion: health.SchemaVersion, Status: status, ObservedAt: time.Now().UTC(), Checks: []health.Check{{Name: "readiness-command", Status: status, Message: message}}}
 	}
-}
-
-func proxyProbe(endpoint string, timeout time.Duration) (health.Probe, error) {
-	request, err := http.NewRequest(http.MethodGet, endpoint, nil)
-	if err != nil || request.URL.Scheme == "" || request.URL.Host == "" {
-		return nil, fmt.Errorf("invalid --proxy-url %q", endpoint)
-	}
-	return func(parent context.Context) health.Response {
-		ctx, cancel := context.WithTimeout(parent, timeout)
-		defer cancel()
-		request, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
-		response, err := http.DefaultClient.Do(request)
-		message := "upstream health endpoint unavailable"
-		if err != nil {
-			message = "upstream health endpoint unavailable: " + err.Error()
-		} else if response != nil {
-			defer response.Body.Close()
-			var payload health.Response
-			decodeErr := json.NewDecoder(response.Body).Decode(&payload)
-			if response.StatusCode == http.StatusOK && decodeErr == nil && payload.Validate() == nil {
-				return payload
-			}
-			message = fmt.Sprintf("upstream health endpoint unavailable: status %d, decode error: %v", response.StatusCode, decodeErr)
-		}
-		return health.Response{SchemaVersion: health.SchemaVersion, Status: health.StatusUnhealthy, ObservedAt: time.Now().UTC(), Checks: []health.Check{{Name: "health-proxy", Status: health.StatusUnhealthy, Message: message}}}
-	}, nil
 }
 
 func namedCommandProbe(values []string, timeout time.Duration) (health.Probe, error) {

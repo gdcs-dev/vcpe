@@ -22,6 +22,16 @@ instance. The resulting Compose mapping always binds `127.0.0.1` on the control
 plane host and targets container port `9878`; it is not a manifest port and is
 never published on a topology network or wildcard host address.
 
+Publication is automatic and fully control-plane owned: the manifest declares
+no interface-level health transport or upstream hint. Every instance of a
+registered type with valid health behavior (and every `generic-container`
+instance with a configured probe) is published directly from its own workload
+network namespace. When none of an instance's topology interfaces already has
+a Podman-managed network, the workload is instead attached to the
+deployment's private, Podman-managed `aa-health` network so the reserved host
+port can still forward to it. Either way, no per-instance health proxy
+container is rendered — the workload itself always serves `9878`.
+
 ## Status
 
 `vcpe status --name <deployment>` requests only the persisted loopback HTTP

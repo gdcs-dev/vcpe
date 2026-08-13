@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strconv"
 	"testing"
+	"time"
 )
 
 func TestCollectorCollectsAndValidatesResponses(t *testing.T) {
@@ -56,5 +57,52 @@ func TestCollectorCollectsAndValidatesResponses(t *testing.T) {
 	}
 	if observation := byService["invalid"]; observation.State != "unknown" || observation.Error == "" {
 		t.Fatalf("malformed observation = %#v", observation)
+	}
+}
+
+// TestCollectorTimesOutSlowEndpointWithoutAffectingOthers proves collection
+// stays HTTP-only: a bounded timeout isolates one slow, still-listening
+// endpoint (never a Podman/exec discovery fallback) and leaves the other
+// endpoint's result unaffected.
+func TestCollectorTimesOutSlowEndpointWithoutAffectingOthers(t *testing.T) {
+	slow := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		time.Sleep(200 * time.Millisecond)
+		_ = json.NewEncoder(writer).Encode(validResponse())
+	}))
+	defer slow.Close()
+	fast := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(writer).Encode(validResponse())
+	}))
+	defer fast.Close()
+	slowHost, slowPortText, err := net.SplitHostPort(slow.Listener.Addr().String())
+	if err != nil {
+		t.Fatalf("split slow server address: %v", err)
+	}
+	slowPort, err := strconv.Atoi(slowPortText)
+	if err != nil {
+		t.Fatalf("parse slow server port: %v", err)
+	}
+	fastHost, fastPortText, err := net.SplitHostPort(fast.Listener.Addr().String())
+	if err != nil {
+		t.Fatalf("split fast server address: %v", err)
+	}
+	fastPort, err := strconv.Atoi(fastPortText)
+	if err != nil {
+		t.Fatalf("parse fast server port: %v", err)
+	}
+
+	observations := NewCollector(20*time.Millisecond, 2).Collect(context.Background(), []Target{
+		{Deployment: "edge", Service: "slow", Replica: 0, Host: slowHost, Port: slowPort},
+		{Deployment: "edge", Service: "fast", Replica: 0, Host: fastHost, Port: fastPort},
+	})
+	byService := map[string]Observation{}
+	for _, observation := range observations {
+		byService[observation.Target.Service] = observation
+	}
+	if observation := byService["slow"]; observation.State != "unknown" || observation.Error == "" {
+		t.Fatalf("expected the slow endpoint to time out as unknown, got %#v", observation)
+	}
+	if observation := byService["fast"]; observation.State != "healthy" || observation.Response == nil {
+		t.Fatalf("expected the fast endpoint's result unaffected by the other's timeout, got %#v", observation)
 	}
 }

@@ -240,31 +240,14 @@ func renderGatewayCompose(input render.Input, inst plan.Instance) string {
 	}
 	instanceName := fmt.Sprintf("%s-%d", input.Service.Name, inst.Index+1)
 	services := map[string]any{instanceName: svc}
-	// The manifest opts a self-addressed gateway into a health transport
-	// sidecar by marking one interface healthUpstream; which role it names
-	// does not matter here since the workload and its sidecar reach each
-	// other over the shared, Podman-managed health network by service name.
 	svcNets, _ := svc["networks"].(map[string]any)
-	if healthPort := input.HealthPorts[inst.Index]; hasHealthUpstream(inst.Interfaces) {
-		servicetemplate.AttachProxySidecar(input, instanceName, healthPort, services, topNets, svcNets, svc)
-	}
+	servicetemplate.AttachHealthPublication(input, inst, input.HealthPorts[inst.Index], topNets, svcNets, svc)
 	doc := map[string]any{
 		"services": services,
 		"networks": topNets,
 	}
 	out, _ := yaml.Marshal(doc)
 	return string(out)
-}
-
-// hasHealthUpstream reports whether the manifest opted this instance into a
-// health transport sidecar by marking one of its interfaces healthUpstream.
-func hasHealthUpstream(interfaces []plan.Interface) bool {
-	for _, iface := range interfaces {
-		if iface.HealthUpstream {
-			return true
-		}
-	}
-	return false
 }
 
 // Register wires this service type into the global registry. It is idempotent.

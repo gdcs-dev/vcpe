@@ -6,6 +6,10 @@ Before=network-online.target
 
 [Service]
 Type=oneshot
+# systemd does not forward its own inherited (Podman-set) environment to
+# spawned units by default; without this, IFACE_MGMT_NETWORK_MANAGED reads as
+# unset here and network-init.sh wrongly runs dhclient on a managed network.
+PassEnvironment=IFACE_MGMT_ADDRESSING IFACE_MGMT_NETWORK_MANAGED
 ExecStart=/usr/local/bin/oktopus-network-init
 RemainAfterExit=yes
 

@@ -143,7 +143,6 @@ func validateServices(doc Document, networks map[string][]netip.Prefix) error {
 
 func validateServiceInterfaces(svc Service, networks map[string][]netip.Prefix) error {
 	defaultRoutes := 0
-	healthUpstreams := 0
 	for _, iface := range svc.Interfaces {
 		if iface.Role == "" {
 			return fmt.Errorf("service %q has an interface with no role", svc.Name)
@@ -151,9 +150,6 @@ func validateServiceInterfaces(svc Service, networks map[string][]netip.Prefix) 
 		prefixes, ok := networks[iface.Role]
 		if !ok {
 			return fmt.Errorf("service %q interface references unknown network role %q", svc.Name, iface.Role)
-		}
-		if iface.HealthUpstream {
-			healthUpstreams++
 		}
 		// Explicit MAC/addresses are unambiguous only for a single replica; with
 		// replicas > 1 IPAM allocates per replica and MACs are indexed.
@@ -179,9 +175,6 @@ func validateServiceInterfaces(svc Service, networks map[string][]netip.Prefix) 
 	}
 	if defaultRoutes > 1 {
 		return fmt.Errorf("service %q declares %d default routes: at most one interface may set defaultRoute", svc.Name, defaultRoutes)
-	}
-	if healthUpstreams > 1 {
-		return fmt.Errorf("service %q declares %d healthUpstream interfaces: at most one interface may set healthUpstream", svc.Name, healthUpstreams)
 	}
 	return nil
 }

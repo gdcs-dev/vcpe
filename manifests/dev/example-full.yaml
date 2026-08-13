@@ -112,7 +112,7 @@ spec:
         pullPolicy: build-if-missing
         buildContext: services/gateway
       interfaces:
-        - { role: wan, device: erouter0, healthUpstream: false, addressing: dhcp, defaultRoute: true }
+        - { role: wan, device: erouter0, addressing: dhcp, defaultRoute: true }
         - { role: cm, device: wan0, addressing: dhcp }
         - { role: lan-p1, device: eth0, bridge: brlan0 }
         - { role: lan-p2, device: eth1, bridge: brlan0 }
@@ -176,15 +176,3 @@ spec:
         command: ["sleep", "infinity"]
       dependsOn:
         - gateway
-    - name: oktopus
-      type: oktopus
-      replicas: 1
-      image:
-        repository: "ghcr.io/gdcs-dev/oktopus"
-        tag: dev
-        pullPolicy: build-if-missing
-        buildContext: services/oktopus
-      interfaces:
-        - role: mgmt
-      dependsOn:
-        - bng

@@ -112,7 +112,7 @@ spec:
         pullPolicy: build-if-missing
         buildContext: services/gateway
       interfaces:
-        - { role: wan, device: erouter0, healthUpstream: false, addressing: dhcp, defaultRoute: true }
+        - { role: wan, device: erouter0, addressing: dhcp, defaultRoute: true }
         - { role: cm, device: wan0, addressing: dhcp }
         - { role: lan-p1, device: eth0, bridge: brlan0 }
         - { role: lan-p2, device: eth1, bridge: brlan0 }

@@ -81,3 +81,37 @@ func TestEventSinkStaticAddressingPinsIPv4(t *testing.T) {
 		t.Fatalf("compose.yaml missing pinned ipv4_address:\n%s", compose)
 	}
 }
+
+// TestEventSinkComposeGrantsNetworkCapabilities verifies the rendered
+// workload requests the privileges its entrypoint needs (ip link/dhclient),
+// matching every other renderer that manages its own interfaces.
+func TestEventSinkComposeGrantsNetworkCapabilities(t *testing.T) {
+	eventsink.Register()
+	st, _ := typeregistry.Lookup("event-sink")
+
+	dep := plan.Deployment{Name: "edge", Networks: []plan.Network{{Role: "mgmt", Bridge: "edge-mgmt"}}}
+	svc := plan.Service{
+		Name:  "event-sink",
+		Type:  "event-sink",
+		Image: manifest.Image{Repository: "ghcr.io/gdcs-dev/event-sink", Tag: "dev"},
+		Instances: []plan.Instance{{Interfaces: []plan.Interface{
+			{Role: "mgmt", Network: "edge-mgmt", Device: "eth0", MAC: "02:00:00:00:00:0a", ManagedNetwork: true},
+		}}},
+	}
+
+	result, err := st.Renderer().Render(context.Background(), render.Input{Deployment: dep, Service: svc})
+	if err != nil {
+		t.Fatalf("render event-sink: %v", err)
+	}
+	compose := ""
+	for _, a := range result.Artifacts {
+		if a.Key == "compose.yaml" {
+			compose = a.Content
+		}
+	}
+	for _, want := range []string{"privileged: true", "NET_ADMIN", "NET_RAW"} {
+		if !strings.Contains(compose, want) {
+			t.Fatalf("compose.yaml missing %q:\n%s", want, compose)
+		}
+	}
+}

@@ -4,7 +4,7 @@
 TBD - created by archiving change consolidate-controlplane-reuse. Update Purpose after archive.
 ## Requirements
 ### Requirement: Shared renderer lifecycle
-Built-in service renderers SHALL delegate common renderer lifecycle mechanics to a shared typed implementation. The shared implementation SHALL own required-hook validation, no-instance validation, typed config decoding, replica traversal, standard artifact placement, Compose fragment aggregation, renderer result identity, standard Compose service-block construction, and the two established health-sidecar mechanisms. Service packages SHALL retain ownership of service-specific environment values, network attachment triggers, health-sidecar trigger conditions, generated auxiliary configuration content, and any Compose field not covered by the shared service-block builder or the capped escape-hatch hook.
+Built-in service renderers SHALL delegate common renderer lifecycle mechanics to a shared typed implementation. The shared implementation SHALL own required-hook validation, no-instance validation, typed config decoding, replica traversal, standard artifact placement, Compose fragment aggregation, renderer result identity, standard Compose service-block construction, and the two established shared health responsibilities (direct endpoint publication and namespace-sharing probe execution). Service packages SHALL retain ownership of service-specific environment values, network attachment triggers, health-sidecar trigger conditions, generated auxiliary configuration content, and any Compose field not covered by the shared service-block builder or the capped escape-hatch hook.
 
 #### Scenario: Per-instance service uses shared lifecycle
 - **WHEN** a built-in service type renders multiple resolved instances
@@ -41,20 +41,20 @@ The shared renderer lifecycle SHALL provide one builder that constructs a Compos
 - **WHEN** a type supplies the shared MAC-only attachment function
 - **THEN** the shared builder pins `mac_address` and never pins `ipv4_address`, regardless of network management
 
-### Requirement: Shared health-sidecar mechanisms
-The shared renderer lifecycle SHALL provide exactly two reusable health-sidecar builders: a proxy-sidecar builder for workloads reached by service name over the shared external health network, and a probe-sidecar builder for workloads whose sidecar shares the workload's network namespace and runs a caller-supplied probe command. A service type SHALL decide whether and when to invoke a builder using its own trigger condition; the shared lifecycle MUST NOT decide sidecar necessity on a type's behalf.
+### Requirement: Shared direct health publication
+The shared renderer infrastructure SHALL provide one reusable direct-publication helper that attaches an intended workload service to the deployment's external health network and adds its allocated loopback-only health port mapping. The helper MUST mutate only the selected workload service and MUST NOT add a separate transport proxy service.
 
-#### Scenario: Proxy sidecar reproduces existing shape
-- **WHEN** a type invokes the shared proxy-sidecar builder for an instance
-- **THEN** the produced sidecar service is semantically equivalent to the sidecar previously hand-built by that type, including its `entrypoint`, `--proxy-url`/`--timeout` command, external health network attachment, host port mapping, and `restart: unless-stopped` policy
+#### Scenario: Direct helper renders the managed health path
+- **WHEN** a renderer invokes the direct-publication helper for an instance
+- **THEN** the workload service receives the external `aa-health` attachment and `127.0.0.1:<allocated-port>:9878` mapping without a proxy service
 
-#### Scenario: Probe sidecar reproduces existing shape
-- **WHEN** a type invokes the shared probe-sidecar builder for an instance with a caller-supplied command
-- **THEN** the produced sidecar service is semantically equivalent to the sidecar previously hand-built by that type, including sharing the workload's network namespace via `network_mode: service:<instance>` and depending on the workload instance
+#### Scenario: Zero health port is a no-op
+- **WHEN** a renderer invokes the direct-publication helper with no allocated health port
+- **THEN** the helper adds no health network, port mapping, dependency, or service
 
-#### Scenario: Sidecar trigger stays service-owned
-- **WHEN** a service type's own trigger condition (e.g. a manifest-declared `healthUpstream` interface, or a configured health probe) evaluates false for an instance
-- **THEN** the shared lifecycle does not add a health-sidecar service for that instance
+#### Scenario: Namespace-sharing probe inherits workload transport
+- **WHEN** a generic-container probe helper shares a directly published workload's network namespace
+- **THEN** the probe helper receives no separate `networks` entry or host port mapping
 
 ### Requirement: Explicit replica rendering strategies
 The shared renderer lifecycle SHALL provide an explicit per-instance strategy for services that consume resolved `plan.Instance` values and an explicit interpolated strategy for services that generate all replica definitions together. A renderer MUST select its strategy declaratively and the shared lifecycle MUST NOT infer the strategy from service names or artifact content.
@@ -208,7 +208,7 @@ Every consolidation slice SHALL be preceded or accompanied by tests that charact
 - **THEN** the control plane builds and all environment-independent Go tests pass, with any environment-gated failures documented separately
 
 ### Requirement: Consolidation boundaries
-The change MUST NOT consolidate Docker and Podman CLI argument builders, persistence query scanning, manifest and plan models, runtime-init binary entrypoints, wizard workflows with distinct domain behavior, service-specific auxiliary configuration generation (e.g. DHCP/RADVD/DNS/firewall content, generated entrypoints), or any health mechanism beyond the two already-established shared shapes (proxy sidecar, probe sidecar). A new shared hook or attachment variant SHALL be introduced only when at least two production consumers already share the identical behavioral contract; the shared Compose escape hatch MUST remain a single mutator hook and MUST NOT grow a dedicated flag per Compose field.
+The change MUST NOT consolidate Docker and Podman CLI argument builders, persistence query scanning, manifest and plan models, runtime-init binary entrypoints, wizard workflows with distinct domain behavior, service-specific auxiliary configuration generation (e.g. DHCP/RADVD/DNS/firewall content, generated entrypoints), or any health mechanism beyond the two established shared responsibilities (direct endpoint publication and namespace-sharing probe execution). A new shared hook or attachment variant SHALL be introduced only when at least two production consumers already share the identical behavioral contract; the shared Compose escape hatch MUST remain a single mutator hook and MUST NOT grow a dedicated flag per Compose field.
 
 #### Scenario: Similar code with different policy remains separate
 - **WHEN** two implementations have similar control flow but different error, network, lifecycle, or security semantics
@@ -223,8 +223,8 @@ The change MUST NOT consolidate Docker and Podman CLI argument builders, persist
 - **THEN** it remains local unless it establishes an already-specified ownership boundary
 
 #### Scenario: A third health mechanism stays local
-- **WHEN** a service type needs a health-delivery mechanism that is neither the shared proxy-sidecar nor probe-sidecar shape
-- **THEN** that type constructs its own local Compose fragment for it rather than extending the shared health-sidecar builders
+- **WHEN** a service type needs a health-delivery mechanism that is neither direct endpoint publication nor namespace-sharing probe execution
+- **THEN** that type constructs its own local Compose fragment rather than extending the shared health helpers
 
 #### Scenario: Escape hatch does not grow per-field flags
 - **WHEN** a service type needs a Compose field the shared builder does not already produce

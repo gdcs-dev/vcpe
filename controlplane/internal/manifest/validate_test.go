@@ -1,6 +1,8 @@
 package manifest
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -36,6 +38,39 @@ func validDoc() Document {
 func TestValidateAcceptsWellFormedDocument(t *testing.T) {
 	if err := Validate(validDoc()); err != nil {
 		t.Fatalf("expected valid document, got %v", err)
+	}
+}
+
+// TestLoadRejectsHealthUpstreamAsUnknownField proves the removed
+// services[].interfaces[].healthUpstream field has no alias or compatibility
+// path: strict decoding rejects it outright.
+func TestLoadRejectsHealthUpstreamAsUnknownField(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "manifest.yaml")
+	content := "apiVersion: vcpe.dev/v1\nkind: Deployment\nmetadata:\n  name: edge\nspec:\n  networks:\n    - role: wan\n      ipamDriver: none\n      ipv4: { cidr: 10.7.200.0/24, gateway: 10.7.200.1 }\n  services:\n    - name: gateway\n      type: gateway\n      replicas: 1\n      image: { repository: ghcr.io/gdcs-dev/gateway, tag: dev }\n      interfaces:\n        - { role: wan, device: erouter0, ipv4: \"10.7.200.10\", addressing: static, healthUpstream: true }\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "healthUpstream") {
+		t.Fatalf("Load() error = %v, want an unknown-field error mentioning healthUpstream", err)
+	}
+}
+
+// TestLoadAcceptsSelfAddressedServiceWithoutHealthAnnotation proves a
+// self-addressed health-capable service (no Podman-managed network) needs no
+// replacement annotation: health publication is automatic and control-plane
+// owned, not manifest-declared.
+func TestLoadAcceptsSelfAddressedServiceWithoutHealthAnnotation(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "manifest.yaml")
+	content := "apiVersion: vcpe.dev/v1\nkind: Deployment\nmetadata:\n  name: edge\nspec:\n  networks:\n    - role: wan\n      ipamDriver: none\n      ipv4: { cidr: 10.7.200.0/24, gateway: 10.7.200.1 }\n  services:\n    - name: gateway\n      type: gateway\n      replicas: 1\n      image: { repository: ghcr.io/gdcs-dev/gateway, tag: dev }\n      interfaces:\n        - { role: wan, device: erouter0, ipv4: \"10.7.200.10\", addressing: static }\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+	doc, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v, want a self-addressed service to need no health annotation", err)
+	}
+	if err := Validate(doc); err != nil {
+		t.Fatalf("Validate() error = %v", err)
 	}
 }
 
