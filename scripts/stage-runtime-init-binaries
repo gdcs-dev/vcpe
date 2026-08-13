@@ -19,6 +19,8 @@ if [[ -z "${TARGET_GOARCH:-}" ]]; then
             ;;
     esac
 fi
+
+echo "TARGET_GOOS:   $TARGET_GOOS"
 echo "TARGET_GOARCH: $TARGET_GOARCH"
 
 ARTIFACT_BIN_DIR="$REPO_ROOT/.local/artifacts/runtime-init/${TARGET_GOOS}-${TARGET_GOARCH}/bin"

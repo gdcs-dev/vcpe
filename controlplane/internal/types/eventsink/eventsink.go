@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/gdcs-dev/vcpe/controlplane/internal/plan"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/render"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/render/servicetemplate"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/typeregistry"
@@ -67,25 +68,21 @@ func decodeConfig(node yaml.Node) (Config, error) {
 	return cfg, nil
 }
 
+// alwaysPinAttachment always pins mac_address and ipv4_address, regardless of
+// the network's managed status. This is event-sink's existing behavior,
+// distinct from the shared DefaultAttachment's managed-conditional ipv4
+// pinning; preserved here rather than folded into a shared helper.
+func alwaysPinAttachment(iface plan.Interface, _ bool) map[string]any {
+	return map[string]any{"mac_address": iface.MAC, "ipv4_address": iface.IPv4}
+}
+
 func renderInstance(_ context.Context, input render.Input, cfg Config) (render.Result, error) {
 	instance := input.Service.Instances[0]
 	env := render.IfaceEnv(input.Deployment, input.Service, instance)
 	env = append(env, render.SortedEnv(cfg.Env)...)
-	services := map[string]any{}
-	networks := map[string]any{}
-	serviceNetworks := map[string]any{}
-	for _, iface := range instance.Interfaces {
-		serviceNetworks[iface.Role] = map[string]any{"mac_address": iface.MAC, "ipv4_address": iface.IPv4}
-		networks[iface.Role] = map[string]any{"external": true, "name": iface.Network}
-	}
+
+	svc, networks := servicetemplate.BuildComposeService(input, instance, alwaysPinAttachment)
 	instanceName := fmt.Sprintf("%s-%d", input.Service.Name, instance.Index+1)
-	svc := map[string]any{
-		"image":          render.ImageRef(input.Service.Image),
-		"container_name": input.Deployment.Name + "-" + instanceName,
-		"hostname":       instanceName,
-		"env_file":       []string{fmt.Sprintf("instances/%d/compose.env", instance.Index+1)},
-		"networks":       serviceNetworks,
-	}
 	ports := append([]string(nil), input.Service.Ports...)
 	if healthPort := input.HealthPorts[instance.Index]; healthPort != 0 {
 		ports = append(ports, fmt.Sprintf("127.0.0.1:%d:9878", healthPort))
@@ -93,7 +90,7 @@ func renderInstance(_ context.Context, input render.Input, cfg Config) (render.R
 	if len(ports) > 0 {
 		svc["ports"] = ports
 	}
-	services[instanceName] = svc
+	services := map[string]any{instanceName: svc}
 	compose, err := yaml.Marshal(map[string]any{"services": services, "networks": networks})
 	if err != nil {
 		return render.Result{}, fmt.Errorf("marshal event-sink compose: %w", err)

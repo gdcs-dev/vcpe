@@ -39,6 +39,24 @@ func (a *Adapter) BuildImage(ctx context.Context, req image.BuildRequest) error 
 			req.File = candidate
 		}
 	}
+
+	// Single/no-platform build: restage the committed runtime-init binary for
+	// that exact arch immediately before building (see the podman adapter for
+	// the same restaging rationale). NOTE: a multi-platform buildx build
+	// (len(req.Platforms) > 1) compiles all platforms from one Containerfile
+	// invocation, so restaging here cannot fix every platform's COPY of the
+	// committed binary — only the podman backend's per-platform build loop
+	// does that correctly today.
+	if len(req.Platforms) <= 1 {
+		platform := ""
+		if len(req.Platforms) > 0 {
+			platform = req.Platforms[0]
+		}
+		if err := image.StageRuntimeInitBinaries(ctx, req.Context, platform); err != nil {
+			return err
+		}
+	}
+
 	args, err := buildImageArgs(req)
 	if err != nil {
 		return err

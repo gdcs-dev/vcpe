@@ -228,27 +228,9 @@ func renderGatewayInstance(_ context.Context, input render.Input, cfg Config) (r
 // services/gateway/compose.yaml when the gateway connects to non-standard roles
 // (e.g. lan-7-p1 instead of lan-p1).
 func renderGatewayCompose(input render.Input, inst plan.Instance) string {
-	svcNets := map[string]any{}
-	topNets := map[string]any{}
-	for _, iface := range inst.Interfaces {
-		svcNets[iface.Role] = map[string]any{
-			"mac_address": iface.MAC,
-		}
-		topNets[iface.Role] = map[string]any{
-			"external": true,
-			"name":     iface.Network,
-		}
-	}
-	instanceName := fmt.Sprintf("%s-%d", input.Service.Name, inst.Index+1)
-	svc := map[string]any{
-		"image":          render.ImageRef(input.Service.Image),
-		"container_name": input.Deployment.Name + "-" + instanceName,
-		"hostname":       instanceName,
-		"privileged":     true,
-		"cap_add":        []string{"NET_ADMIN", "NET_RAW"},
-		"env_file":       []string{fmt.Sprintf("instances/%d/compose.env", inst.Index+1)},
-		"networks":       svcNets,
-	}
+	svc, topNets := servicetemplate.BuildComposeService(input, inst, servicetemplate.MACOnlyAttachment)
+	svc["privileged"] = true
+	svc["cap_add"] = []string{"NET_ADMIN", "NET_RAW"}
 	if len(input.Service.Volumes) > 0 {
 		svc["volumes"] = input.Service.Volumes
 	}
@@ -256,29 +238,15 @@ func renderGatewayCompose(input render.Input, inst plan.Instance) string {
 	if len(ports) > 0 {
 		svc["ports"] = ports
 	}
+	instanceName := fmt.Sprintf("%s-%d", input.Service.Name, inst.Index+1)
 	services := map[string]any{instanceName: svc}
 	// The manifest opts a self-addressed gateway into a health transport
 	// sidecar by marking one interface healthUpstream; which role it names
 	// does not matter here since the workload and its sidecar reach each
 	// other over the shared, Podman-managed health network by service name.
-	if healthPort := input.HealthPorts[inst.Index]; healthPort != 0 && hasHealthUpstream(inst.Interfaces) {
-		healthNetworkName := input.Deployment.Name + "-00-health"
-		topNets["aa-health"] = map[string]any{"external": true, "name": healthNetworkName}
-		svcNets["aa-health"] = map[string]any{}
-		healthServiceName := instanceName + "-health"
-		svc["depends_on"] = []string{healthServiceName}
-		services[healthServiceName] = map[string]any{
-			"image":          render.ImageRef(input.Service.Image),
-			"container_name": input.Deployment.Name + "-" + instanceName + "-health",
-			"entrypoint":     []string{"/usr/local/bin/vcpe-healthd"},
-			// The upstream's own checks run sequentially and can each take up
-			// to its own probe timeout, so the proxy waits longer than any
-			// single check to avoid timing out on a slow-but-valid response.
-			"command":  []string{"--proxy-url", "http://" + instanceName + ":9878/health", "--timeout", "10s"},
-			"networks": map[string]any{"aa-health": map[string]any{}},
-			"ports":    []string{fmt.Sprintf("127.0.0.1:%d:9878", healthPort)},
-			"restart":  "unless-stopped",
-		}
+	svcNets, _ := svc["networks"].(map[string]any)
+	if healthPort := input.HealthPorts[inst.Index]; hasHealthUpstream(inst.Interfaces) {
+		servicetemplate.AttachProxySidecar(input, instanceName, healthPort, services, topNets, svcNets, svc)
 	}
 	doc := map[string]any{
 		"services": services,

@@ -364,16 +364,7 @@ func generateCompose(input render.Input, cfg Config) (string, error) {
 		entry["hostname"] = fmt.Sprintf("${SERVICE_NAME}-%d", i+1)
 		services[fmt.Sprintf("%s-%d", input.Service.Name, i+1)] = entry
 		if cfg.Health != nil {
-			healthService := map[string]any{
-				"image":        render.ImageRef(input.Service.Image),
-				"network_mode": fmt.Sprintf("service:%s-%d", input.Service.Name, i+1),
-				"depends_on":   []string{fmt.Sprintf("%s-%d", input.Service.Name, i+1)},
-				"restart":      "unless-stopped",
-				"volumes":      []string{"./vcpe-healthd:/run/vcpe/vcpe-healthd:ro"},
-				"entrypoint":   []string{"/run/vcpe/vcpe-healthd"},
-			}
-			healthService["command"] = genericHealthCommand(cfg.Health)
-			services[fmt.Sprintf("%s-health-%d", input.Service.Name, i+1)] = healthService
+			servicetemplate.AttachProbeSidecar(services, input.Service.Name, i, render.ImageRef(input.Service.Image), genericHealthCommand(cfg.Health))
 		}
 	}
 

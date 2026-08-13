@@ -101,15 +101,10 @@ func renderInstance(_ context.Context, input render.Input, cfg Config) (render.R
 // generateCompose builds the compose.yaml for the oktopus container, wiring
 // the mgmt network attachment and any port mappings from the manifest.
 func generateCompose(input render.Input, inst plan.Instance) string {
-	services, networks := map[string]any{}, map[string]any{}
-	svcNets := map[string]any{}
-	for _, iface := range inst.Interfaces {
-		svcNets[iface.Role] = map[string]any{"mac_address": iface.MAC, "ipv4_address": iface.IPv4}
-		networks[iface.Role] = map[string]any{"external": true, "name": iface.Network}
-	}
-	instanceName := fmt.Sprintf("%s-%d", input.Service.Name, inst.Index+1)
-	volumes := append([]string{"./runtime/mongo:/var/lib/mongodb", "./runtime/nats:/var/lib/nats/jetstream"}, input.Service.Volumes...)
-	svc := map[string]any{"image": render.ImageRef(input.Service.Image), "container_name": input.Deployment.Name + "-" + instanceName, "hostname": instanceName, "privileged": true, "cap_add": []string{"NET_ADMIN", "NET_RAW"}, "env_file": []string{fmt.Sprintf("instances/%d/compose.env", inst.Index+1)}, "volumes": volumes, "networks": svcNets}
+	svc, networks := servicetemplate.BuildComposeService(input, inst, alwaysPinAttachment)
+	svc["privileged"] = true
+	svc["cap_add"] = []string{"NET_ADMIN", "NET_RAW"}
+	svc["volumes"] = append([]string{"./runtime/mongo:/var/lib/mongodb", "./runtime/nats:/var/lib/nats/jetstream"}, input.Service.Volumes...)
 	ports := append([]string(nil), input.Service.Ports...)
 	if healthPort := input.HealthPorts[inst.Index]; healthPort != 0 {
 		ports = append(ports, fmt.Sprintf("127.0.0.1:%d:9878", healthPort))
@@ -117,9 +112,17 @@ func generateCompose(input render.Input, inst plan.Instance) string {
 	if len(ports) > 0 {
 		svc["ports"] = ports
 	}
-	services[instanceName] = svc
-	out, _ := yaml.Marshal(map[string]any{"services": services, "networks": networks})
+	instanceName := fmt.Sprintf("%s-%d", input.Service.Name, inst.Index+1)
+	out, _ := yaml.Marshal(map[string]any{"services": map[string]any{instanceName: svc}, "networks": networks})
 	return string(out)
+}
+
+// alwaysPinAttachment always pins mac_address and ipv4_address, regardless of
+// the network's managed status. This is oktopus's existing behavior, distinct
+// from the shared DefaultAttachment's managed-conditional ipv4 pinning;
+// preserved here rather than folded into a shared helper.
+func alwaysPinAttachment(iface plan.Interface, _ bool) map[string]any {
+	return map[string]any{"mac_address": iface.MAC, "ipv4_address": iface.IPv4}
 }
 
 func oktopusEnv(input render.Input, instance plan.Instance, cfg Config) []string {

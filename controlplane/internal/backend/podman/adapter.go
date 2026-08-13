@@ -269,6 +269,37 @@ func (a *Adapter) BuildImage(ctx context.Context, req image.BuildRequest) error 
 		exec.CommandContext(ctx, "podman", "manifest", "rm", req.Tags[0]).Run() //nolint:errcheck
 		exec.CommandContext(ctx, "podman", "rmi", "--force", req.Tags[0]).Run() //nolint:errcheck
 	}
+
+	// Multiple platforms: build one at a time so the committed runtime-init
+	// binary can be restaged for each arch immediately before its build runs
+	// (a single combined --platform a,b build would COPY whichever arch was
+	// staged last into every platform's image). Each invocation appends to
+	// the same --manifest list.
+	if len(req.Platforms) > 1 {
+		for _, platform := range req.Platforms {
+			if err := image.StageRuntimeInitBinaries(ctx, req.Context, platform); err != nil {
+				return err
+			}
+			singleReq := req
+			singleReq.Platforms = []string{platform}
+			if err := a.runBuildImage(ctx, singleReq); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	platform := ""
+	if len(req.Platforms) > 0 {
+		platform = req.Platforms[0]
+	}
+	if err := image.StageRuntimeInitBinaries(ctx, req.Context, platform); err != nil {
+		return err
+	}
+	return a.runBuildImage(ctx, req)
+}
+
+func (a *Adapter) runBuildImage(ctx context.Context, req image.BuildRequest) error {
 	args, err := buildImageArgs(req)
 	if err != nil {
 		return err

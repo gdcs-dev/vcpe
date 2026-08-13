@@ -20,9 +20,9 @@ RUN systemctl enable parodus
 RUN systemctl enable parodus2rbus
 RUN systemctl enable rbus
 RUN systemctl enable rbus-elements
-#COPY --chmod=644 container/syscfg.service /usr/lib/systemd/system/
-#COPY --chmod=755 container/syscfg_init.sh /usr/local/bin/
-#RUN systemctl enable syscfg
+COPY --chmod=644 container/syscfg.service /usr/lib/systemd/system/
+COPY --chmod=755 container/syscfg_init.sh /usr/local/bin/
+RUN systemctl enable syscfg
 #COPY --chmod=644 container/telemetry2_0.service /usr/lib/systemd/system/
 RUN mkdir -p /nvram
 RUN systemctl enable telemetry2_0

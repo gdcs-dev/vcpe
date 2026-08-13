@@ -137,15 +137,9 @@ func renderInstance(_ context.Context, input render.Input, cfg Config) (render.R
 // the exact interfaces from the resolved instance, pinning each network
 // attachment by MAC address.
 func renderXB10Compose(input render.Input, inst plan.Instance) string {
-	topNets := map[string]any{}
-	services := map[string]any{}
-	svcNets := map[string]any{}
-	for _, iface := range inst.Interfaces {
-		svcNets[iface.Role] = map[string]any{"mac_address": iface.MAC}
-		topNets[iface.Role] = map[string]any{"external": true, "name": iface.Network}
-	}
-	instanceName := fmt.Sprintf("%s-%d", input.Service.Name, inst.Index+1)
-	svc := map[string]any{"image": render.ImageRef(input.Service.Image), "container_name": input.Deployment.Name + "-" + instanceName, "hostname": instanceName, "privileged": true, "cap_add": []string{"NET_ADMIN", "NET_RAW"}, "env_file": []string{fmt.Sprintf("instances/%d/compose.env", inst.Index+1)}, "networks": svcNets}
+	svc, topNets := servicetemplate.BuildComposeService(input, inst, servicetemplate.MACOnlyAttachment)
+	svc["privileged"] = true
+	svc["cap_add"] = []string{"NET_ADMIN", "NET_RAW"}
 	if len(input.Service.Volumes) > 0 {
 		svc["volumes"] = input.Service.Volumes
 	}
@@ -156,9 +150,9 @@ func renderXB10Compose(input render.Input, inst plan.Instance) string {
 	if len(ports) > 0 {
 		svc["ports"] = ports
 	}
-	services[instanceName] = svc
+	instanceName := fmt.Sprintf("%s-%d", input.Service.Name, inst.Index+1)
 	doc := map[string]any{
-		"services": services,
+		"services": map[string]any{instanceName: svc},
 		"networks": topNets,
 	}
 	out, _ := yaml.Marshal(doc)
