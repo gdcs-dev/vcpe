@@ -39,6 +39,10 @@ RUN git clone --depth 1 --branch "${OKTOPUS_REF}" "${OKTOPUS_REPO}" /src
 # ---------------------------------------------------------------------------
 FROM docker.io/library/golang:1.24 AS builder
 
+# Go's async goroutine preemption (SIGURG) crashes QEMU user-mode emulation
+# ("uncaught target signal 11") when cross-building for a non-native arch.
+ENV GODEBUG=asyncpreemptoff=1
+
 WORKDIR /build
 
 COPY --from=source /src/backend/services/mtp/ws            ./mtp/ws
@@ -80,6 +84,9 @@ RUN npm run build
 # Ubuntu 22.04 (Jammy): MongoDB publishes arm64 packages for it.
 # ---------------------------------------------------------------------------
 FROM ubuntu:22.04
+
+ARG TARGETOS
+ARG TARGETARCH
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -138,7 +145,7 @@ COPY --from=builder /out/mqtt-adapter  /usr/local/bin/mqtt-adapter
 COPY --from=builder /out/adapter       /usr/local/bin/adapter
 COPY --from=builder /out/controller    /usr/local/bin/controller
 COPY --from=builder /out/taas          /usr/local/bin/taas
-COPY container/vcpe-healthd /usr/local/bin/vcpe-healthd
+COPY container/platforms/${TARGETOS}-${TARGETARCH}/vcpe-healthd /usr/local/bin/vcpe-healthd
 COPY container/vcpe-healthd.service /etc/systemd/system/vcpe-healthd.service
 COPY container/health-probe.sh /usr/local/bin/oktopus-health-probe
 RUN chmod 0755 /usr/local/bin/oktopus-health-probe

@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/gdcs-dev/vcpe/controlplane/internal/daemon"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/image"
@@ -272,25 +273,76 @@ func runRelease(opts Options) (daemon.CommandResponse, error) {
 		version, strings.Join(deploymentNames, ", "), strings.Join(platforms, ","))
 
 	backend := newImageBackend(backendName)
-	for _, t := range builds {
+	requests := make([]image.BuildRequest, len(builds))
+	for i, t := range builds {
 		versionedRef := fmt.Sprintf("%s:%s", t.repo, version)
 		latestRef := fmt.Sprintf("%s:latest", t.repo)
-		if err := backend.BuildImage(context.Background(), image.BuildRequest{
+		requests[i] = image.BuildRequest{
 			Tags:      []string{versionedRef, latestRef},
 			Context:   t.ctx,
 			File:      t.containerfile,
 			Platforms: t.platforms,
-		}); err != nil {
-			return daemon.CommandResponse{}, fmt.Errorf("release build %s (%s): %w", t.name, versionedRef, err)
 		}
-		// Multi-platform builds push via buildx --push; single-platform builds need an explicit push.
-		if len(t.platforms) <= 1 {
-			for _, ref := range []string{versionedRef, latestRef} {
-				if err := backend.PushImage(context.Background(), image.PushRequest{Reference: ref}); err != nil {
-					return daemon.CommandResponse{}, fmt.Errorf("release push %s (%s): %w", t.name, ref, err)
+	}
+
+	if _, skip := backend.(noopImageBackend); !skip {
+		for i := range requests {
+			if err := image.PrepareBuild(context.Background(), requests[i]); err != nil {
+				return daemon.CommandResponse{}, fmt.Errorf("release prepare %s: %w", builds[i].name, err)
+			}
+			requests[i].ArtifactsPrepared = true
+		}
+	}
+
+	releaseCtx, cancelRelease := context.WithCancel(context.Background())
+	defer cancelRelease()
+	jobs := make(chan int, len(builds))
+	errs := make(chan error, len(builds))
+	for i := range builds {
+		jobs <- i
+	}
+	close(jobs)
+
+	workerCount := len(builds)
+	if workerCount > 3 {
+		workerCount = 3
+	}
+	var workers sync.WaitGroup
+	workers.Add(workerCount)
+	for range workerCount {
+		go func() {
+			defer workers.Done()
+			for i := range jobs {
+				t := builds[i]
+				request := requests[i]
+				versionedRef := request.Tags[0]
+				if err := backend.BuildImage(releaseCtx, request); err != nil {
+					errs <- fmt.Errorf("release build %s (%s): %w", t.name, versionedRef, err)
+					cancelRelease()
+					return
+				}
+				// Multi-platform builds push as part of manifest-list creation.
+				if len(t.platforms) <= 1 {
+					for _, ref := range request.Tags {
+						if err := backend.PushImage(releaseCtx, image.PushRequest{Reference: ref}); err != nil {
+							errs <- fmt.Errorf("release push %s (%s): %w", t.name, ref, err)
+							cancelRelease()
+							return
+						}
+					}
 				}
 			}
-		}
+		}()
+	}
+	workers.Wait()
+	close(errs)
+	if err, ok := <-errs; ok {
+		return daemon.CommandResponse{}, err
+	}
+
+	for i, t := range builds {
+		versionedRef := requests[i].Tags[0]
+		latestRef := requests[i].Tags[1]
 		fmt.Fprintf(&b, "  %s: pushed as %s, %s\n", t.name, versionedRef, latestRef)
 	}
 

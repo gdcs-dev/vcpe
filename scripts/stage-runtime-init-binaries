@@ -24,6 +24,21 @@ echo "TARGET_GOOS:   $TARGET_GOOS"
 echo "TARGET_GOARCH: $TARGET_GOARCH"
 
 ARTIFACT_BIN_DIR="$REPO_ROOT/.local/artifacts/runtime-init/${TARGET_GOOS}-${TARGET_GOARCH}/bin"
+BUILD_TMP_DIR=$(mktemp -d "${TMPDIR:-/tmp}/vcpe-runtime-init.XXXXXX")
+trap 'rm -rf "$BUILD_TMP_DIR"' EXIT
+
+atomic_install() {
+    local source=$1
+    local destination=$2
+    local destination_dir
+    local temporary
+    destination_dir=$(dirname "$destination")
+    mkdir -p "$destination_dir"
+    temporary=$(mktemp "${destination}.tmp.XXXXXX")
+    cp "$source" "$temporary"
+    chmod +x "$temporary"
+    mv -f "$temporary" "$destination"
+}
 
 usage() {
     cat <<'EOF'
@@ -32,9 +47,9 @@ Usage: scripts/stage-runtime-init-binaries [service ...]
 Builds runtime-init binaries and vcpe-healthd from controlplane/cmd and stages them
 into:
     - .local/artifacts/runtime-init/<goos>-<goarch>/bin
-  - services/<service>/container/runtime-init-<service> (when service image exists)
+    - services/<service>/container/platforms/<goos>-<goarch> (when service image exists)
 
-By default builds linux/amd64 binaries. Override with:
+By default builds for Linux and auto-detects the target architecture. Override with:
     TARGET_GOOS=<goos> TARGET_GOARCH=<goarch>
 
 If no services are provided, stages all known services.
@@ -68,11 +83,12 @@ fi
 
 mkdir -p "$ARTIFACT_BIN_DIR"
 
-healthd_bin="$ARTIFACT_BIN_DIR/vcpe-healthd"
+healthd_bin="$BUILD_TMP_DIR/vcpe-healthd"
 (
     cd "$CONTROLPLANE_ROOT"
     CGO_ENABLED=0 GOOS="$TARGET_GOOS" GOARCH="$TARGET_GOARCH" go build -o "$healthd_bin" ./cmd/vcpe-healthd
 )
+atomic_install "$healthd_bin" "$ARTIFACT_BIN_DIR/vcpe-healthd"
 
 for service in "${services[@]}"; do
     if ! is_known_service "$service"; then
@@ -82,11 +98,10 @@ for service in "${services[@]}"; do
     fi
 
     service_container_dir="$REPO_ROOT/services/$service/container"
+    service_platform_dir="$service_container_dir/platforms/${TARGET_GOOS}-${TARGET_GOARCH}"
     if [[ " ${health_services[*]} " == *" $service "* ]]; then
-        mkdir -p "$service_container_dir"
-        cp "$healthd_bin" "$service_container_dir/vcpe-healthd"
-        chmod +x "$service_container_dir/vcpe-healthd"
-        echo "staged vcpe-healthd -> services/$service/container/vcpe-healthd"
+        atomic_install "$healthd_bin" "$service_platform_dir/vcpe-healthd"
+        echo "staged vcpe-healthd -> services/$service/container/platforms/${TARGET_GOOS}-${TARGET_GOARCH}/vcpe-healthd"
     fi
 
     if [[ " ${runtime_init_services[*]} " != *" $service "* ]]; then
@@ -95,16 +110,16 @@ for service in "${services[@]}"; do
 
     bin_name="runtime-init-$service"
     src_pkg="./cmd/$bin_name"
-    out_bin="$ARTIFACT_BIN_DIR/$bin_name"
+    out_bin="$BUILD_TMP_DIR/$bin_name"
     (
         cd "$CONTROLPLANE_ROOT"
         CGO_ENABLED=0 GOOS="$TARGET_GOOS" GOARCH="$TARGET_GOARCH" go build -o "$out_bin" "$src_pkg"
     )
+    atomic_install "$out_bin" "$ARTIFACT_BIN_DIR/$bin_name"
 
     if [[ -d "$service_container_dir" ]]; then
-        cp "$out_bin" "$service_container_dir/$bin_name"
-        chmod +x "$service_container_dir/$bin_name"
-        echo "staged $bin_name -> services/$service/container/$bin_name"
+        atomic_install "$out_bin" "$service_platform_dir/$bin_name"
+        echo "staged $bin_name -> services/$service/container/platforms/${TARGET_GOOS}-${TARGET_GOARCH}/$bin_name"
     else
         echo "staged $bin_name -> .local/artifacts/runtime-init/${TARGET_GOOS}-${TARGET_GOARCH}/bin (no services/$service/container dir)"
     fi

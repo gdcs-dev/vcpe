@@ -9,10 +9,8 @@ import (
 	"strings"
 )
 
-// runtimeInitServices lists services with a committed runtime-init and/or
-// vcpe-healthd binary under services/<name>/container/. Their Containerfiles
-// COPY a host-built binary, so it must be (re)staged for the exact arch about
-// to be built or a foreign-arch build silently bakes in the wrong-arch binary.
+// runtimeInitServices lists services with a generated runtime-init and/or
+// vcpe-healthd binary under services/<name>/container/platforms/<os>-<arch>/.
 var runtimeInitServices = map[string]bool{
 	"bng": true, "event-sink": true, "gateway": true, "oktopus": true,
 	"routerd": true, "webpa": true, "xb10": true, "client": true,
@@ -33,25 +31,38 @@ func ParsePlatform(platform string) (goos, goarch string, err error) {
 	return parts[0], parts[1], nil
 }
 
-// StageRuntimeInitBinaries rebuilds and restages the committed runtime-init /
-// vcpe-healthd binaries for the given build context and platform via
-// scripts/stage-runtime-init-binaries, so a build always uses a binary
-// matching the platform it's about to build for. It is a no-op for services
-// with no committed runtime-init binaries. Assumes CWD is the repo root,
-// matching the existing convention for BuildRequest.Context/File (relative
-// paths).
-//
-// platform may be "" to mean "no explicit platform" (the request had no
-// Platforms set): the script is invoked without TARGET_GOOS/TARGET_GOARCH so
-// it falls back to its own defaults (GOOS always "linux" — container images
-// are always Linux regardless of host OS — and GOARCH auto-detected from the
-// Podman machine). Callers must NOT substitute the host OS/arch (e.g. Go's
-// runtime.GOOS), since containers never run "darwin".
-func StageRuntimeInitBinaries(ctx context.Context, buildContext, platform string) error {
+// PrepareBuild stages all generated binaries required by a build before the
+// backend snapshots its context. Platform-qualified paths let a multi-platform
+// build select the correct binary without mutating its context while it runs.
+func PrepareBuild(ctx context.Context, req BuildRequest) error {
+	return StageRuntimeInitBinaries(ctx, req.Context, req.Platforms)
+}
+
+// StageRuntimeInitBinaries rebuilds runtime-init and vcpe-healthd for every
+// requested platform. With no explicit platforms, the script uses Linux and
+// auto-detects the target architecture from the local container runtime.
+func StageRuntimeInitBinaries(ctx context.Context, buildContext string, platforms []string) error {
 	service := ServiceNameFromContext(buildContext)
 	if !runtimeInitServices[service] {
 		return nil
 	}
+	if len(platforms) == 0 {
+		platforms = []string{""}
+	}
+	seen := make(map[string]bool, len(platforms))
+	for _, platform := range platforms {
+		if seen[platform] {
+			continue
+		}
+		seen[platform] = true
+		if err := stageRuntimeInitBinaries(ctx, service, platform); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func stageRuntimeInitBinaries(ctx context.Context, service, platform string) error {
 	cmd := exec.CommandContext(ctx, "scripts/stage-runtime-init-binaries", service)
 	cmd.Env = os.Environ()
 	label := "native"

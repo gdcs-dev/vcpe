@@ -31,6 +31,12 @@ func (a *Adapter) ImageExists(ctx context.Context, reference string) (bool, erro
 }
 
 func (a *Adapter) BuildImage(ctx context.Context, req image.BuildRequest) error {
+	if !req.ArtifactsPrepared {
+		if err := image.PrepareBuild(ctx, req); err != nil {
+			return err
+		}
+	}
+
 	// Auto-detect Containerfile when no explicit file is given.
 	// Docker defaults to "Dockerfile" but the vcpe services use "Containerfile".
 	if req.File == "" && req.Context != "" {
@@ -40,23 +46,15 @@ func (a *Adapter) BuildImage(ctx context.Context, req image.BuildRequest) error 
 		}
 	}
 
-	// Single/no-platform build: restage the committed runtime-init binary for
-	// that exact arch immediately before building (see the podman adapter for
-	// the same restaging rationale). NOTE: a multi-platform buildx build
-	// (len(req.Platforms) > 1) compiles all platforms from one Containerfile
-	// invocation, so restaging here cannot fix every platform's COPY of the
-	// committed binary — only the podman backend's per-platform build loop
-	// does that correctly today.
-	if len(req.Platforms) <= 1 {
-		platform := ""
-		if len(req.Platforms) > 0 {
-			platform = req.Platforms[0]
-		}
-		if err := image.StageRuntimeInitBinaries(ctx, req.Context, platform); err != nil {
-			return err
-		}
+	// Multiple platforms use one buildx invocation. Generated binaries were
+	// prepared in platform-qualified context paths before the backend was called.
+	if len(req.Platforms) > 1 {
+		return a.buildMultiPlatform(ctx, req)
 	}
+	return a.runBuildImage(ctx, req)
+}
 
+func (a *Adapter) runBuildImage(ctx context.Context, req image.BuildRequest) error {
 	args, err := buildImageArgs(req)
 	if err != nil {
 		return err
@@ -72,6 +70,42 @@ func (a *Adapter) BuildImage(ctx context.Context, req image.BuildRequest) error 
 		return fmt.Errorf("build docker image %s: %w", primary, err)
 	}
 	return nil
+}
+
+// buildMultiPlatform builds and pushes the complete manifest list in one
+// invocation. TARGETOS/TARGETARCH select platform-qualified generated files.
+func (a *Adapter) buildMultiPlatform(ctx context.Context, req image.BuildRequest) error {
+	args, err := multiPlatformBuildArgs(req)
+	if err != nil {
+		return err
+	}
+	cmd := exec.CommandContext(ctx, "docker", args...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("build multi-platform docker image %s: %w", req.Tags[0], err)
+	}
+	return nil
+}
+
+func multiPlatformBuildArgs(req image.BuildRequest) ([]string, error) {
+	if len(req.Tags) == 0 {
+		return nil, fmt.Errorf("build image tags are required")
+	}
+	if req.Context == "" {
+		return nil, fmt.Errorf("build context is required")
+	}
+	args := []string{"buildx", "build", "--builder", "multiarch", "--push", "--platform", strings.Join(req.Platforms, ",")}
+	for _, tag := range req.Tags {
+		args = append(args, "--tag", tag)
+	}
+	if req.NoCache {
+		args = append(args, "--no-cache")
+	}
+	if req.File != "" {
+		args = append(args, "-f", req.File)
+	}
+	return append(args, req.Context), nil
 }
 
 func (a *Adapter) PullImage(ctx context.Context, req image.PullRequest) error {
@@ -114,11 +148,8 @@ func (a *Adapter) TagImage(ctx context.Context, req image.TagRequest) error {
 	return nil
 }
 
-// buildImageArgs constructs the docker build argument list.
-// Multi-platform (len(Platforms) > 1): uses buildx with --push to produce a
-// manifest list in the registry. Uses whatever buildx builder is currently
-// active (set with `docker buildx use <builder>`).
-// Single platform or no platform: uses plain docker build for a local image.
+// buildImageArgs constructs a plain local Docker build, optionally for one
+// explicit platform. Multi-platform requests use multiPlatformBuildArgs.
 func buildImageArgs(req image.BuildRequest) ([]string, error) {
 	if len(req.Tags) == 0 {
 		return nil, fmt.Errorf("build image tags are required")
@@ -126,21 +157,9 @@ func buildImageArgs(req image.BuildRequest) ([]string, error) {
 	if req.Context == "" {
 		return nil, fmt.Errorf("build context is required")
 	}
-	var args []string
-	if len(req.Platforms) > 1 {
-		// Multi-platform: buildx + --push. Requires an active builder that
-		// supports multi-platform (e.g. docker buildx use multiarch).
-		args = []string{"buildx", "build",
-			"--platform", strings.Join(req.Platforms, ","),
-			"--builder", "multiarch",
-			"--push",
-		}
-	} else {
-		// Single-arch or no explicit platform: plain docker build into local store.
-		args = []string{"build"}
-		if len(req.Platforms) == 1 {
-			args = append(args, "--platform", req.Platforms[0])
-		}
+	args := []string{"build"}
+	if len(req.Platforms) == 1 {
+		args = append(args, "--platform", req.Platforms[0])
 	}
 	for _, t := range req.Tags {
 		args = append(args, "--tag", t)

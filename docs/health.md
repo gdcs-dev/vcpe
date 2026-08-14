@@ -93,5 +93,7 @@ makes Gateway unhealthy even when the WebPA endpoint itself remains reachable.
 
 Podman smoke tests require a running Podman machine, local image-pull access,
 and health artifacts staged for the machine architecture with
-`scripts/stage-runtime-init-binaries`. The full control-plane test suite also
-includes release tests that require the checkout to be on the `main` branch.
+`scripts/stage-runtime-init-binaries`. Generated binaries are stored under each
+service's `container/platforms/<os>-<arch>/` directory. The full control-plane
+test suite also includes release tests that require the checkout to be on the
+`main` branch.

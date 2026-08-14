@@ -29,11 +29,12 @@ type Backend interface {
 }
 
 type BuildRequest struct {
-	Tags      []string // one or more repo:tag values; at least one required
-	Context   string
-	File      string
-	NoCache   bool
-	Platforms []string
+	Tags              []string // one or more repo:tag values; at least one required
+	Context           string
+	File              string
+	NoCache           bool
+	Platforms         []string
+	ArtifactsPrepared bool
 }
 
 type BuildOptions struct {

@@ -1,5 +1,8 @@
 FROM debian:bookworm-slim
 
+ARG TARGETOS
+ARG TARGETARCH
+
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update \
@@ -31,8 +34,8 @@ RUN apt-get update \
 RUN mkdir -p /runtime-config /var/log/bng /run/mosquitto \
    && chown mosquitto:mosquitto /run/mosquitto
 
-COPY container/runtime-init-bng /usr/local/bin/runtime-init-bng
-COPY container/vcpe-healthd /usr/local/bin/vcpe-healthd
+COPY container/platforms/${TARGETOS}-${TARGETARCH}/runtime-init-bng /usr/local/bin/runtime-init-bng
+COPY container/platforms/${TARGETOS}-${TARGETARCH}/vcpe-healthd /usr/local/bin/vcpe-healthd
 COPY container/entrypoint.sh /usr/local/bin/bng-legacy-entrypoint.sh
 COPY container/start-services.sh /usr/local/bin/start-services.sh
 COPY container/health-probe.sh /usr/local/bin/bng-health-probe

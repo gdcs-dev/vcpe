@@ -56,12 +56,13 @@ to trust verbatim today.
 
 ## Runtime-init binaries (container build flow)
 
-`services/*/container/runtime-init-<svc>` are committed Linux/amd64 Go binaries
-built from `controlplane/cmd/runtime-init-*`. Regenerate via
-`scripts/stage-runtime-init-binaries [svc...]` (defaults linux/amd64; also stages
-into `.local/artifacts/runtime-init/`). After changing `cmd/runtime-init-*` or the
-`runtimeinit/contract`, restage these binaries — editing Go alone does not update
-the images.
+`services/*/container/platforms/<os>-<arch>/runtime-init-<svc>` are generated Go
+binaries built from `controlplane/cmd/runtime-init-*`; they are not committed.
+`vcpe build` and `vcpe release` stage every requested platform automatically via
+`scripts/stage-runtime-init-binaries [svc...]`, which also caches outputs under
+`.local/artifacts/runtime-init/`. Containerfiles select the matching directory
+with `TARGETOS`/`TARGETARCH`, so multi-platform builds never overwrite a shared
+binary path while a build context is being read.
 
 ## Conventions / gotchas
 

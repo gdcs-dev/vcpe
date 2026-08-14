@@ -32,3 +32,5 @@ runtime-init-*
 services/client/compose.yaml
 
 *-layout.json
+
+notes*.txt

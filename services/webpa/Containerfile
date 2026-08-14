@@ -3,6 +3,10 @@
 ##############################################################################
 FROM golang:latest AS builder
 
+# Go's async goroutine preemption (SIGURG) crashes QEMU user-mode emulation
+# ("uncaught target signal 11") when cross-building for a non-native arch.
+ENV GODEBUG=asyncpreemptoff=1
+
 RUN CGO_ENABLED=0 GOOS=linux \
    go install github.com/xmidt-org/talaria@v0.20.0 \
    && go install github.com/xmidt-org/scytale@v0.13.18 \
@@ -17,6 +21,9 @@ FROM docker.io/hashicorp/consul:1.20.3 AS consul_builder
 # Stage 2: Runtime image
 ##############################################################################
 FROM debian:bookworm-slim
+
+ARG TARGETOS
+ARG TARGETARCH
 
 RUN apt-get update \
    && apt-get install -y --no-install-recommends \
@@ -51,8 +58,8 @@ COPY assets/argus.yaml    /etc/argus/argus.yaml
 COPY assets/caduceus.yaml /etc/caduceus/caduceus.yaml
 COPY assets/themis.yaml   /etc/themis/themis.yaml
 COPY assets/consul.json   /etc/consul.d/consul.json
-COPY container/runtime-init-webpa /usr/local/bin/runtime-init-webpa
-COPY container/vcpe-healthd /usr/local/bin/vcpe-healthd
+COPY container/platforms/${TARGETOS}-${TARGETARCH}/runtime-init-webpa /usr/local/bin/runtime-init-webpa
+COPY container/platforms/${TARGETOS}-${TARGETARCH}/vcpe-healthd /usr/local/bin/vcpe-healthd
 COPY container/entrypoint.sh     /usr/local/bin/webpa-legacy-entrypoint.sh
 COPY container/start-services.sh /usr/local/bin/start-services.sh
 COPY container/health-probe.sh   /usr/local/bin/webpa-health-probe

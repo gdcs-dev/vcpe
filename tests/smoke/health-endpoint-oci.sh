@@ -2,30 +2,30 @@
 set -euo pipefail
 
 repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
-binary="$repo_root/services/bng/container/vcpe-healthd"
 healthy_name="vcpe-health-healthy-$$"
 unhealthy_name="vcpe-health-unhealthy-$$"
 healthy_port=47998
 unhealthy_port=47997
+if ! command -v podman >/dev/null; then
+    echo "SKIP: podman is not installed"
+    exit 0
+fi
 machine_arch=$(podman machine ssh -- uname -m 2>/dev/null || true)
 case "$machine_arch" in
-    aarch64|arm64) platform=linux/arm64 ;;
-    x86_64|amd64) platform=linux/amd64 ;;
+    aarch64|arm64) platform_dir=linux-arm64; platform=linux/arm64 ;;
+    x86_64|amd64) platform_dir=linux-amd64; platform=linux/amd64 ;;
     *)
         echo "SKIP: unsupported Podman machine architecture ${machine_arch:-unknown}"
         exit 0
         ;;
 esac
+binary="$repo_root/services/bng/container/platforms/$platform_dir/vcpe-healthd"
 
 cleanup() {
     podman rm -f "$healthy_name" "$unhealthy_name" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 
-if ! command -v podman >/dev/null; then
-    echo "SKIP: podman is not installed"
-    exit 0
-fi
 if [[ ! -x "$binary" ]]; then
     echo "SKIP: staged vcpe-healthd is unavailable; run scripts/stage-runtime-init-binaries first"
     exit 0

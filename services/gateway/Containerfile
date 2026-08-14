@@ -1,5 +1,8 @@
 FROM docker.io/library/ubuntu:24.04
 
+ARG TARGETOS
+ARG TARGETARCH
+
 RUN apt-get update && apt-get upgrade -y && \
    DEBIAN_FRONTEND=noninteractive apt-get -y install ca-certificates
 
@@ -29,8 +32,8 @@ RUN mkdir -p /nvram
 RUN systemctl enable telemetry2_0
 
 
-COPY container/runtime-init-gateway /usr/local/bin/runtime-init-gateway
-COPY container/vcpe-healthd /usr/local/bin/vcpe-healthd
+COPY container/platforms/${TARGETOS}-${TARGETARCH}/runtime-init-gateway /usr/local/bin/runtime-init-gateway
+COPY container/platforms/${TARGETOS}-${TARGETARCH}/vcpe-healthd /usr/local/bin/vcpe-healthd
 COPY container/vcpe-healthd.service /etc/systemd/system/vcpe-healthd.service
 COPY container/entrypoint.sh /usr/local/bin/gateway-entrypoint.sh
 COPY container/health-probe.sh /usr/local/bin/gateway-health-probe
