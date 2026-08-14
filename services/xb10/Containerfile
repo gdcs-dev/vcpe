@@ -47,9 +47,15 @@ COPY container/platforms/${TARGETOS}-${TARGETARCH}/runtime-init-xb10 /usr/local/
 COPY container/platforms/${TARGETOS}-${TARGETARCH}/vcpe-healthd /usr/local/bin/vcpe-healthd
 COPY container/vcpe-healthd.service /etc/systemd/system/vcpe-healthd.service
 COPY container/entrypoint.sh /usr/local/bin/xb10-legacy-entrypoint.sh
+COPY container/simulator-config.sh /usr/local/bin/simulator-config.sh
+COPY container/simulator-config.service /etc/systemd/system/simulator-config.service
 COPY container/health-probe.sh /usr/local/bin/xb10-health-probe
-RUN chmod 0755 /usr/local/bin/runtime-init-xb10 /usr/local/bin/vcpe-healthd /usr/local/bin/xb10-legacy-entrypoint.sh /usr/local/bin/xb10-health-probe
-RUN systemctl enable vcpe-healthd.service
+COPY container/nvram-sim/ /
+COPY container/udhcpc.script.sh /etc/udhcpc.script
+RUN chmod 0755 /etc/udhcpc.script
+
+RUN chmod 0755 /usr/local/bin/runtime-init-xb10 /usr/local/bin/vcpe-healthd /usr/local/bin/xb10-legacy-entrypoint.sh /usr/local/bin/xb10-health-probe 
+RUN systemctl enable vcpe-healthd.service simulator-config.service
 
 # Fix broken /etc/snmp/snmpd.conf symlink (target /etc/var/ doesn't exist in container)
 RUN rm /etc/snmp/snmpd.conf && \
@@ -60,15 +66,17 @@ RUN sed -i \
    '/dmcli eRT retv Device.X_CISCO_COM_CableModem.MACAddress/a\        if [ -z "$mac" ]; then mac=`cat /sys/class/net/erouter0/address 2>/dev/null | tr '"'"'[a-f]'"'"' '"'"'[A-F]'"'"'`; fi' \
    /lib/rdk/utils.sh
 
-RUN sed -i 's|https://webpa.rdkcentral.com:8080|http://talaria:6200|g' /etc/partners_defaults.json
-RUN sed -i 's|https://webpa-token.com|http://themis:6501|g' /etc/partners_defaults.json
-RUN sed -i 's|webpa.rdkcentral.com|webpa|g' /etc/partners_defaults.json
-RUN sed -i 's/sleep 300/sleep 5/g' /lib/systemd/system/rfc.service
-RUN sed -i 's/sleep 60/sleep 5/g' /lib/systemd/system/ulogd.service
-RUN sed -i 's/sleep 30/sleep 5/g' /lib/systemd/system/CcspXdnsSsp.service
-RUN sed -i 's/sleep 300/sleep 5/g' /lib/systemd/system/CcspXconf.service
-RUN sed -i 's/sleep 30/sleep 5/g' /lib/systemd/system/CcspAdvSecuritySsp.service
-RUN sed -i 's/CaptivePortal_Enable=true/CaptivePortal_Enable=false/g' /etc/utopia/system_defaults
+RUN sed -i 's|https://webpa.rdkcentral.com:8080|http://talaria:6200|g' /etc/partners_defaults.json \
+   && sed -i 's|https://webpa-token.com|http://themis:6501|g' /etc/partners_defaults.json \
+   && sed -i 's|webpa.rdkcentral.com|webpa|g' /etc/partners_defaults.json \
+   && sed -i 's/sleep 300/sleep 5/g' /lib/systemd/system/rfc.service \
+   && sed -i 's/sleep 60/sleep 5/g' /lib/systemd/system/ulogd.service \
+   && sed -i 's/sleep 30/sleep 5/g' /lib/systemd/system/CcspXdnsSsp.service \
+   && sed -i 's/sleep 300/sleep 5/g' /lib/systemd/system/CcspXconf.service \
+   && sed -i 's/sleep 30/sleep 5/g' /lib/systemd/system/CcspAdvSecuritySsp.service \
+   && sed -i 's/CaptivePortal_Enable=true/CaptivePortal_Enable=false/g' /etc/utopia/system_defaults \
+   && sed -i 's/#$GeneralPurposeFirewallRuleCount=1/$GeneralPurposeFirewallRuleCount=1/g' /etc/utopia/system_defaults \
+   && sed -i 's/#$GeneralPurposeFirewallRule_1=-A INPUT -i eth0 -j ACCEPT/$GeneralPurposeFirewallRule_1=-I INPUT -i vcpe-health0 -j ACCEPT/g' /etc/utopia/system_defaults
 
 
 ENTRYPOINT ["/usr/local/bin/runtime-init-xb10"]

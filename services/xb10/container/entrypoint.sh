@@ -23,27 +23,42 @@ current_iface_for_mac() {
     return 1
 }
 
-stage_rename() {
-    mac=$1
-    target=$2
-    iface=$(current_iface_for_mac "$mac" || true)
+mac_is_manifest_interface() {
+    wanted=$(normalize_mac "$1")
 
-    [ -n "$iface" ] || return 0
-    [ "$iface" = "$target" ] && return 0
+    for var_name in $(env | grep '^IFACE_.*_MAC=' | cut -d= -f1); do
+        mac_val=$(eval "echo \"\${$var_name}\"")
+        [ "$(normalize_mac "$mac_val")" = "$wanted" ] && return 0
+    done
 
-    temp="tmp-$target"
-    ip link set "$iface" down || true
-    ip link set "$iface" name "$temp"
-    printf '%s\n' "$temp"
+    return 1
 }
 
-finalize_rename() {
-    temp_name=${1:-}
-    target=$2
+move_health_interface() {
+    [ ! -d /sys/class/net/vcpe-health0 ] || return 0
 
-    [ -n "$temp_name" ] || return 0
-    ip link set "$temp_name" name "$target"
-    #ip link set "$target" up || true
+    for path in /sys/class/net/*; do
+        name=$(basename "$path")
+        [ "$name" = "lo" ] && continue
+        mac=$(tr '[:upper:]' '[:lower:]' < "$path/address")
+        stripped=$(printf '%s' "$mac" | tr -d ':.' | tr -d '0')
+        [ -n "$stripped" ] || continue
+        mac_is_manifest_interface "$mac" && continue
+
+        log "  moving unmatched interface $name → vcpe-health0"
+        ip link set "$name" name vcpe-health0
+        return 0
+    done
+}
+
+preserve_health_default_route() {
+    health_default=$(ip route show default dev vcpe-health0 2>/dev/null | head -1)
+    [ -n "$health_default" ] || return 0
+    health_gateway=$(printf '%s\n' "$health_default" | awk '{print $3}')
+    health_ip=$(ip -4 -o addr show vcpe-health0 | awk '{print $4}' | cut -d/ -f1)
+    [ -n "$health_gateway" ] && [ -n "$health_ip" ] || return 0
+    ip rule add from "$health_ip" table 100 priority 100 2>/dev/null || true
+    ip route add default via "$health_gateway" dev vcpe-health0 table 100 2>/dev/null || true
 }
 
 rename_interfaces_by_mac() {
@@ -54,7 +69,7 @@ rename_interfaces_by_mac() {
     # to swap names (e.g. eth2 → eth1 while eth1 still exists):
     #   Pass 1 — stage each interface to a tmp-<target> name
     #   Pass 2 — finalize each tmp-<target> to the real target name
-    local var_name mac_val role_key device_var device iface temp_name
+    move_health_interface
 
     log "renaming interfaces by MAC (pass 1: stage to temp names)"
     for var_name in $(env | grep '^IFACE_.*_MAC=' | cut -d= -f1); do
@@ -93,23 +108,20 @@ rename_interfaces_by_mac() {
         [ -d "/sys/class/net/$temp_name" ] || continue
         log "  finalizing $temp_name → $device"
         ip link set "$temp_name" name "$device"
+        ip link set "$iface" down || true
+        #ip link set "$device" up || true
     done
+
+    preserve_health_default_route
 }
 
-start_dhcp_client() {
-    iface=$1
-    log "starting DHCP client on $iface"
-    ip link set "$iface" up || true
-    # udhcpc -q -b -i "$iface" -p "/tmp/udhcpc.${iface}.pid" -s /etc/udhcpc.script -x "hostname:$(hostname)"
-    # Write BNG gateway as dnsmasq's upstream; keep /etc/resolv.conf on local dnsmasq.
-    log "writing upstream resolver: nameserver ${EROUTER0_IPV4_GATEWAY}"
-    printf 'nameserver %s\n' "${EROUTER0_IPV4_GATEWAY}" > /etc/upstream-resolv.conf
+update_resolver() {
+    log "writing local resolver: nameserver ${LAN_DNS:-10.0.0.1}"
     printf 'nameserver %s\n' "${LAN_DNS:-10.0.0.1}" > /etc/resolv.conf
 }
 
 log "xb10 entrypoint starting (CM device: ${IFACE_CM_DEVICE:-cm0})"
 rename_interfaces_by_mac
-# Use the CM interface device name from the manifest env var.
-start_dhcp_client "${IFACE_CM_DEVICE:-cm0}"
+update_resolver
 log "xb10 init complete, exec: $*"
 exec "$@"

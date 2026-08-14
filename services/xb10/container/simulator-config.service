@@ -1,0 +1,17 @@
+[Unit]
+Description=Configure simulator and bring up dummy interfaces
+DefaultDependencies=no
+
+[Service]
+Type=oneshot
+PassEnvironment=LAN_DNS
+ExecStart=/bin/sh /usr/local/bin/simulator-config.sh
+ExecStartPost=/bin/touch /tmp/wifi_driver_initialized
+Restart=on-failure
+RestartSec=2
+StartLimitBurst=5
+StartLimitIntervalSec=60
+RemainAfterExit=yes
+
+[Install]
+WantedBy=sysinit.target

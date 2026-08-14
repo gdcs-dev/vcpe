@@ -1,0 +1,13 @@
+[Unit]
+Description=Setup simulated NVRAM flash devices (loop-backed)
+Documentation=man:losetup(8)
+DefaultDependencies=no
+# /run is available after systemd mounts it; the root fs must be remounted r/w
+# before we can write images there.
+After=systemd-remount-fs.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/setup-nvram-sim.sh
+StandardOutput=journal+console
