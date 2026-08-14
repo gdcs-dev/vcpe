@@ -34,3 +34,5 @@ services/client/compose.yaml
 *-layout.json
 
 notes*.txt
+temp/
+
