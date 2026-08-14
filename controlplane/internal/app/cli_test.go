@@ -25,15 +25,16 @@ func tempManifest(t *testing.T) string {
 func TestParsePublicCommands(t *testing.T) {
 	m := tempManifest(t)
 	cases := map[string][]string{
-		"init":   {"init"},
-		"build":  {"build", "--manifest", m},
-		"up":     {"up", "--manifest", m},
-		"apply":  {"apply", "--manifest", m},
-		"plan":   {"plan", "--manifest", m},
-		"status": {"status"},
-		"logs":   {"logs"},
-		"config": {"config", "show"},
-		"state":  {"state", "reset"},
+		"init":     {"init"},
+		"build":    {"build", "--manifest", m},
+		"up":       {"up", "--manifest", m},
+		"apply":    {"apply", "--manifest", m},
+		"plan":     {"plan", "--manifest", m},
+		"status":   {"status"},
+		"diagnose": {"diagnose", "--name", "edge", "--from", "gateway", "--to", "webpa", "--client-service", "config"},
+		"logs":     {"logs"},
+		"config":   {"config", "show"},
+		"state":    {"state", "reset"},
 	}
 	for command, args := range cases {
 		t.Run(command, func(t *testing.T) {
@@ -45,6 +46,35 @@ func TestParsePublicCommands(t *testing.T) {
 				t.Fatalf("expected command %q, got %q", command, opts.Command)
 			}
 		})
+	}
+}
+
+func TestParseDiagnose(t *testing.T) {
+	opts, err := parseArgs("vcpe", []string{"diagnose", "--name", "edge", "--from", "gateway", "--to", "webpa", "--client-service", "config", "--replica", "1", "--json"})
+	if err != nil {
+		t.Fatalf("parse diagnose: %v", err)
+	}
+	if opts.Name != "edge" || opts.From != "gateway" || opts.To != "webpa" || opts.ClientService != "config" || opts.Replica == nil || *opts.Replica != 1 || !opts.OutputJSON {
+		t.Fatalf("options = %+v", opts)
+	}
+}
+
+func TestDiagnoseRequiresSelectors(t *testing.T) {
+	_, err := parseArgs("vcpe", []string{"diagnose", "--name", "edge"})
+	if err == nil || !strings.Contains(err.Error(), "requires --name") {
+		t.Fatalf("expected selector error, got %v", err)
+	}
+	_, err = parseArgs("vcpe", []string{"diagnose", "--name", "edge", "--from", "gateway", "--to", "webpa"})
+	if err == nil || !strings.Contains(err.Error(), "--client-service") {
+		t.Fatalf("expected required client-service error, got %v", err)
+	}
+	_, err = parseArgs("vcpe", []string{"diagnose", "--name", "edge", "--from", "gateway", "--to", "webpa", "--replica", "bad"})
+	if err == nil || !strings.Contains(err.Error(), "non-negative integer") {
+		t.Fatalf("expected replica error, got %v", err)
+	}
+	_, err = parseArgs("vcpe", []string{"diagnose", "--name", "edge", "--from", "gateway", "--to", "webpa", "--client-service", "../config"})
+	if err == nil || !strings.Contains(err.Error(), "invalid --client-service") {
+		t.Fatalf("expected client-service error, got %v", err)
 	}
 }
 

@@ -54,8 +54,18 @@ func TestServeStopsWhenWorkloadExits(t *testing.T) {
 	probe := func(context.Context) health.Response {
 		return health.Response{SchemaVersion: health.SchemaVersion, Status: health.StatusHealthy, ObservedAt: time.Now().UTC()}
 	}
-	if err := serve(context.Background(), "127.0.0.1:0", probe, "exit 0"); err != nil {
+	if err := serve(context.Background(), "127.0.0.1:0", probe, "exit 0", nil); err != nil {
 		t.Fatalf("serve() error = %v", err)
+	}
+}
+
+func TestBuildDiagnosticJourneys(t *testing.T) {
+	journeys, err := buildDiagnosticJourneys([]string{"cpe-webpa"}, time.Second)
+	if err != nil || journeys["cpe-webpa"] == nil {
+		t.Fatalf("buildDiagnosticJourneys() = %#v, %v", journeys, err)
+	}
+	if _, err := buildDiagnosticJourneys([]string{"unknown"}, time.Second); err == nil {
+		t.Fatal("expected unsupported journey error")
 	}
 }
 

@@ -3,6 +3,7 @@
 package types
 
 import (
+	"github.com/gdcs-dev/vcpe/controlplane/internal/diagnostic"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/types/bng"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/types/eventsink"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/types/gateway"
@@ -23,9 +24,11 @@ func Register() {
 	bng.Register()
 	eventsink.Register()
 	gateway.Register()
+	diagnostic.Register(diagnostic.NewCPEWebPAProvider("gateway"))
 	oktopus.Register()
 	webpa.Register()
 	xb10.Register()
+	diagnostic.Register(diagnostic.NewCPEWebPAProvider("xb10"))
 	genericcontainer.Register()
 	registered = true
 }

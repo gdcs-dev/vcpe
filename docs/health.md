@@ -47,6 +47,56 @@ report one of:
 
 Individual endpoint failures do not stop collection for other replicas.
 
+## Connectivity Diagnostics
+
+Gateway and XB10 expose diagnostics on the same loopback-published endpoint as
+health. The routes are separate so status remains passive:
+
+- `GET /health` returns the existing readiness document and never runs an
+  active diagnostic journey.
+- `GET /diagnostics` passively lists supported journey IDs.
+- `POST /diagnostics/cpe-webpa` runs bounded source-local checks for the CPE to
+  WebPA journey.
+
+Run the journey with:
+
+```bash
+vcpe diagnose --name example-full --from gateway --to webpa --client-service apparmor-simulator
+vcpe diagnose --name example-full --from gateway --to webpa --client-service my-test-app --json
+```
+
+The source service must be a Gateway or XB10. When it has multiple replicas,
+add `--replica <zero-based-index>`. vCPE reads the source instance's persisted
+loopback endpoint and communicates only over HTTP; it does not use Podman,
+Docker, Compose, container discovery, or container exec to collect evidence.
+
+The graph reports `passed`, `failed`, `unknown`, and `skipped` edges. A failed
+or unknown blocking prerequisite skips dependent checks. The application to
+Parodus edge is non-blocking and queries Parodus's existing client list through
+a direct Scytale WRP Retrieve. `--client-service <name>` is required and must
+match the application's libparodus `service_name`. There is no environment or
+image default. The value must be a stable identifier and cannot
+contain a slash or whitespace; vCPE supplies only this final service-name
+segment to the source endpoint. `online` passes, `offline` fails, and a failed or
+invalid Scytale query is unknown while DNS, transport, authentication, and
+Talaria registration checks continue. Send-only libparodus clients configured
+with `receive=false` do not register in this list and cannot be proven by this
+check.
+
+The command exits zero only when all edges pass. A completed graph containing
+a failure or unknown edge is still printed but exits non-zero. Transport,
+protocol, topology, and invocation errors also exit non-zero but do not present
+a partial graph as complete.
+
+Diagnostic requests cannot provide commands, credentials, device IDs, WRP
+destination prefixes, probe definitions, or target URLs. Responses are
+size-limited, strictly decoded, redacted, and
+exclude raw logs and credentials.
+
+Webhook/Argus registration, Caduceus callback delivery, visual-editor graph
+overlays, and end-to-end event correlation are follow-up capabilities and are
+not inferred by this journey.
+
 ## Generic Containers
 
 `generic-container` health is opt-in. Declare exactly one HTTP or command probe

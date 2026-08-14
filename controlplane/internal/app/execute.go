@@ -58,13 +58,10 @@ func ExecuteCLI(prog string, args []string, version string) error {
 	}
 
 	resp, err := executeLocal(opts)
-	if err != nil {
-		return err
-	}
 	if resp.Message != "" {
 		fmt.Println(resp.Message)
 	}
-	return nil
+	return err
 }
 
 // executeViaDaemon forwards a parsed invocation to a running daemon and prints
@@ -76,6 +73,10 @@ func executeViaDaemon(socket string, opts Options) error {
 		Command:         opts.Command,
 		ManifestPath:    opts.ManifestPath,
 		Name:            opts.Name,
+		From:            opts.From,
+		To:              opts.To,
+		ClientService:   opts.ClientService,
+		Replica:         opts.Replica,
 		AllowDisruptive: opts.AllowDisruptive,
 		NoCache:         opts.NoCache,
 		Force:           opts.Force,

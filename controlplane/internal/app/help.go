@@ -97,6 +97,25 @@ var commandHelp = map[string]CommandHelp{
 			"vcpe status --json",
 		},
 	},
+	"diagnose": {
+		Synopsis:    "Diagnose a CPE application path to WebPA",
+		Description: "Shows the expected application-to-Parodus-to-WebPA path, overlays bounded source-local HTTP observations, and identifies the first confirmed failure. Active diagnostics use only the source instance's persisted loopback endpoint.",
+		RequiredFlags: []FlagHelp{
+			{Name: "--name", Arg: "<deployment>", Description: "Deployment containing the source and WebPA services"},
+			{Name: "--from", Arg: "<service>", Description: "Gateway or XB10 source service name"},
+			{Name: "--to", Arg: "webpa", Description: "Diagnostic target journey"},
+			{Name: "--client-service", Arg: "<name>", Description: "Receive-enabled libparodus service to query"},
+		},
+		OptionalFlags: []FlagHelp{
+			{Name: "--replica", Arg: "<index>", Description: "Zero-based source replica index; required when replicas exceed one"},
+			{Name: "--state-root", Arg: "<path>", Description: "Override the default state root directory"},
+			{Name: "--json", Description: "Emit the vcpe.dev/diagnostic/v1 graph"},
+		},
+		Examples: []string{
+			"vcpe diagnose --name example --from gateway --to webpa --client-service apparmor-simulator",
+			"vcpe diagnose --name example --from xb10 --replica 0 --to webpa --json",
+		},
+	},
 	"logs": {
 		Synopsis:      "Show operation timeline and deployment logs",
 		Description:   "Surfaces the recent operation timeline. With --name, includes per-deployment log context from the container runtime.",
@@ -199,7 +218,7 @@ func GlobalHelp() string {
 	const synopsisCol = 10
 	// Developer commands (build, push, release) are registered via init() in
 	// developer_commands.go and prepended to the order here.
-	combined := append(developerCommandOrder, "up", "plan", "down", "list", "manifest", "service", "status", "logs", "config", "state", "version")
+	combined := append(developerCommandOrder, "up", "plan", "down", "list", "manifest", "service", "status", "diagnose", "logs", "config", "state", "version")
 	order := append([]string{"init"}, combined...)
 	for _, cmd := range order {
 		h := commandHelp[cmd]

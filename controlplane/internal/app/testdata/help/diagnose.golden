@@ -1,0 +1,18 @@
+Usage: vcpe diagnose --name <deployment> --from <service> --to webpa --client-service <name> [flags]
+
+Shows the expected application-to-Parodus-to-WebPA path, overlays bounded source-local HTTP observations, and identifies the first confirmed failure. Active diagnostics use only the source instance's persisted loopback endpoint.
+
+Required flags:
+  --name <deployment>     Deployment containing the source and WebPA services
+  --from <service>        Gateway or XB10 source service name
+  --to webpa              Diagnostic target journey
+  --client-service <name>  Receive-enabled libparodus service to query
+
+Optional flags:
+  --replica <index>       Zero-based source replica index; required when replicas exceed one
+  --state-root <path>     Override the default state root directory
+  --json                  Emit the vcpe.dev/diagnostic/v1 graph
+
+Examples:
+  vcpe diagnose --name example --from gateway --to webpa --client-service apparmor-simulator
+  vcpe diagnose --name example --from xb10 --replica 0 --to webpa --json

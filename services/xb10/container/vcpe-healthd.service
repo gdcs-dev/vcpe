@@ -5,7 +5,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/vcpe-healthd "--probe=interfaces=/usr/local/bin/xb10-health-probe interfaces" "--probe=parodus=/usr/local/bin/xb10-health-probe parodus" "--probe=webpa-reachable=/usr/local/bin/xb10-health-probe webpa-reachable" "--probe=webpa-registration=/usr/local/bin/xb10-health-probe webpa-registration"
+ExecStart=/usr/local/bin/vcpe-healthd "--probe=interfaces=/usr/local/bin/xb10-health-probe interfaces" "--probe=parodus=/usr/local/bin/xb10-health-probe parodus" "--probe=webpa-reachable=/usr/local/bin/xb10-health-probe webpa-reachable" "--probe=webpa-registration=/usr/local/bin/xb10-health-probe webpa-registration" "--diagnostic=cpe-webpa"
 Restart=always
 RestartSec=2
 

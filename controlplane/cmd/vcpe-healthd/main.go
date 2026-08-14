@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/gdcs-dev/vcpe/controlplane/internal/diagnostic"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/health"
 )
 
@@ -47,6 +48,8 @@ func main() {
 	flag.Var(&probes, "probe", "named readiness probe in name=command form; may be repeated")
 	var httpProbes httpProbeFlags
 	flag.Var(&httpProbes, "http-probe", "named HTTP readiness probe in name=url[|status] form; may be repeated")
+	var diagnosticJourneys probeFlags
+	flag.Var(&diagnosticJourneys, "diagnostic", "supported active diagnostic journey; may be repeated")
 	flag.Parse()
 	if *check {
 		ctx, cancel := context.WithTimeout(context.Background(), *timeout)
@@ -82,18 +85,24 @@ func main() {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	if err := serve(ctx, *listen, probe, *run); err != nil {
+	journeys, err := buildDiagnosticJourneys(diagnosticJourneys, *timeout)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
+	}
+	if err := serve(ctx, *listen, probe, *run, journeys); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 }
 
-func serve(ctx context.Context, listen string, probe health.Probe, workload string) error {
+func serve(ctx context.Context, listen string, probe health.Probe, workload string, journeys map[string]diagnostic.JourneyHandler) error {
 	listener, err := net.Listen("tcp", listen)
 	if err != nil {
 		return err
 	}
-	server := &http.Server{Handler: health.Server{Probe: probe}.Handler()}
+	handler := diagnostic.Server{Journeys: journeys}.Handler(health.Server{Probe: probe}.Handler())
+	server := &http.Server{Handler: handler}
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- server.Serve(listener) }()
 
@@ -135,6 +144,21 @@ func serve(ctx context.Context, listen string, probe health.Probe, workload stri
 		<-workloadErr
 		return server.Shutdown(context.Background())
 	}
+}
+
+func buildDiagnosticJourneys(values []string, timeout time.Duration) (map[string]diagnostic.JourneyHandler, error) {
+	journeys := make(map[string]diagnostic.JourneyHandler, len(values))
+	for _, value := range values {
+		if value != diagnostic.JourneyCPEWebPA {
+			return nil, fmt.Errorf("unsupported diagnostic journey %q", value)
+		}
+		if _, duplicate := journeys[value]; duplicate {
+			return nil, fmt.Errorf("duplicate diagnostic journey %q", value)
+		}
+		probe := diagnostic.NewCPEWebPAProbeFromEnvironment(timeout)
+		journeys[value] = probe.RunWithInvocation
+	}
+	return journeys, nil
 }
 
 func commandProbe(command string, timeout time.Duration) health.Probe {

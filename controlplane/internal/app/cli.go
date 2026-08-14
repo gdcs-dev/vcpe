@@ -13,8 +13,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
+	"github.com/gdcs-dev/vcpe/controlplane/internal/diagnostic"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/manifest"
 )
 
@@ -32,7 +34,13 @@ type Options struct {
 
 	// Name selects a target deployment (metadata.name) for down/destroy/logs/
 	// status/service commands.
-	Name string
+	Name          string
+	From          string
+	To            string
+	ClientService string
+	// Replica selects a zero-based source replica for diagnose. Nil means the
+	// flag was omitted and permits automatic selection of a single replica.
+	Replica *int
 
 	AllowDisruptive bool
 	NoCache         bool
@@ -56,6 +64,7 @@ var topLevelCommands = map[string]struct{}{
 	"manifest": {},
 	"service":  {},
 	"status":   {},
+	"diagnose": {},
 	"logs":     {},
 	"config":   {},
 	"state":    {},
@@ -268,6 +277,38 @@ func parseArgs(_ string, args []string) (Options, error) {
 			}
 			opts.Name = val
 			i = next
+		case arg == "--from":
+			val, next, err := takeValue(rest, i, "--from")
+			if err != nil {
+				return Options{}, err
+			}
+			opts.From = val
+			i = next
+		case arg == "--to":
+			val, next, err := takeValue(rest, i, "--to")
+			if err != nil {
+				return Options{}, err
+			}
+			opts.To = val
+			i = next
+		case arg == "--client-service":
+			val, next, err := takeValue(rest, i, "--client-service")
+			if err != nil {
+				return Options{}, err
+			}
+			opts.ClientService = val
+			i = next
+		case arg == "--replica":
+			val, next, err := takeValue(rest, i, "--replica")
+			if err != nil {
+				return Options{}, err
+			}
+			replica, err := strconv.Atoi(val)
+			if err != nil || replica < 0 {
+				return Options{}, fmt.Errorf("--replica must be a non-negative integer")
+			}
+			opts.Replica = &replica
+			i = next
 		case arg == "--state-root":
 			val, next, err := takeValue(rest, i, "--state-root")
 			if err != nil {
@@ -386,6 +427,13 @@ func validateCommandShape(opts *Options) error {
 		// deployment or lists names when multiple exist.
 		if opts.Command == "destroy" && !opts.Force {
 			return fmt.Errorf("destroy requires --force to confirm teardown; run `vcpe down --help` for usage")
+		}
+	case "diagnose":
+		if opts.Name == "" || opts.From == "" || opts.To == "" || opts.ClientService == "" {
+			return fmt.Errorf("diagnose requires --name <deployment>, --from <service>, --to webpa, and --client-service <name>; run `vcpe diagnose --help` for usage")
+		}
+		if err := (diagnostic.Invocation{ClientService: opts.ClientService}).Validate(); err != nil {
+			return fmt.Errorf("invalid --client-service: %w", err)
 		}
 	}
 	return nil

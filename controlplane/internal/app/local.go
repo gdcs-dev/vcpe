@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/gdcs-dev/vcpe/controlplane/internal/daemon"
+	"github.com/gdcs-dev/vcpe/controlplane/internal/diagnostic"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/health"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/manifest"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/persist"
@@ -49,6 +50,8 @@ func executeLocal(opts Options) (daemon.CommandResponse, error) {
 		return runService(opts)
 	case "status":
 		return runStatus(opts)
+	case "diagnose":
+		return runDiagnose(opts)
 	case "logs":
 		return runLogs(opts)
 	case "config":
@@ -58,6 +61,50 @@ func executeLocal(opts Options) (daemon.CommandResponse, error) {
 	default:
 		return dispatchDeveloperCommand(opts)
 	}
+}
+
+type diagnosticOutcomeError struct{ outcome diagnostic.Outcome }
+
+var newDiagnosticClient = diagnostic.NewClient
+
+func (err diagnosticOutcomeError) Error() string {
+	return "diagnostic result: " + string(err.outcome)
+}
+
+func runDiagnose(opts Options) (daemon.CommandResponse, error) {
+	store, err := persist.Open(opts.StateRoot)
+	if err != nil {
+		return daemon.CommandResponse{}, err
+	}
+	defer store.Close()
+	result, err := diagnostic.Diagnose(context.Background(), store, diagnostic.DefaultRegistry(), newDiagnosticClient(10*time.Second), diagnostic.ResolveRequest{
+		Deployment:    opts.Name,
+		Source:        opts.From,
+		Target:        opts.To,
+		Replica:       opts.Replica,
+		ClientService: opts.ClientService,
+	})
+	if err != nil {
+		return daemon.CommandResponse{}, err
+	}
+	var output string
+	if opts.OutputJSON {
+		output, err = diagnostic.RenderJSON(result)
+	} else {
+		output, err = diagnostic.RenderASCII(result)
+	}
+	if err != nil {
+		return daemon.CommandResponse{}, err
+	}
+	outcome, err := diagnostic.Classify(result)
+	if err != nil {
+		return daemon.CommandResponse{}, err
+	}
+	response := daemon.CommandResponse{Message: output}
+	if outcome != diagnostic.OutcomePassed {
+		return response, diagnosticOutcomeError{outcome: outcome}
+	}
+	return response, nil
 }
 
 type statusHealthObservation struct {

@@ -75,6 +75,20 @@ controlplane/bin/vcpe config show
 controlplane/bin/vcpe down --name bng-7
 ```
 
+For a deployment containing Gateway or XB10 plus WebPA, inspect the complete
+connection path without reading container logs:
+
+```bash
+controlplane/bin/vcpe diagnose --name example-full --from gateway --to webpa --client-service apparmor-simulator
+controlplane/bin/vcpe diagnose --name example-full --from gateway --to webpa --client-service my-test-app --json
+```
+
+`failed` identifies the first confirmed broken boundary. `unknown` means the
+available signal was not authoritative; downstream checks continue only when
+that edge is explicitly non-blocking. `skipped` means a blocking prerequisite
+was unresolved. A failed or inconclusive graph is printed and returns a nonzero
+exit status, so scripts should capture output before checking the status.
+
 ### Rollback Guidance
 
 - Inspect state directly:
@@ -91,7 +105,7 @@ controlplane/bin/vcpe status --name bng-7 --json
 
 ## Deployment Selection And Scaling Limits
 
-- Deployment-targeting commands (`status`, `logs`, `down`, `destroy`, `service`)
+- Deployment-targeting commands (`status`, `diagnose`, `logs`, `down`, `destroy`, `service`)
   identify a deployment by `--name <metadata.name>`. An unknown name is reported
   as an error.
 - The active-deployment cap is `spec.maxActiveDeployments`, counting distinct

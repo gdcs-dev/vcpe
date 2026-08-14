@@ -4,6 +4,10 @@ type CommandRequest struct {
 	Command         string `json:"command"`
 	ManifestPath    string `json:"manifestPath,omitempty"`
 	Name            string `json:"name,omitempty"`
+	From            string `json:"from,omitempty"`
+	To              string `json:"to,omitempty"`
+	ClientService   string `json:"clientService,omitempty"`
+	Replica         *int   `json:"replica,omitempty"`
 	AllowDisruptive bool   `json:"allowDisruptive,omitempty"`
 	NoCache         bool   `json:"noCache,omitempty"`
 	Force           bool   `json:"force,omitempty"`

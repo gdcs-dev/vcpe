@@ -2,14 +2,17 @@ package app
 
 import (
 	"encoding/json"
+	"io"
 	"net"
 	"net/http"
 	"os"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/gdcs-dev/vcpe/controlplane/internal/diagnostic"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/health"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/manifest"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/persist"
@@ -54,7 +57,12 @@ func TestNamedStatusCollectsPersistedHealthOverHTTP(t *testing.T) {
 	if err != nil {
 		t.Fatalf("listen on reserved port: %v", err)
 	}
-	server := &http.Server{Handler: http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+	server := &http.Server{Handler: http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Method != http.MethodGet || request.URL.Path != "/health" {
+			t.Errorf("status request = %s %s, want GET /health", request.Method, request.URL.Path)
+			http.NotFound(writer, request)
+			return
+		}
 		_ = json.NewEncoder(writer).Encode(health.Response{SchemaVersion: health.SchemaVersion, Status: health.StatusHealthy, ObservedAt: time.Now().UTC(), Checks: []health.Check{{Name: "service", Status: health.StatusHealthy}}})
 	})}
 	go server.Serve(listener)
@@ -73,6 +81,77 @@ func TestNamedStatusCollectsPersistedHealthOverHTTP(t *testing.T) {
 	}
 	if !strings.Contains(jsonStatus.Message, `"state": "healthy"`) || !strings.Contains(jsonStatus.Message, `"service": "bng"`) {
 		t.Fatalf("json health status missing: %s", jsonStatus.Message)
+	}
+}
+
+type diagnosticRoundTripFunc func(*http.Request) (*http.Response, error)
+
+func (function diagnosticRoundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return function(request)
+}
+
+func TestDiagnoseUsesPersistedLoopbackHTTPAndRendersResult(t *testing.T) {
+	stateRoot := t.TempDir()
+	store, err := persist.Open(stateRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := []byte("apiVersion: vcpe.dev/v1\nkind: Deployment\nmetadata: {name: edge}\nspec:\n  networks:\n    - role: wan\n      ipv4: {cidr: 10.0.0.0/24}\n  services:\n    - name: gateway\n      type: gateway\n      replicas: 1\n      interfaces: [{role: wan}]\n      image: {repository: gateway}\n    - name: webpa\n      type: webpa\n      replicas: 1\n      image: {repository: webpa}\n")
+	if err := store.SaveDesiredSnapshot("edge", snapshot); err != nil {
+		t.Fatal(err)
+	}
+	endpoint, err := store.ReserveHealthEndpoint("edge", "gateway", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = store.Close()
+
+	now := time.Now().UTC()
+	var requests []string
+	previousFactory := newDiagnosticClient
+	newDiagnosticClient = func(time.Duration) *diagnostic.Client {
+		return &diagnostic.Client{HTTPClient: &http.Client{Transport: diagnosticRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+			if request.URL.Host != "127.0.0.1:"+strconv.Itoa(endpoint.HostPort) {
+				t.Errorf("diagnostic host = %q", request.URL.Host)
+			}
+			requests = append(requests, request.Method+" "+request.URL.Path)
+			var payload any
+			if request.URL.Path == "/diagnostics" {
+				payload = diagnostic.Capabilities{SchemaVersion: diagnostic.CapabilitiesSchema, Journeys: []string{diagnostic.JourneyCPEWebPA}}
+			} else {
+				var invocation diagnostic.Invocation
+				if err := json.NewDecoder(request.Body).Decode(&invocation); err != nil || invocation.ClientService != "config" {
+					t.Errorf("diagnostic invocation = %+v, error = %v", invocation, err)
+				}
+				states := []diagnostic.State{diagnostic.StateUnknown, diagnostic.StatePassed, diagnostic.StatePassed, diagnostic.StatePassed, diagnostic.StatePassed}
+				ids := []string{"application-parodus", "talaria-dns", "talaria-transport", "talaria-authentication", "device-registration"}
+				observations := make([]diagnostic.Observation, len(ids))
+				for index := range ids {
+					observations[index] = diagnostic.Observation{EdgeID: ids[index], State: states[index], ObservedAt: now}
+				}
+				payload = diagnostic.EndpointResponse{SchemaVersion: diagnostic.SchemaVersion, Journey: diagnostic.JourneyCPEWebPA, ObservedAt: now, Observations: observations}
+			}
+			body, _ := json.Marshal(payload)
+			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(string(body))), Header: http.Header{}}, nil
+		})}}
+	}
+	t.Cleanup(func() { newDiagnosticClient = previousFactory })
+
+	response, err := executeLocal(Options{Command: "diagnose", Name: "edge", From: "gateway", To: "webpa", ClientService: "config", StateRoot: stateRoot})
+	if err == nil || !strings.Contains(err.Error(), "inconclusive") {
+		t.Fatalf("diagnose error = %v", err)
+	}
+	if !strings.Contains(response.Message, "--UNKNOWN-->") || !strings.Contains(response.Message, "--PASSED-->") {
+		t.Fatalf("diagnose output = %s", response.Message)
+	}
+	wantRequests := []string{"GET /diagnostics", "POST /diagnostics/cpe-webpa"}
+	if !reflect.DeepEqual(requests, wantRequests) {
+		t.Fatalf("requests = %#v, want %#v", requests, wantRequests)
+	}
+
+	response, err = executeLocal(Options{Command: "diagnose", Name: "edge", From: "gateway", To: "webpa", ClientService: "config", StateRoot: stateRoot, OutputJSON: true})
+	if err == nil || !strings.Contains(response.Message, `"schemaVersion": "vcpe.dev/diagnostic/v1"`) {
+		t.Fatalf("JSON diagnose response = %s, error = %v", response.Message, err)
 	}
 }
 
