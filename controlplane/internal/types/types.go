@@ -23,8 +23,10 @@ func Register() {
 	}
 	bng.Register()
 	eventsink.Register()
+	diagnostic.Register(diagnostic.NewWebhookProvider())
 	gateway.Register()
 	diagnostic.Register(diagnostic.NewCPEWebPAProvider("gateway"))
+	diagnostic.Register(diagnostic.NewCPEWebPACallbackProvider())
 	oktopus.Register()
 	webpa.Register()
 	xb10.Register()

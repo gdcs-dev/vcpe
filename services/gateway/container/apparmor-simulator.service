@@ -8,7 +8,7 @@ Type=simple
 # Default interval; override via /etc/default/apparmor-simulator
 Environment=APPARMOR_SIM_INTERVAL_SEC=30
 EnvironmentFile=-/etc/default/apparmor-simulator
-ExecStart=/usr/bin/apparmor-simulator
+ExecStart=/usr/local/bin/apparmor-simulator
 Restart=always
 RestartSec=15
 

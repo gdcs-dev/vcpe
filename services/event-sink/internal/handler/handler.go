@@ -6,30 +6,43 @@
 package handler
 
 import (
+	"bytes"
 	"crypto/hmac"
 	"crypto/sha1"
 	"encoding/hex"
+	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
 	"strings"
 
+	"github.com/gdcs-dev/vcpe/event-sink/internal/diagnosticstate"
 	"github.com/xmidt-org/wrp-go/v3"
 	"github.com/xmidt-org/wrp-go/v3/wrphttp"
 )
+
+const maxWebhookBodyBytes = 1 << 20
 
 // Handler handles webhook POSTs from Caduceus.
 type Handler struct {
 	secret []byte
 	logger *slog.Logger
+	state  *diagnosticstate.Store
 }
 
 // New creates a Handler. secret is the WEBHOOK_SECRET value used to validate
 // the X-Webpa-Signature header.
 func New(secret string, logger *slog.Logger) *Handler {
+	return NewWithState(secret, logger, nil)
+}
+
+// NewWithState creates a Handler that records correctly signed diagnostic
+// callback receipts without retaining their body or signature.
+func NewWithState(secret string, logger *slog.Logger, state *diagnosticstate.Store) *Handler {
 	return &Handler{
 		secret: []byte(secret),
 		logger: logger,
+		state:  state,
 	}
 }
 
@@ -40,10 +53,14 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20)) // 1MB limit
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxWebhookBodyBytes+1))
 	if err != nil {
 		h.logger.Error("failed to read request body", "error", err)
 		http.Error(w, "read error", http.StatusInternalServerError)
+		return
+	}
+	if len(body) > maxWebhookBodyBytes {
+		http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
 		return
 	}
 
@@ -54,6 +71,13 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			"remote_addr", r.RemoteAddr,
 			"sig_present", sig != "")
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	if receipt, ok := diagnosticReceipt(body, r.Header); ok {
+		if h.state != nil {
+			h.state.RecordReceipt(receipt)
+		}
+		w.WriteHeader(http.StatusNoContent)
 		return
 	}
 
@@ -105,4 +129,42 @@ func (h *Handler) validateHMAC(body []byte, sig string) bool {
 	mac.Write(body)
 	expected := hex.EncodeToString(mac.Sum(nil))
 	return hmac.Equal([]byte(expected), []byte(sig[len("sha1="):]))
+}
+
+type diagnosticMarker struct {
+	Diagnostic    string `json:"vcpe_diagnostic"`
+	CorrelationID string `json:"correlation_id"`
+}
+
+const (
+	webhookDiagnosticMarker  = "webhook-registration-callback-diagnostics"
+	callbackDiagnosticMarker = "cpe-webpa-callback"
+)
+
+func diagnosticReceipt(body []byte, header http.Header) (diagnosticstate.Receipt, bool) {
+	var marker diagnosticMarker
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&marker); err != nil || !diagnosticstate.ValidCorrelationID(marker.CorrelationID) {
+		return diagnosticstate.Receipt{}, false
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		return diagnosticstate.Receipt{}, false
+	}
+	fromCaduceus := header.Get("X-Xmidt-Message-Type") != "" || header.Get("X-Webpa-Event") != ""
+	source := diagnosticstate.SourceDirect
+	if fromCaduceus {
+		source = diagnosticstate.SourceCaduceus
+	}
+	switch marker.Diagnostic {
+	case webhookDiagnosticMarker:
+	case callbackDiagnosticMarker:
+		if !fromCaduceus {
+			return diagnosticstate.Receipt{}, false
+		}
+	default:
+		return diagnosticstate.Receipt{}, false
+	}
+	return diagnosticstate.Receipt{CorrelationID: marker.CorrelationID, Source: source, HTTPStatus: http.StatusNoContent}, true
 }

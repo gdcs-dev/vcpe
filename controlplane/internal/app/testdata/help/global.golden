@@ -13,7 +13,7 @@ Commands:
   manifest  Manage and discover manifest files
   service   Inspect registered service types
   status    Show control-plane status
-  diagnose  Diagnose a CPE application path to WebPA
+  diagnose  Diagnose CPE-to-WebPA, webhook, or callback delivery paths
   logs      Show operation timeline and deployment logs
   config    Show effective configuration
   state     Manage persisted control-plane state

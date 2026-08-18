@@ -2,6 +2,7 @@ package app
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -137,7 +138,7 @@ func TestDiagnoseUsesPersistedLoopbackHTTPAndRendersResult(t *testing.T) {
 	}
 	t.Cleanup(func() { newDiagnosticClient = previousFactory })
 
-	response, err := executeLocal(Options{Command: "diagnose", Name: "edge", From: "gateway", To: "webpa", ClientService: "config", StateRoot: stateRoot})
+	response, err := executeLocal(Options{Command: "diagnose", From: "gateway", To: "webpa", ClientService: "config", StateRoot: stateRoot})
 	if err == nil || !strings.Contains(err.Error(), "inconclusive") {
 		t.Fatalf("diagnose error = %v", err)
 	}
@@ -152,6 +153,207 @@ func TestDiagnoseUsesPersistedLoopbackHTTPAndRendersResult(t *testing.T) {
 	response, err = executeLocal(Options{Command: "diagnose", Name: "edge", From: "gateway", To: "webpa", ClientService: "config", StateRoot: stateRoot, OutputJSON: true})
 	if err == nil || !strings.Contains(response.Message, `"schemaVersion": "vcpe.dev/diagnostic/v1"`) {
 		t.Fatalf("JSON diagnose response = %s, error = %v", response.Message, err)
+	}
+
+	store, err = persist.Open(stateRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SaveDesiredSnapshot("other", snapshot); err != nil {
+		t.Fatal(err)
+	}
+	_ = store.Close()
+	_, err = executeLocal(Options{Command: "diagnose", From: "gateway", To: "webpa", ClientService: "config", StateRoot: stateRoot})
+	if err == nil || !strings.Contains(err.Error(), "multiple deployments active; specify one with --name") {
+		t.Fatalf("ambiguous diagnose error = %v", err)
+	}
+}
+
+func TestDiagnoseWebhookUsesPersistedLoopbackEndpointsPassively(t *testing.T) {
+	stateRoot := t.TempDir()
+	store, err := persist.Open(stateRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := []byte("apiVersion: vcpe.dev/v1\nkind: Deployment\nmetadata: {name: edge}\nspec:\n  networks:\n    - role: wan\n      ipv4: {cidr: 10.0.0.0/24}\n  services:\n    - name: event-sink\n      type: event-sink\n      replicas: 1\n      interfaces: [{role: wan}]\n      image: {repository: event-sink}\n    - name: webpa\n      type: webpa\n      replicas: 1\n      image: {repository: webpa}\n")
+	if err := store.SaveDesiredSnapshot("edge", snapshot); err != nil {
+		t.Fatal(err)
+	}
+	subscriberEndpoint, err := store.ReserveHealthEndpoint("edge", "event-sink", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	webpaEndpoint, err := store.ReserveHealthEndpoint("edge", "webpa", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	now := time.Now().UTC()
+	intent := diagnostic.WebhookSubscriberIntent{SchemaVersion: diagnostic.SchemaVersion, Journey: "webhook-subscriber", ObservedAt: now, CallbackURL: "http://event-sink:8080/webhook", EventFilter: "devices/.*", DeviceMatcher: "mac:.*", ContentType: "application/json", SecretConfigured: true}
+	var requests []string
+	previousFactory := newDiagnosticClient
+	newDiagnosticClient = func(time.Duration) *diagnostic.Client {
+		return &diagnostic.Client{HTTPClient: &http.Client{Transport: diagnosticRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+			requests = append(requests, request.Method+" "+request.URL.Host+request.URL.Path)
+			var payload any
+			switch request.URL.Host {
+			case "127.0.0.1:" + strconv.Itoa(subscriberEndpoint.HostPort):
+				switch request.URL.Path {
+				case "/diagnostics":
+					payload = diagnostic.Capabilities{SchemaVersion: diagnostic.CapabilitiesSchema, Journeys: []string{"webhook-subscriber"}}
+				case "/diagnostics/webhook-subscriber/intent":
+					payload = intent
+				}
+			case "127.0.0.1:" + strconv.Itoa(webpaEndpoint.HostPort):
+				switch request.URL.Path {
+				case "/diagnostics":
+					payload = diagnostic.Capabilities{SchemaVersion: diagnostic.CapabilitiesSchema, Journeys: []string{diagnostic.JourneyWebhook}}
+				case "/diagnostics/webhook":
+					var invocation diagnostic.Invocation
+					if err := json.NewDecoder(request.Body).Decode(&invocation); err != nil || invocation.SubscriberIntent == nil || invocation.AllowActiveCallback || invocation.Event != "" || invocation.DeviceID != "" {
+						t.Errorf("passive webhook invocation = %+v, error = %v", invocation, err)
+					}
+					payload = diagnostic.EndpointResponse{SchemaVersion: diagnostic.SchemaVersion, Journey: diagnostic.JourneyWebhook, ObservedAt: now, Observations: []diagnostic.Observation{
+						{EdgeID: "argus-reachability", State: diagnostic.StatePassed, ObservedAt: now},
+						{EdgeID: "argus-authentication", State: diagnostic.StatePassed, ObservedAt: now},
+						{EdgeID: "registration-present", State: diagnostic.StatePassed, ObservedAt: now},
+						{EdgeID: "registration-fresh", State: diagnostic.StatePassed, ObservedAt: now},
+						{EdgeID: "registration-conformant", State: diagnostic.StatePassed, ObservedAt: now},
+					}}
+				}
+			}
+			if payload == nil {
+				return nil, fmt.Errorf("unexpected passive webhook request %s %s", request.Method, request.URL)
+			}
+			body, _ := json.Marshal(payload)
+			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(string(body))), Header: http.Header{}}, nil
+		})}}
+	}
+	t.Cleanup(func() { newDiagnosticClient = previousFactory })
+
+	response, err := executeLocal(Options{Command: "diagnose", Name: "edge", From: "event-sink", To: "webhook", StateRoot: stateRoot})
+	if err == nil || !strings.Contains(err.Error(), "inconclusive") {
+		t.Fatalf("diagnose error = %v", err)
+	}
+	if !strings.Contains(response.Message, "--UNKNOWN-->") || !strings.Contains(response.Message, "active callback diagnosis was not requested") {
+		t.Fatalf("passive webhook graph = %s", response.Message)
+	}
+	wantRequests := []string{
+		"GET 127.0.0.1:" + strconv.Itoa(subscriberEndpoint.HostPort) + "/diagnostics",
+		"GET 127.0.0.1:" + strconv.Itoa(subscriberEndpoint.HostPort) + "/diagnostics/webhook-subscriber/intent",
+		"GET 127.0.0.1:" + strconv.Itoa(webpaEndpoint.HostPort) + "/diagnostics",
+		"POST 127.0.0.1:" + strconv.Itoa(webpaEndpoint.HostPort) + "/diagnostics/webhook",
+	}
+	if !reflect.DeepEqual(requests, wantRequests) {
+		t.Fatalf("requests = %#v, want %#v", requests, wantRequests)
+	}
+}
+
+func TestDiagnoseCallbackUsesPersistedLoopbackEndpoints(t *testing.T) {
+	stateRoot := t.TempDir()
+	store, err := persist.Open(stateRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := []byte("apiVersion: vcpe.dev/v1\nkind: Deployment\nmetadata: {name: edge}\nspec:\n  networks:\n    - role: wan\n      ipv4: {cidr: 10.0.0.0/24}\n  services:\n    - name: gateway\n      type: gateway\n      replicas: 1\n      interfaces: [{role: wan}]\n      image: {repository: gateway}\n    - name: event-sink\n      type: event-sink\n      replicas: 1\n      interfaces: [{role: wan}]\n      image: {repository: event-sink}\n    - name: webpa\n      type: webpa\n      replicas: 1\n      image: {repository: webpa}\n")
+	if err := store.SaveDesiredSnapshot("edge", snapshot); err != nil {
+		t.Fatal(err)
+	}
+	gatewayEndpoint, err := store.ReserveHealthEndpoint("edge", "gateway", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	subscriberEndpoint, err := store.ReserveHealthEndpoint("edge", "event-sink", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	webpaEndpoint, err := store.ReserveHealthEndpoint("edge", "webpa", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	now := time.Now().UTC()
+	correlationID := ""
+	previousFactory := newDiagnosticClient
+	newDiagnosticClient = func(time.Duration) *diagnostic.Client {
+		return &diagnostic.Client{HTTPClient: &http.Client{Transport: diagnosticRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+			var payload any
+			switch request.URL.Host {
+			case "127.0.0.1:" + strconv.Itoa(gatewayEndpoint.HostPort):
+				switch request.URL.Path {
+				case "/diagnostics":
+					payload = diagnostic.Capabilities{SchemaVersion: diagnostic.CapabilitiesSchema, Journeys: []string{diagnostic.JourneyCPEWebPA, diagnostic.JourneyCPEWebPACallback}}
+				case "/diagnostics/cpe-webpa":
+					payload = diagnostic.EndpointResponse{SchemaVersion: diagnostic.SchemaVersion, Journey: diagnostic.JourneyCPEWebPA, ObservedAt: now, Observations: callbackCPEObservations(now, false)}
+				case "/diagnostics/cpe-webpa-callback":
+					var invocation diagnostic.Invocation
+					if err := json.NewDecoder(request.Body).Decode(&invocation); err != nil || !invocation.AllowActiveEvent || invocation.ClientService != "apparmor-simulator" || invocation.Subscriber != "event-sink" {
+						t.Fatalf("callback invocation = %+v, %v", invocation, err)
+					}
+					correlationID = invocation.CorrelationID
+					payload = diagnostic.EndpointResponse{SchemaVersion: diagnostic.SchemaVersion, Journey: diagnostic.JourneyCPEWebPACallback, ObservedAt: now, Observations: callbackCPEObservations(now, true), ActiveEvent: &diagnostic.CPEActiveEventResult{Accepted: true}}
+				}
+			case "127.0.0.1:" + strconv.Itoa(subscriberEndpoint.HostPort):
+				switch request.URL.Path {
+				case "/diagnostics":
+					payload = diagnostic.Capabilities{SchemaVersion: diagnostic.CapabilitiesSchema, Journeys: []string{diagnostic.JourneyWebhookSubscriber}}
+				case "/diagnostics/webhook-subscriber/intent":
+					payload = diagnostic.WebhookSubscriberIntent{SchemaVersion: diagnostic.SchemaVersion, Journey: diagnostic.JourneyWebhookSubscriber, ObservedAt: now, CallbackURL: "http://event-sink:8080/webhook", EventFilter: "devices/.*", DeviceMatcher: "mac:.*", ContentType: "application/json", SecretConfigured: true}
+				case "/diagnostics/webhook-subscriber/receipts/" + correlationID:
+					payload = diagnostic.Receipt{SchemaVersion: diagnostic.SchemaVersion, CorrelationID: correlationID, Source: "caduceus", AcceptedAt: now, HTTPStatus: http.StatusNoContent}
+				}
+			case "127.0.0.1:" + strconv.Itoa(webpaEndpoint.HostPort):
+				switch request.URL.Path {
+				case "/diagnostics":
+					payload = diagnostic.Capabilities{SchemaVersion: diagnostic.CapabilitiesSchema, Journeys: []string{diagnostic.JourneyWebhook}}
+				case "/diagnostics/webhook":
+					payload = diagnostic.EndpointResponse{SchemaVersion: diagnostic.SchemaVersion, Journey: diagnostic.JourneyWebhook, ObservedAt: now, Observations: callbackWebhookObservations(now)}
+				case "/diagnostics/cpe-webpa-callback/routing":
+					payload = diagnostic.RoutingObservation{SchemaVersion: diagnostic.SchemaVersion, CorrelationID: correlationID, State: "selected", ObservedAt: now}
+				}
+			}
+			if payload == nil {
+				return nil, fmt.Errorf("unexpected callback request %s %s", request.Method, request.URL)
+			}
+			body, _ := json.Marshal(payload)
+			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(string(body))), Header: http.Header{}}, nil
+		})}}
+	}
+	t.Cleanup(func() { newDiagnosticClient = previousFactory })
+
+	response, err := executeLocal(Options{Command: "diagnose", Name: "edge", From: "gateway", To: "callback", ClientService: "apparmor-simulator", Subscriber: "event-sink", AllowActiveEvent: true, Event: "devices/diagnostic", DeviceID: "mac:001122334455", StateRoot: stateRoot})
+	if err != nil || correlationID == "" || !strings.Contains(response.Message, "Result: passed") || strings.Contains(response.Message, correlationID) {
+		t.Fatalf("callback diagnose response = %+v, error = %v, correlation ID = %q", response, err, correlationID)
+	}
+}
+
+func callbackCPEObservations(observedAt time.Time, active bool) []diagnostic.Observation {
+	observations := []diagnostic.Observation{
+		{EdgeID: "application-parodus", State: diagnostic.StatePassed, ObservedAt: observedAt},
+		{EdgeID: "talaria-dns", State: diagnostic.StatePassed, ObservedAt: observedAt},
+		{EdgeID: "talaria-transport", State: diagnostic.StatePassed, ObservedAt: observedAt},
+		{EdgeID: "talaria-authentication", State: diagnostic.StatePassed, ObservedAt: observedAt},
+		{EdgeID: "device-registration", State: diagnostic.StatePassed, ObservedAt: observedAt},
+	}
+	if active {
+		observations = append(observations, diagnostic.Observation{EdgeID: "active-event-acceptance", State: diagnostic.StatePassed, ObservedAt: observedAt})
+	}
+	return observations
+}
+
+func callbackWebhookObservations(observedAt time.Time) []diagnostic.Observation {
+	return []diagnostic.Observation{
+		{EdgeID: "argus-reachability", State: diagnostic.StatePassed, ObservedAt: observedAt},
+		{EdgeID: "argus-authentication", State: diagnostic.StatePassed, ObservedAt: observedAt},
+		{EdgeID: "registration-present", State: diagnostic.StatePassed, ObservedAt: observedAt},
+		{EdgeID: "registration-fresh", State: diagnostic.StatePassed, ObservedAt: observedAt},
+		{EdgeID: "registration-conformant", State: diagnostic.StatePassed, ObservedAt: observedAt},
 	}
 }
 

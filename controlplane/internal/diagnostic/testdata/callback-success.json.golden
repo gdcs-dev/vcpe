@@ -1,0 +1,241 @@
+{
+  "schemaVersion": "vcpe.dev/diagnostic/v1",
+  "journey": "cpe-webpa-callback",
+  "source": {
+    "deployment": "edge",
+    "service": "gateway",
+    "type": "gateway",
+    "replica": 0
+  },
+  "target": {
+    "deployment": "edge",
+    "service": "webpa",
+    "type": "webpa",
+    "replica": 0
+  },
+  "nodes": [
+    {
+      "id": "application",
+      "label": "gateway application",
+      "kind": "application"
+    },
+    {
+      "id": "parodus",
+      "label": "Parodus",
+      "kind": "service"
+    },
+    {
+      "id": "talaria",
+      "label": "Talaria",
+      "kind": "service"
+    },
+    {
+      "id": "device",
+      "label": "Device registration",
+      "kind": "registry"
+    },
+    {
+      "id": "subscriber",
+      "label": "event-sink subscriber",
+      "kind": "subscriber"
+    },
+    {
+      "id": "intent",
+      "label": "Registration intent",
+      "kind": "configuration"
+    },
+    {
+      "id": "argus",
+      "label": "Argus",
+      "kind": "registry"
+    },
+    {
+      "id": "registration",
+      "label": "Webhook registration",
+      "kind": "registration"
+    },
+    {
+      "id": "caduceus",
+      "label": "Caduceus",
+      "kind": "delivery"
+    },
+    {
+      "id": "callback",
+      "label": "Callback receipt",
+      "kind": "endpoint"
+    }
+  ],
+  "edges": [
+    {
+      "id": "application-parodus",
+      "from": "application",
+      "to": "parodus",
+      "label": "verify selected Parodus client",
+      "blocksFollowing": true
+    },
+    {
+      "id": "talaria-dns",
+      "from": "parodus",
+      "to": "talaria",
+      "label": "resolve Talaria",
+      "blocksFollowing": true
+    },
+    {
+      "id": "talaria-transport",
+      "from": "talaria",
+      "to": "talaria",
+      "label": "connect to Talaria",
+      "blocksFollowing": true
+    },
+    {
+      "id": "talaria-authentication",
+      "from": "talaria",
+      "to": "talaria",
+      "label": "authenticate to Talaria",
+      "blocksFollowing": true
+    },
+    {
+      "id": "device-registration",
+      "from": "talaria",
+      "to": "device",
+      "label": "find device registration",
+      "blocksFollowing": true
+    },
+    {
+      "id": "subscriber-intent",
+      "from": "subscriber",
+      "to": "intent",
+      "label": "read subscriber intent",
+      "blocksFollowing": true
+    },
+    {
+      "id": "argus-reachability",
+      "from": "intent",
+      "to": "argus",
+      "label": "reach Argus",
+      "blocksFollowing": true
+    },
+    {
+      "id": "argus-authentication",
+      "from": "argus",
+      "to": "argus",
+      "label": "authenticate to Argus",
+      "blocksFollowing": true
+    },
+    {
+      "id": "registration-present",
+      "from": "argus",
+      "to": "registration",
+      "label": "find one registration",
+      "blocksFollowing": true
+    },
+    {
+      "id": "registration-fresh",
+      "from": "registration",
+      "to": "registration",
+      "label": "verify registration freshness",
+      "blocksFollowing": true
+    },
+    {
+      "id": "registration-conformant",
+      "from": "registration",
+      "to": "callback",
+      "label": "validate event and device matcher",
+      "blocksFollowing": true
+    },
+    {
+      "id": "active-event-acceptance",
+      "from": "parodus",
+      "to": "caduceus",
+      "label": "accept one marked event",
+      "blocksFollowing": true
+    },
+    {
+      "id": "routing-observation",
+      "from": "caduceus",
+      "to": "caduceus",
+      "label": "observe routing selection",
+      "blocksFollowing": true
+    },
+    {
+      "id": "callback-receipt",
+      "from": "caduceus",
+      "to": "callback",
+      "label": "record matching callback receipt",
+      "blocksFollowing": true
+    }
+  ],
+  "observations": [
+    {
+      "edgeId": "application-parodus",
+      "state": "passed",
+      "observedAt": "2026-08-17T16:00:00Z"
+    },
+    {
+      "edgeId": "talaria-dns",
+      "state": "passed",
+      "observedAt": "2026-08-17T16:00:00Z"
+    },
+    {
+      "edgeId": "talaria-transport",
+      "state": "passed",
+      "observedAt": "2026-08-17T16:00:00Z"
+    },
+    {
+      "edgeId": "talaria-authentication",
+      "state": "passed",
+      "observedAt": "2026-08-17T16:00:00Z"
+    },
+    {
+      "edgeId": "device-registration",
+      "state": "passed",
+      "observedAt": "2026-08-17T16:00:00Z"
+    },
+    {
+      "edgeId": "subscriber-intent",
+      "state": "passed",
+      "observedAt": "2026-08-17T16:00:00Z"
+    },
+    {
+      "edgeId": "argus-reachability",
+      "state": "passed",
+      "observedAt": "2026-08-17T16:00:00Z"
+    },
+    {
+      "edgeId": "argus-authentication",
+      "state": "passed",
+      "observedAt": "2026-08-17T16:00:00Z"
+    },
+    {
+      "edgeId": "registration-present",
+      "state": "passed",
+      "observedAt": "2026-08-17T16:00:00Z"
+    },
+    {
+      "edgeId": "registration-fresh",
+      "state": "passed",
+      "observedAt": "2026-08-17T16:00:00Z"
+    },
+    {
+      "edgeId": "registration-conformant",
+      "state": "passed",
+      "observedAt": "2026-08-17T16:00:00Z"
+    },
+    {
+      "edgeId": "active-event-acceptance",
+      "state": "passed",
+      "observedAt": "2026-08-17T16:00:00Z"
+    },
+    {
+      "edgeId": "routing-observation",
+      "state": "passed",
+      "observedAt": "2026-08-17T16:00:00Z"
+    },
+    {
+      "edgeId": "callback-receipt",
+      "state": "passed",
+      "observedAt": "2026-08-17T16:00:00Z"
+    }
+  ],
+  "observedAt": "2026-08-17T16:00:00Z"
+}

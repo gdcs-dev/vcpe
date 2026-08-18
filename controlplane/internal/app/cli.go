@@ -33,14 +33,23 @@ type Options struct {
 	ConfigPath    string
 
 	// Name selects a target deployment (metadata.name) for down/destroy/logs/
-	// status/service commands.
-	Name          string
-	From          string
-	To            string
-	ClientService string
+	// status/service/diagnose commands. Down, status, and diagnose select the
+	// sole active deployment when this is omitted.
+	Name                string
+	From                string
+	To                  string
+	ClientService       string
+	Subscriber          string
+	AllowActiveCallback bool
+	AllowActiveEvent    bool
+	Event               string
+	DeviceID            string
 	// Replica selects a zero-based source replica for diagnose. Nil means the
 	// flag was omitted and permits automatic selection of a single replica.
 	Replica *int
+	// SubscriberReplica selects the zero-based event-sink replica for callback
+	// diagnostics. Nil means automatic selection of a single replica.
+	SubscriberReplica *int
 
 	AllowDisruptive bool
 	NoCache         bool
@@ -298,6 +307,31 @@ func parseArgs(_ string, args []string) (Options, error) {
 			}
 			opts.ClientService = val
 			i = next
+		case arg == "--subscriber":
+			val, next, err := takeValue(rest, i, "--subscriber")
+			if err != nil {
+				return Options{}, err
+			}
+			opts.Subscriber = val
+			i = next
+		case arg == "--allow-active-callback":
+			opts.AllowActiveCallback = true
+		case arg == "--allow-active-event":
+			opts.AllowActiveEvent = true
+		case arg == "--event":
+			val, next, err := takeValue(rest, i, "--event")
+			if err != nil {
+				return Options{}, err
+			}
+			opts.Event = val
+			i = next
+		case arg == "--device-id":
+			val, next, err := takeValue(rest, i, "--device-id")
+			if err != nil {
+				return Options{}, err
+			}
+			opts.DeviceID = val
+			i = next
 		case arg == "--replica":
 			val, next, err := takeValue(rest, i, "--replica")
 			if err != nil {
@@ -308,6 +342,17 @@ func parseArgs(_ string, args []string) (Options, error) {
 				return Options{}, fmt.Errorf("--replica must be a non-negative integer")
 			}
 			opts.Replica = &replica
+			i = next
+		case arg == "--subscriber-replica":
+			val, next, err := takeValue(rest, i, "--subscriber-replica")
+			if err != nil {
+				return Options{}, err
+			}
+			replica, err := strconv.Atoi(val)
+			if err != nil || replica < 0 {
+				return Options{}, fmt.Errorf("--subscriber-replica must be a non-negative integer")
+			}
+			opts.SubscriberReplica = &replica
 			i = next
 		case arg == "--state-root":
 			val, next, err := takeValue(rest, i, "--state-root")
@@ -429,11 +474,38 @@ func validateCommandShape(opts *Options) error {
 			return fmt.Errorf("destroy requires --force to confirm teardown; run `vcpe down --help` for usage")
 		}
 	case "diagnose":
-		if opts.Name == "" || opts.From == "" || opts.To == "" || opts.ClientService == "" {
-			return fmt.Errorf("diagnose requires --name <deployment>, --from <service>, --to webpa, and --client-service <name>; run `vcpe diagnose --help` for usage")
+		if opts.From == "" || opts.To == "" {
+			return fmt.Errorf("diagnose requires --from <service> and --to <webpa|webhook|callback>; run `vcpe diagnose --help` for usage")
 		}
-		if err := (diagnostic.Invocation{ClientService: opts.ClientService}).Validate(); err != nil {
-			return fmt.Errorf("invalid --client-service: %w", err)
+		switch opts.To {
+		case "webpa":
+			if opts.ClientService == "" {
+				return fmt.Errorf("diagnose --to webpa requires --client-service <name>")
+			}
+			if err := (diagnostic.Invocation{ClientService: opts.ClientService}).ValidateFor(diagnostic.JourneyCPEWebPA); err != nil {
+				return fmt.Errorf("invalid --client-service: %w", err)
+			}
+			if err := (diagnostic.Invocation{ClientService: opts.ClientService, AllowActiveCallback: opts.AllowActiveCallback, Event: opts.Event, DeviceID: opts.DeviceID}).ValidateFor(diagnostic.JourneyCPEWebPA); err != nil {
+				return fmt.Errorf("invalid webpa diagnose options: %w", err)
+			}
+		case "webhook":
+			if opts.ClientService != "" {
+				return fmt.Errorf("--client-service is valid only for --to webpa")
+			}
+			if err := (diagnostic.Invocation{AllowActiveCallback: opts.AllowActiveCallback, Event: opts.Event, DeviceID: opts.DeviceID}).ValidateFor(diagnostic.JourneyWebhook); err != nil {
+				return fmt.Errorf("invalid webhook diagnose options: %w", err)
+			}
+		case "callback":
+			if opts.Subscriber == "" {
+				return fmt.Errorf("diagnose --to callback requires --subscriber <service>")
+			}
+			// The source invocation requires an opaque correlation ID, but the
+			// orchestrator generates it only after passive prerequisites pass.
+			if err := (diagnostic.Invocation{ClientService: opts.ClientService, Subscriber: opts.Subscriber, AllowActiveCallback: opts.AllowActiveCallback, AllowActiveEvent: opts.AllowActiveEvent, Event: opts.Event, DeviceID: opts.DeviceID, CorrelationID: strings.Repeat("0", diagnostic.MaxCorrelationIDLength)}).ValidateFor(diagnostic.JourneyCPEWebPACallback); err != nil {
+				return fmt.Errorf("invalid callback diagnose options: %w", err)
+			}
+		default:
+			return fmt.Errorf("diagnose --to must be webpa, webhook, or callback")
 		}
 	}
 	return nil

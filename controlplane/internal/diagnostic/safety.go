@@ -7,21 +7,34 @@ import (
 )
 
 var allowedEvidenceKeys = map[string]struct{}{
-	"client-evidence":  {},
-	"client-service":   {},
-	"device-id":        {},
-	"endpoint":         {},
-	"http-status":      {},
-	"listener":         {},
-	"parodus-endpoint": {},
-	"resolved-address": {},
-	"service-state":    {},
-	"talaria-endpoint": {},
+	"client-evidence":          {},
+	"client-service":           {},
+	"correlation-state":        {},
+	"device-id":                {},
+	"endpoint":                 {},
+	"http-status":              {},
+	"listener":                 {},
+	"parodus-endpoint":         {},
+	"participant-observed-at":  {},
+	"registration-fingerprint": {},
+	"resolved-address":         {},
+	"service-state":            {},
+	"talaria-endpoint":         {},
+}
+
+var allowedCorrelationStates = map[string]struct{}{
+	"accepted":  {},
+	"duplicate": {},
+	"missing":   {},
+	"recorded":  {},
+	"rejected":  {},
+	"restarted": {},
 }
 
 var sensitiveValuePatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)\b(?:basic|bearer)\s+[a-z0-9+/=_\-.]+`),
 	regexp.MustCompile(`(?i)(?:password|passwd|secret|token|authorization|credential)\s*[:=]\s*[^\s,;]+`),
+	regexp.MustCompile(`\b[a-f0-9]{64}\b`),
 }
 
 // Sanitize returns an output-safe deep copy. Oversized graph structure is
@@ -60,7 +73,11 @@ func sanitizeEvidence(evidence []Evidence) []Evidence {
 			continue
 		}
 		seen[entry.Key] = struct{}{}
-		clean = append(clean, Evidence{Key: entry.Key, Value: redact(truncate(entry.Value, MaxEvidenceValueLength))})
+		value := truncate(entry.Value, MaxEvidenceValueLength)
+		if entry.Key != "registration-fingerprint" {
+			value = redact(value)
+		}
+		clean = append(clean, Evidence{Key: entry.Key, Value: value})
 	}
 	return clean
 }

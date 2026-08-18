@@ -93,9 +93,91 @@ destination prefixes, probe definitions, or target URLs. Responses are
 size-limited, strictly decoded, redacted, and
 exclude raw logs and credentials.
 
-Webhook/Argus registration, Caduceus callback delivery, visual-editor graph
-overlays, and end-to-end event correlation are follow-up capabilities and are
-not inferred by this journey.
+### Webhook Registration And Callback Diagnostics
+
+The `event-sink` subscriber type supports a separate WebPA-owned webhook
+journey. It reads the subscriber's intended registration and authoritative
+Argus state through the two persisted loopback endpoints; the control plane
+does not inspect containers or run Podman during collection.
+
+Passive mode is the default and sends no callback traffic:
+
+```bash
+vcpe diagnose --name example-full --from event-sink --to webhook
+vcpe diagnose --name example-full --from event-sink --to webhook --json
+```
+
+It verifies subscriber intent, Argus reachability and authentication, one
+matching registration, freshness, and conformance. The direct-callback and
+Caduceus stages remain visible as `unknown` with
+`active-callback-not-requested`, so a healthy passive result is intentionally
+inconclusive and exits nonzero.
+
+Active mode is explicit because it generates one signed direct callback and
+one synthetic Caduceus event. Supply a representative destination and device
+identity that match the configured event filter and device matcher:
+
+```bash
+vcpe diagnose --name example-full --from event-sink --to webhook \
+  --allow-active-callback --event apparmor/diagnostic \
+  --device-id mac:001122334455 --json
+```
+
+`--event` and `--device-id` are required only with
+`--allow-active-callback`; the command rejects either active-only field without
+consent. `--client-service` belongs to the CPE-to-WebPA journey and is rejected
+for `--to webhook`. A fully healthy active graph passes the registration,
+direct callback DNS/transport/acceptance, Caduceus ingestion, and correlated
+subscriber-receipt stages.
+
+Diagnostic data is bounded: the WebPA participant considers at most eight
+Argus candidates, requests and responses have fixed size limits, and receipt
+polling has a fixed attempt bound. Output contains only safe registration
+fingerprints, HTTP statuses, correlation state, and timestamps. It never
+emits webhook secrets, HMAC values, Basic authentication, raw Argus items,
+callback bodies, or unbounded logs. Event-sink recognizes correctly signed
+diagnostic markers, records an expiring in-memory receipt, returns HTTP 204,
+and does not log or process the marker as an ordinary application event.
+
+### CPE-To-Subscriber Callback Diagnosis
+
+`--to callback` correlates one bounded, reserved diagnostic event from a
+supported Gateway application through its existing Parodus path, WebPA/Caduceus
+routing, and one selected `event-sink` subscriber receipt. Gateway is the only
+supported source for this active journey; XB10 remains unsupported because vCPE
+does not own a bounded XB10 event sender. The subscriber must be an `event-sink`
+service.
+
+This journey generates traffic only after explicit consent and all required
+selections are validated before vCPE reads state or invokes a diagnostic
+endpoint:
+
+```bash
+vcpe diagnose --name example-full --from gateway --to callback \
+  --client-service apparmor-simulator --subscriber event-sink \
+  --allow-active-event --event apparmor/diagnostic \
+  --device-id mac:001122334455 --json
+```
+
+Use `--replica <zero-based-index>` for a multi-replica Gateway and
+`--subscriber-replica <zero-based-index>` for a multi-replica event-sink. The
+command rejects missing or cross-journey fields, arbitrary callback URLs,
+credentials, event bodies, endpoints, and executable commands. It generates at
+most one marked event for an invocation.
+
+The ordered stages are CPE application/Parodus evidence, Talaria DNS,
+transport, authentication, and registration, subscriber intent and Argus
+registration validation, CPE event acceptance, Caduceus routing observation,
+and the matching signed callback receipt. The receipt is the only proof of
+end-to-end delivery. A missing routing record or receipt, including receipt
+state lost during an event-sink restart, is `unknown` and therefore
+inconclusive; it is not a confirmed callback rejection.
+
+The control plane uses only the selected participants' persisted loopback
+diagnostic endpoints. Correlation identifiers, WRP bodies, webhook secrets,
+signatures, and credentials remain local to workloads and are never emitted in
+ASCII or JSON output. This is a one-event diagnostic probe, not continuous
+telemetry or tracing of arbitrary production events.
 
 ## Generic Containers
 

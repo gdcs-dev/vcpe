@@ -5,7 +5,8 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/vcpe-healthd "--probe=interfaces=/usr/local/bin/gateway-health-probe interfaces" "--probe=parodus=/usr/local/bin/gateway-health-probe parodus" "--probe=webpa-reachable=/usr/local/bin/gateway-health-probe webpa-reachable" "--probe=webpa-registration=/usr/local/bin/gateway-health-probe webpa-registration" "--diagnostic=cpe-webpa"
+Environment=VCPE_CPE_ACTIVE_EVENT_SOCKET=/run/apparmor-simulator-diagnostic.sock
+ExecStart=/usr/local/bin/vcpe-healthd "--probe=interfaces=/usr/local/bin/gateway-health-probe interfaces" "--probe=parodus=/usr/local/bin/gateway-health-probe parodus" "--probe=webpa-reachable=/usr/local/bin/gateway-health-probe webpa-reachable" "--probe=webpa-registration=/usr/local/bin/gateway-health-probe webpa-registration" "--diagnostic=cpe-webpa" "--diagnostic=cpe-webpa-callback"
 Restart=always
 RestartSec=2
 

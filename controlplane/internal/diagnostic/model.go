@@ -5,28 +5,45 @@ package diagnostic
 import (
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
 
 const (
-	SchemaVersion           = "vcpe.dev/diagnostic/v1"
-	CapabilitiesSchema      = "vcpe.dev/diagnostics/v1"
-	JourneyCPEWebPA         = "cpe-webpa"
-	MaxNodes                = 16
-	MaxEdges                = 16
-	MaxEvidencePerEdge      = 8
-	MaxCapabilities         = 16
-	MaxIDLength             = 64
-	MaxLabelLength          = 128
-	MaxMessageLength        = 256
-	MaxEvidenceValueLength  = 256
-	MaxDiagnosticBodyBytes  = 64 * 1024
-	MaxCapabilitiesBodySize = 4 * 1024
-	MaxInvocationBodySize   = 1024
+	SchemaVersion            = "vcpe.dev/diagnostic/v1"
+	CapabilitiesSchema       = "vcpe.dev/diagnostics/v1"
+	JourneyCPEWebPA          = "cpe-webpa"
+	JourneyCPEWebPACallback  = "cpe-webpa-callback"
+	JourneyWebhook           = "webhook"
+	JourneyWebhookSubscriber = "webhook-subscriber"
+	WebhookActiveDirect      = "direct"
+	WebhookActiveCaduceus    = "caduceus"
+	MaxNodes                 = 16
+	MaxEdges                 = 16
+	MaxEvidencePerEdge       = 8
+	MaxCapabilities          = 16
+	MaxIDLength              = 64
+	MaxLabelLength           = 128
+	MaxMessageLength         = 256
+	MaxEvidenceValueLength   = 256
+	MaxDiagnosticBodyBytes   = 64 * 1024
+	MaxCapabilitiesBodySize  = 4 * 1024
+	MaxInvocationBodySize    = 1024
+	MaxInvocationTextLength  = 256
+	MaxCallbackURLLength     = 2048
+	MaxWebhookIntentBodySize = 4 * 1024
+	MaxWebhookCandidates     = 8
+	MaxReceiptPollAttempts   = 5
+	MaxCorrelationIDLength   = 64
 )
 
-var stableIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)
+var (
+	stableIDPattern         = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)
+	eventDestinationPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._/-]*$`)
+	deviceIdentityPattern   = regexp.MustCompile(`^[a-z][a-z0-9_-]*:[a-z0-9][a-z0-9._-]*$`)
+	registrationIDPattern   = regexp.MustCompile(`^[a-f0-9]{64}$`)
+)
 
 // State is the observation state for one graph edge.
 type State string
@@ -103,22 +120,138 @@ type Capabilities struct {
 // EndpointResponse is the bounded source-local response returned by an active
 // diagnostic route before the control plane merges expected graph metadata.
 type EndpointResponse struct {
-	SchemaVersion string        `json:"schemaVersion"`
-	Journey       string        `json:"journey"`
-	Observations  []Observation `json:"observations"`
-	ObservedAt    time.Time     `json:"observedAt"`
+	SchemaVersion string                `json:"schemaVersion"`
+	Journey       string                `json:"journey"`
+	Observations  []Observation         `json:"observations"`
+	Active        *WebhookActiveResult  `json:"active,omitempty"`
+	ActiveEvent   *CPEActiveEventResult `json:"activeEvent,omitempty"`
+	ObservedAt    time.Time             `json:"observedAt"`
 }
 
-// Invocation contains the only caller-selectable input for an active journey.
-// The source still owns the WRP source, device identity, endpoint, credentials,
-// and fixed Parodus service-status destination prefix.
+// Invocation contains the bounded caller-selectable inputs for active journeys.
+// The source still owns endpoints, credentials, and other runtime configuration.
 type Invocation struct {
-	ClientService string `json:"clientService"`
+	ClientService       string                   `json:"clientService,omitempty"`
+	Subscriber          string                   `json:"subscriber,omitempty"`
+	AllowActiveCallback bool                     `json:"allowActiveCallback,omitempty"`
+	AllowActiveEvent    bool                     `json:"allowActiveEvent,omitempty"`
+	Event               string                   `json:"event,omitempty"`
+	DeviceID            string                   `json:"deviceId,omitempty"`
+	CorrelationID       string                   `json:"correlationId,omitempty"`
+	SubscriberIntent    *WebhookSubscriberIntent `json:"subscriberIntent,omitempty"`
+	ActivePhase         string                   `json:"activePhase,omitempty"`
 }
 
-// Validate confirms that caller input is a single stable service identifier.
+// WebhookActiveResult contains only the safe acknowledgement needed for the
+// control plane to poll the subscriber after one WebPA-local active action.
+type WebhookActiveResult struct {
+	Phase         string `json:"phase"`
+	CorrelationID string `json:"correlationId"`
+	HTTPStatus    int    `json:"httpStatus"`
+}
+
+// CPEActiveEventResult acknowledges one source-owned marked event without
+// serializing event content or its correlation identity.
+type CPEActiveEventResult struct {
+	Accepted bool `json:"accepted"`
+}
+
+// RoutingObservation is the bounded WebPA-owned result of looking up a
+// selected Caduceus route for one opaque diagnostic correlation ID.
+type RoutingObservation struct {
+	SchemaVersion string    `json:"schemaVersion"`
+	CorrelationID string    `json:"correlationId"`
+	State         string    `json:"state"`
+	ObservedAt    time.Time `json:"observedAt"`
+}
+
+// WebhookSubscriberIntent is the bounded, safe registration state collected
+// from a webhook subscriber before contacting the WebPA participant.
+type WebhookSubscriberIntent struct {
+	SchemaVersion     string    `json:"schemaVersion"`
+	Journey           string    `json:"journey"`
+	ObservedAt        time.Time `json:"observedAt"`
+	CallbackURL       string    `json:"callbackUrl"`
+	EventFilter       string    `json:"eventFilter"`
+	DeviceMatcher     string    `json:"deviceMatcher"`
+	ContentType       string    `json:"contentType"`
+	SecretConfigured  bool      `json:"secretConfigured"`
+	InitialSuccessAt  time.Time `json:"initialSuccessAt,omitempty"`
+	RefreshSuccessAt  time.Time `json:"refreshSuccessAt,omitempty"`
+	RefreshFailureAt  time.Time `json:"refreshFailureAt,omitempty"`
+	LastFailureAt     time.Time `json:"lastFailureAt,omitempty"`
+	LastErrorCategory string    `json:"lastErrorCategory,omitempty"`
+}
+
+// Validate preserves the CPE-to-WebPA validation contract for source-local
+// handlers that predate journey-aware invocation routing.
 func (invocation Invocation) Validate() error {
-	return validateID("client service", invocation.ClientService)
+	return invocation.ValidateFor(JourneyCPEWebPA)
+}
+
+// ValidateFor confirms that caller input belongs exclusively to the selected
+// journey and that active webhook traffic has explicit representative inputs.
+func (invocation Invocation) ValidateFor(journey string) error {
+	switch journey {
+	case JourneyCPEWebPA:
+		if invocation.Subscriber != "" || invocation.AllowActiveCallback || invocation.AllowActiveEvent || invocation.Event != "" || invocation.DeviceID != "" || invocation.CorrelationID != "" || invocation.SubscriberIntent != nil || invocation.ActivePhase != "" {
+			return fmt.Errorf("webhook invocation fields are valid only for journey %q", JourneyWebhook)
+		}
+		return validateID("client service", invocation.ClientService)
+	case JourneyWebhook:
+		if invocation.ClientService != "" || invocation.Subscriber != "" || invocation.AllowActiveEvent || invocation.CorrelationID != "" {
+			return fmt.Errorf("client service is valid only for journey %q", JourneyCPEWebPA)
+		}
+		if invocation.SubscriberIntent != nil {
+			if err := invocation.SubscriberIntent.Validate(); err != nil {
+				return fmt.Errorf("invalid webhook subscriber intent: %w", err)
+			}
+		}
+		if !invocation.AllowActiveCallback {
+			if invocation.Event != "" || invocation.DeviceID != "" || invocation.ActivePhase != "" {
+				return fmt.Errorf("event and device identity require active callback consent")
+			}
+			return nil
+		}
+		if err := validateInvocationText("event", invocation.Event, eventDestinationPattern); err != nil {
+			return err
+		}
+		if err := validateInvocationText("device identity", invocation.DeviceID, deviceIdentityPattern); err != nil {
+			return err
+		}
+		if invocation.ActivePhase != "" && invocation.ActivePhase != WebhookActiveDirect && invocation.ActivePhase != WebhookActiveCaduceus {
+			return fmt.Errorf("active webhook phase %q is invalid", invocation.ActivePhase)
+		}
+		if invocation.SubscriberIntent != nil && invocation.ActivePhase == "" {
+			return fmt.Errorf("active webhook phase is required when subscriber intent is forwarded")
+		}
+		return nil
+	case JourneyCPEWebPACallback:
+		if invocation.AllowActiveCallback || invocation.SubscriberIntent != nil || invocation.ActivePhase != "" {
+			return fmt.Errorf("webhook invocation fields are valid only for journey %q", JourneyWebhook)
+		}
+		if !invocation.AllowActiveEvent {
+			return fmt.Errorf("active event consent is required")
+		}
+		if err := validateID("client service", invocation.ClientService); err != nil {
+			return err
+		}
+		if err := validateID("subscriber", invocation.Subscriber); err != nil {
+			return err
+		}
+		if err := validateInvocationText("event", invocation.Event, eventDestinationPattern); err != nil {
+			return err
+		}
+		if err := validateInvocationText("device identity", invocation.DeviceID, deviceIdentityPattern); err != nil {
+			return err
+		}
+		if err := validateCorrelationID(invocation.CorrelationID); err != nil {
+			return err
+		}
+		return nil
+	default:
+		return fmt.Errorf("unsupported diagnostic journey %q", journey)
+	}
 }
 
 // Validate confirms that a result is bounded, internally consistent, and safe
@@ -128,8 +261,8 @@ func (r Result) Validate() error {
 	if r.SchemaVersion != SchemaVersion {
 		return fmt.Errorf("unsupported diagnostic schema version %q", r.SchemaVersion)
 	}
-	if err := validateID("journey", r.Journey); err != nil {
-		return err
+	if !resultJourney(r.Journey) {
+		return fmt.Errorf("unsupported diagnostic journey %q", r.Journey)
 	}
 	if err := r.Source.validate("source"); err != nil {
 		return err
@@ -267,8 +400,24 @@ func (r EndpointResponse) Validate() error {
 	if r.SchemaVersion != SchemaVersion {
 		return fmt.Errorf("unsupported diagnostic schema version %q", r.SchemaVersion)
 	}
-	if err := validateID("journey", r.Journey); err != nil {
-		return err
+	if !resultJourney(r.Journey) {
+		return fmt.Errorf("unsupported diagnostic journey %q", r.Journey)
+	}
+	if r.Active != nil {
+		if r.Journey != JourneyWebhook {
+			return fmt.Errorf("active result is valid only for journey %q", JourneyWebhook)
+		}
+		if err := r.Active.Validate(); err != nil {
+			return fmt.Errorf("invalid active result: %w", err)
+		}
+	}
+	if r.ActiveEvent != nil {
+		if r.Journey != JourneyCPEWebPACallback {
+			return fmt.Errorf("active event result is valid only for journey %q", JourneyCPEWebPACallback)
+		}
+		if !r.ActiveEvent.Accepted {
+			return fmt.Errorf("active event result must acknowledge acceptance")
+		}
 	}
 	if r.ObservedAt.IsZero() {
 		return fmt.Errorf("diagnostic endpoint observation time is required")
@@ -301,6 +450,41 @@ func (r EndpointResponse) Validate() error {
 	return nil
 }
 
+// Validate confirms the active acknowledgement is bounded and correlatable.
+func (result WebhookActiveResult) Validate() error {
+	if result.Phase != WebhookActiveDirect && result.Phase != WebhookActiveCaduceus {
+		return fmt.Errorf("unsupported active webhook phase %q", result.Phase)
+	}
+	if err := validateCorrelationID(result.CorrelationID); err != nil {
+		return fmt.Errorf("active webhook %w", err)
+	}
+	if result.HTTPStatus < 100 || result.HTTPStatus > 599 {
+		return fmt.Errorf("active webhook HTTP status %d is invalid", result.HTTPStatus)
+	}
+	return nil
+}
+
+// Validate confirms the routing observation contains only the allowed
+// selected-routing outcome for the requested diagnostic correlation.
+func (observation RoutingObservation) Validate(correlationID string) error {
+	if observation.SchemaVersion != SchemaVersion {
+		return fmt.Errorf("unsupported diagnostic schema version %q", observation.SchemaVersion)
+	}
+	if err := validateCorrelationID(correlationID); err != nil {
+		return err
+	}
+	if observation.CorrelationID != correlationID {
+		return fmt.Errorf("correlation ID does not match request")
+	}
+	if observation.State != "selected" {
+		return fmt.Errorf("routing observation state %q is invalid", observation.State)
+	}
+	if observation.ObservedAt.IsZero() {
+		return fmt.Errorf("routing observation time is required")
+	}
+	return nil
+}
+
 func (e EndpointIdentity) validate(name string) error {
 	if err := validateID(name+" deployment", e.Deployment); err != nil {
 		return err
@@ -328,11 +512,29 @@ func validateID(name, value string) error {
 	return nil
 }
 
+func validateCorrelationID(value string) error {
+	if len(value) != MaxCorrelationIDLength || !registrationIDPattern.MatchString(value) {
+		return fmt.Errorf("correlation ID is invalid")
+	}
+	return nil
+}
+
+func resultJourney(journey string) bool {
+	return journey == JourneyCPEWebPA || journey == JourneyCPEWebPACallback || journey == JourneyWebhook
+}
+
 func validateOptionalID(name, value string) error {
 	if value == "" {
 		return nil
 	}
 	return validateID(name, value)
+}
+
+func validateInvocationText(name, value string, pattern *regexp.Regexp) error {
+	if len(value) == 0 || len(value) > MaxInvocationTextLength || !pattern.MatchString(value) {
+		return fmt.Errorf("%s %q is invalid", name, value)
+	}
+	return nil
 }
 
 func validateText(name, value string, maximum int, required bool) error {
@@ -351,12 +553,42 @@ func validateEvidence(owner string, evidence []Evidence) error {
 		if err := validateID("evidence key", entry.Key); err != nil {
 			return err
 		}
+		if _, allowed := allowedEvidenceKeys[entry.Key]; !allowed {
+			return fmt.Errorf("evidence key %q is not allowed for %s", entry.Key, owner)
+		}
 		if _, duplicate := seen[entry.Key]; duplicate {
 			return fmt.Errorf("duplicate evidence key %q for %s", entry.Key, owner)
 		}
 		seen[entry.Key] = struct{}{}
 		if err := validateText("evidence value", entry.Value, MaxEvidenceValueLength, false); err != nil {
 			return err
+		}
+		if err := validateEvidenceValue(entry); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateEvidenceValue(entry Evidence) error {
+	switch entry.Key {
+	case "http-status":
+		status, err := strconv.Atoi(entry.Value)
+		if err != nil || status < 100 || status > 599 {
+			return fmt.Errorf("HTTP status evidence %q is invalid", entry.Value)
+		}
+	case "registration-fingerprint":
+		if !registrationIDPattern.MatchString(entry.Value) {
+			return fmt.Errorf("registration fingerprint evidence is invalid")
+		}
+	case "correlation-state":
+		if _, ok := allowedCorrelationStates[entry.Value]; !ok {
+			return fmt.Errorf("correlation state evidence %q is invalid", entry.Value)
+		}
+	case "participant-observed-at":
+		observedAt, err := time.Parse(time.RFC3339Nano, entry.Value)
+		if err != nil || observedAt.IsZero() {
+			return fmt.Errorf("participant observation time evidence %q is invalid", entry.Value)
 		}
 	}
 	return nil

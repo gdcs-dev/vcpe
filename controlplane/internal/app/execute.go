@@ -70,17 +70,20 @@ func ExecuteCLI(prog string, args []string, version string) error {
 func executeViaDaemon(socket string, opts Options) error {
 	client := daemon.NewClient(socket)
 	resp, err := client.Execute(context.Background(), daemon.CommandRequest{
-		Command:         opts.Command,
-		ManifestPath:    opts.ManifestPath,
-		Name:            opts.Name,
-		From:            opts.From,
-		To:              opts.To,
-		ClientService:   opts.ClientService,
-		Replica:         opts.Replica,
-		AllowDisruptive: opts.AllowDisruptive,
-		NoCache:         opts.NoCache,
-		Force:           opts.Force,
-		OutputJSON:      opts.OutputJSON,
+		Command:             opts.Command,
+		ManifestPath:        opts.ManifestPath,
+		Name:                opts.Name,
+		From:                opts.From,
+		To:                  opts.To,
+		ClientService:       opts.ClientService,
+		Replica:             opts.Replica,
+		AllowActiveCallback: opts.AllowActiveCallback,
+		Event:               opts.Event,
+		DeviceID:            opts.DeviceID,
+		AllowDisruptive:     opts.AllowDisruptive,
+		NoCache:             opts.NoCache,
+		Force:               opts.Force,
+		OutputJSON:          opts.OutputJSON,
 	})
 	if err != nil {
 		return err

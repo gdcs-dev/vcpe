@@ -21,4 +21,6 @@ exec /usr/local/bin/vcpe-healthd \
 	--probe "argus=/usr/local/bin/webpa-health-probe argus" \
 	--probe "caduceus=/usr/local/bin/webpa-health-probe caduceus" \
 	--probe "themis=/usr/local/bin/webpa-health-probe themis" \
+	--diagnostic webhook \
+	--diagnostic cpe-webpa-callback \
 	--run /usr/local/bin/start-services.sh

@@ -31,6 +31,20 @@ func TestSanitizeBoundsAndRedactsEvidence(t *testing.T) {
 	}
 }
 
+func TestSanitizeRedactsCorrelationToken(t *testing.T) {
+	result := validResult()
+	token := strings.Repeat("a", MaxCorrelationIDLength)
+	result.Observations[0].Message = "accepted correlation " + token
+	result.Observations[0].Evidence = []Evidence{{Key: "endpoint", Value: token}}
+	clean, err := Sanitize(result)
+	if err != nil {
+		t.Fatalf("Sanitize: %v", err)
+	}
+	if strings.Contains(clean.Observations[0].Message, token) || strings.Contains(clean.Observations[0].Evidence[0].Value, token) {
+		t.Fatalf("correlation token was not redacted: %+v", clean.Observations[0])
+	}
+}
+
 func TestSanitizeCapsEvidence(t *testing.T) {
 	result := validResult()
 	for index := 0; index < MaxEvidencePerEdge+3; index++ {
@@ -42,6 +56,24 @@ func TestSanitizeCapsEvidence(t *testing.T) {
 	}
 	if len(clean.Observations[0].Evidence) != 1 {
 		t.Fatalf("deduplicated evidence count = %d, want 1", len(clean.Observations[0].Evidence))
+	}
+}
+
+func TestSanitizePreservesOnlyValidatedWebhookEvidence(t *testing.T) {
+	result := validResult()
+	result.Observations[0].Evidence = []Evidence{
+		{Key: "registration-fingerprint", Value: strings.Repeat("a", 64)},
+		{Key: "http-status", Value: "202"},
+		{Key: "correlation-state", Value: "recorded"},
+		{Key: "participant-observed-at", Value: "2026-08-14T18:58:55Z"},
+		{Key: "secret", Value: "never-emit"},
+	}
+	clean, err := Sanitize(result)
+	if err != nil {
+		t.Fatalf("Sanitize: %v", err)
+	}
+	if len(clean.Observations[0].Evidence) != 4 {
+		t.Fatalf("evidence = %#v", clean.Observations[0].Evidence)
 	}
 }
 

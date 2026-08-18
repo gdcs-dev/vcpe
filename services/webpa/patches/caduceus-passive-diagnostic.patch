@@ -1,0 +1,415 @@
+diff --git a/caduceus_type.go b/caduceus_type.go
+index 8ee2270..89830f3 100644
+--- a/caduceus_type.go
++++ b/caduceus_type.go
+## -17,6 +17,7 ## type CaduceusConfig struct {
+ 	Sender           SenderConfig
+ 	JWTValidators    []JWTValidator
+ 	Webhook          ancla.Config
++	Diagnostic       DiagnosticConfig
+ 	Listener         ancla.ListenerConfig
+ 	AllowInsecureTLS bool
+ }
+## -47,9 +48,13 ## type CaduceusHandler struct {
+ type CaduceusHandler struct {
+ 	senderWrapper SenderWrapper
+ 	*zap.Logger
++	diagnostic *DiagnosticObserver
+ }
+ 
+ func (ch *CaduceusHandler) HandleRequest(workerID int, msg *wrp.Message) {
+ 	ch.Info("Worker received a request, now passing to sender", zap.Int("workerId", workerID))
+-	ch.senderWrapper.Queue(msg)
++	selected := ch.senderWrapper.Queue(msg)
++	if ch.diagnostic != nil {
++		ch.diagnostic.Observe(msg, selected)
++	}
+ }
+diff --git a/diagnostic.go b/diagnostic.go
+new file mode 100644
+index 0000000..02e851a
+--- /dev/null
++++ b/diagnostic.go
+## -0,0 +1,145 ##
++// SPDX-FileCopyrightText: 2026 Comcast Cable Communications Management, LLC
++// SPDX-License-Identifier: Apache-2.0
++package main
++
++import (
++	"bytes"
++	"encoding/json"
++	"io"
++	"net/http"
++	"regexp"
++	"sort"
++	"sync"
++	"time"
++
++	"github.com/gorilla/mux"
++	"github.com/xmidt-org/wrp-go/v3"
++)
++
++const (
++	diagnosticJourney        = "cpe-webpa-callback"
++	defaultDiagnosticRecords = 32
++	defaultDiagnosticTTL     = 30 * time.Second
++	maxDiagnosticPayload     = 1024
++)
++
++var diagnosticCorrelationID = regexp.MustCompile(`^[a-f0-9]{64}$`)
++
++// DiagnosticConfig is opt-in. Disabled instrumentation has no routing,
++// delivery, or externally-visible endpoint behavior.
++type DiagnosticConfig struct {
++	Enabled    bool
++	MaxRecords int
++	RecordTTL  time.Duration
++}
++
++// DiagnosticObservation exposes only the bounded routing outcome required by
++// the diagnostic coordinator. It intentionally excludes event content,
++// callback addresses, registration data, and credentials.
++type DiagnosticObservation struct {
++	CorrelationID string    `json:"correlationId"`
++	State         string    `json:"state"`
++	ObservedAt    time.Time `json:"observedAt"`
++}
++
++// DiagnosticObserver records reserved diagnostic markers after existing
++// sender selection. It does not change the sender's matching or delivery.
++type DiagnosticObserver struct {
++	mutex   sync.Mutex
++	now     func() time.Time
++	maximum int
++	ttl     time.Duration
++	records map[string]DiagnosticObservation
++}
++
++func NewDiagnosticObserver(config DiagnosticConfig) *DiagnosticObserver {
++	if !config.Enabled {
++		return nil
++	}
++	if config.MaxRecords <= 0 || config.MaxRecords > defaultDiagnosticRecords {
++		config.MaxRecords = defaultDiagnosticRecords
++	}
++	if config.RecordTTL <= 0 || config.RecordTTL > defaultDiagnosticTTL {
++		config.RecordTTL = defaultDiagnosticTTL
++	}
++	return &DiagnosticObserver{
++		now:     time.Now,
++		maximum: config.MaxRecords,
++		ttl:     config.RecordTTL,
++		records: make(map[string]DiagnosticObservation, config.MaxRecords),
++	}
++}
++
++func (observer *DiagnosticObserver) Observe(message *wrp.Message, selected int) {
++	if observer == nil {
++		return
++	}
++	correlationID, ok := diagnosticMarker(message)
++	if !ok || selected < 1 {
++		return
++	}
++	now := observer.now().UTC()
++	observer.mutex.Lock()
++	defer observer.mutex.Unlock()
++	observer.expire(now)
++	if len(observer.records) >= observer.maximum {
++		observer.evictOldest()
++	}
++	observer.records[correlationID] = DiagnosticObservation{CorrelationID: correlationID, State: "selected", ObservedAt: now}
++}
++
++func (observer *DiagnosticObserver) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
++	correlationID := mux.Vars(request)["id"]
++	if !diagnosticCorrelationID.MatchString(correlationID) {
++		http.NotFound(writer, request)
++		return
++	}
++	now := observer.now().UTC()
++	observer.mutex.Lock()
++	observer.expire(now)
++	observation, ok := observer.records[correlationID]
++	observer.mutex.Unlock()
++	if !ok {
++		http.NotFound(writer, request)
++		return
++	}
++	writer.Header().Set("Content-Type", "application/json")
++	_ = json.NewEncoder(writer).Encode(observation)
++}
++
++func (observer *DiagnosticObserver) expire(now time.Time) {
++	for correlationID, observation := range observer.records {
++		if !now.Before(observation.ObservedAt.Add(observer.ttl)) {
++			delete(observer.records, correlationID)
++		}
++	}
++}
++
++func (observer *DiagnosticObserver) evictOldest() {
++	keys := make([]string, 0, len(observer.records))
++	for correlationID := range observer.records {
++		keys = append(keys, correlationID)
++	}
++	sort.Slice(keys, func(left, right int) bool {
++		return observer.records[keys[left]].ObservedAt.Before(observer.records[keys[right]].ObservedAt)
++	})
++	if len(keys) > 0 {
++		delete(observer.records, keys[0])
++	}
++}
++
++func diagnosticMarker(message *wrp.Message) (string, bool) {
++	if message == nil || message.Type != wrp.SimpleEventMessageType || message.ContentType != wrp.MimeTypeJson || len(message.Payload) == 0 || len(message.Payload) > maxDiagnosticPayload {
++		return "", false
++	}
++	var marker struct {
++		Diagnostic    string `json:"vcpe_diagnostic"`
++		CorrelationID string `json:"correlation_id"`
++	}
++	decoder := json.NewDecoder(bytes.NewReader(message.Payload))
++	decoder.DisallowUnknownFields()
++	if decoder.Decode(&marker) != nil || decoder.Decode(&struct{}{}) != io.EOF || marker.Diagnostic != diagnosticJourney || !diagnosticCorrelationID.MatchString(marker.CorrelationID) {
++		return "", false
++	}
++	return marker.CorrelationID, true
++}
+diff --git a/diagnostic_test.go b/diagnostic_test.go
+new file mode 100644
+index 0000000..3d19537
+--- /dev/null
++++ b/diagnostic_test.go
+## -0,0 +1,71 ##
++// SPDX-FileCopyrightText: 2026 Comcast Cable Communications Management, LLC
++// SPDX-License-Identifier: Apache-2.0
++package main
++
++import (
++	"encoding/json"
++	"net/http"
++	"net/http/httptest"
++	"strings"
++	"testing"
++	"time"
++
++	"github.com/gorilla/mux"
++	"github.com/xmidt-org/wrp-go/v3"
++)
++
++func diagnosticMessage(t *testing.T, correlationID string) *wrp.Message {
++	t.Helper()
++	payload, err := json.Marshal(map[string]string{"vcpe_diagnostic": diagnosticJourney, "correlation_id": correlationID})
++	if err != nil {
++		t.Fatal(err)
++	}
++	return &wrp.Message{Type: wrp.SimpleEventMessageType, ContentType: wrp.MimeTypeJson, Payload: payload}
++}
++
++func TestDiagnosticObserverRecordsSelectedMarker(t *testing.T) {
++	now := time.Date(2026, time.August, 17, 12, 0, 0, 0, time.UTC)
++	observer := NewDiagnosticObserver(DiagnosticConfig{Enabled: true, MaxRecords: 1, RecordTTL: time.Second})
++	observer.now = func() time.Time { return now }
++	correlationID := strings.Repeat("a", 64)
++	observer.Observe(diagnosticMessage(t, correlationID), 1)
++
++	request := httptest.NewRequest(http.MethodGet, "/api/v4/diagnostics/correlation/"+correlationID, nil)
++	request = mux.SetURLVars(request, map[string]string{"id": correlationID})
++	response := httptest.NewRecorder()
++	observer.ServeHTTP(response, request)
++	if response.Code != http.StatusOK {
++		t.Fatalf("status = %d", response.Code)
++	}
++	var observation DiagnosticObservation
++	if err := json.NewDecoder(response.Body).Decode(&observation); err != nil {
++		t.Fatal(err)
++	}
++	if observation.CorrelationID != correlationID || observation.State != "selected" || !observation.ObservedAt.Equal(now) {
++		t.Fatalf("observation = %+v", observation)
++	}
++}
++
++func TestDiagnosticObserverIgnoresNormalEventsAndExpiresRecords(t *testing.T) {
++	now := time.Date(2026, time.August, 17, 12, 0, 0, 0, time.UTC)
++	observer := NewDiagnosticObserver(DiagnosticConfig{Enabled: true, MaxRecords: 1, RecordTTL: time.Second})
++	observer.now = func() time.Time { return now }
++	observer.Observe(&wrp.Message{Type: wrp.SimpleEventMessageType, ContentType: wrp.MimeTypeJson, Payload: []byte(`{"ordinary":true}`)}, 1)
++	if len(observer.records) != 0 {
++		t.Fatalf("normal event was recorded: %+v", observer.records)
++	}
++	correlationID := strings.Repeat("b", 64)
++	observer.Observe(diagnosticMessage(t, correlationID), 0)
++	if len(observer.records) != 0 {
++		t.Fatalf("unselected event was recorded: %+v", observer.records)
++	}
++	observer.Observe(diagnosticMessage(t, correlationID), 1)
++	now = now.Add(2 * time.Second)
++	request := httptest.NewRequest(http.MethodGet, "/", nil)
++	request = mux.SetURLVars(request, map[string]string{"id": correlationID})
++	response := httptest.NewRecorder()
++	observer.ServeHTTP(response, request)
++	if response.Code != http.StatusNotFound {
++		t.Fatalf("expired record status = %d", response.Code)
++	}
++}
+diff --git a/main.go b/main.go
+index 9c66c37..6c9948a 100644
+--- a/main.go
++++ b/main.go
+## -105,6 +105,7 ## func caduceus(arguments []string) int {
+ 	if err != nil {
+ 		fmt.Fprintf(os.Stderr, "Unable to unmarshal configuration data into struct: %s\n", err)
+ 		return 1
+ 	}
++	diagnosticObserver := NewDiagnosticObserver(caduceusConfig.Diagnostic)
+ 
+ 	tracing, err := loadTracing(v, applicationName)
+## -165,5 +166,6 ## func caduceus(arguments []string) int {
+ 		caduceusHandler: &CaduceusHandler{
+ 			senderWrapper: caduceusSenderWrapper,
+ 			Logger:        logger,
++			diagnostic:     diagnosticObserver,
+ 		},
+ 		metrics:        serverHandlerMetrics,
+## -205,7 +207,7 ## func caduceus(arguments []string) int {
+ 		otelmux.WithTracerProvider(tracing.TracerProvider()),
+ 	}
+ 	rootRouter.Use(otelmux.Middleware("primary", otelMuxOptions...), candlelight.EchoFirstTraceNodeInfo(tracing, false))
+ 
+-	primaryHandler, err := NewPrimaryHandler(logger, v, metricsRegistry, tf, serverWrapper, svc, rootRouter, v.GetBool("previousVersionSupport"))
++	primaryHandler, err := NewPrimaryHandler(logger, v, metricsRegistry, tf, serverWrapper, svc, diagnosticObserver, rootRouter, v.GetBool("previousVersionSupport"))
+ 	if err != nil {
+ 		fmt.Fprintf(os.Stderr, "Handler creation error: %v\n", err)
+diff --git a/mocks_test.go b/mocks_test.go
+index d35c6bb..06518b6 100644
+--- a/mocks_test.go
++++ b/mocks_test.go
+## -31,8 +31,9 ## func (m *mockSenderWrapper) Update(list []ancla.InternalWebhook) {
+ 	m.Called(list)
+ }
+ 
+-func (m *mockSenderWrapper) Queue(msg *wrp.Message) {
+-	m.Called(msg)
++func (m *mockSenderWrapper) Queue(msg *wrp.Message) int {
++	arguments := m.Called(msg)
++	return arguments.Int(0)
+ }
+ 
+ func (m *mockSenderWrapper) Shutdown(gentle bool) {
+diff --git a/primaryHandler.go b/primaryHandler.go
+index b36b5f7..57a05ba 100644
+--- a/primaryHandler.go
++++ b/primaryHandler.go
+## -61,1 +61,1 ##
+-func NewPrimaryHandler(l *zap.Logger, v *viper.Viper, registry xmetrics.Registry, tf *touchstone.Factory, sw *ServerHandler, webhookSvc ancla.Service, router *mux.Router, prevVersionSupport bool) (*mux.Router, error) {
++func NewPrimaryHandler(l *zap.Logger, v *viper.Viper, registry xmetrics.Registry, tf *touchstone.Factory, sw *ServerHandler, webhookSvc ancla.Service, diagnosticObserver *DiagnosticObserver, router *mux.Router, prevVersionSupport bool) (*mux.Router, error) {
+## -75,1 +75,4 ##
+ 	router.Handle(urlPrefix+"/notify", auth.Then(sw)).Methods("POST")
++	if diagnosticObserver != nil {
++		router.Handle(urlPrefix+"/diagnostics/correlation/{id}", auth.Then(http.HandlerFunc(diagnosticObserver.ServeHTTP))).Methods("GET")
++	}
+diff --git a/senderWrapper.go b/senderWrapper.go
+index bbd389f..9e29cf6 100644
+--- a/senderWrapper.go
++++ b/senderWrapper.go
+## -55,4 +55,4 ## type SenderWrapper interface {
+ 	Update([]ancla.InternalWebhook)
+-	Queue(*wrp.Message)
++	Queue(*wrp.Message) int
+ 	Shutdown(bool)
+ }
+## -154,14 +154,19 ##
+ }
+ 
+ // Queue is used to send all the possible outbound senders a request.  This
+ // function performs the fan-out and filtering to multiple possible endpoints.
+-func (sw *CaduceusSenderWrapper) Queue(msg *wrp.Message) {
++// Its return value is the number of existing senders that accepted the event.
++func (sw *CaduceusSenderWrapper) Queue(msg *wrp.Message) int {
+ 	sw.mutex.RLock()
+ 	defer sw.mutex.RUnlock()
+ 
+ 	sw.metrics.eventType.With(prometheus.Labels{eventLabel: msg.FindEventStringSubMatch()}).Add(1)
+ 
++	selected := 0
+ 	for _, v := range sw.senders {
+-		v.Queue(msg)
++		if v.Queue(msg) {
++			selected++
++		}
+ 	}
++	return selected
+ }
+diff --git a/outboundSender.go b/outboundSender.go
+index 823cd77..8d3ba76 100644
+--- a/outboundSender.go
++++ b/outboundSender.go
+## -89,5 +89,5 ## type OutboundSender interface {
+ 	Update(ancla.InternalWebhook) error
+ 	Shutdown(bool)
+ 	RetiredSince() time.Time
+-	Queue(*wrp.Message)
++	Queue(*wrp.Message) bool
+ }
+## -346,4 +346,4 ##
+ // Queue is given a request to evaluate and optionally enqueue in the list
+ // of messages to deliver.  The request is checked to see if it matches the
+ // criteria before being accepted or silently dropped.
+-func (obs *CaduceusOutboundSender) Queue(msg *wrp.Message) {
++func (obs *CaduceusOutboundSender) Queue(msg *wrp.Message) bool {
+## -359,4 +359,4 ##
+ 	if !obs.isValidTimeWindow(now, dropUntil, deliverUntil) {
+ 		obs.logger.Debug("invalid time window for event", zap.Any("now", now), zap.Any("dropUntil", dropUntil), zap.Any("deliverUntil", deliverUntil))
+-		return
++		return false
+ 	}
+## -369,5 +369,5 ##
+ 		if !overlaps(obs.listener.PartnerIDs, msg.PartnerIDs) {
+ 			obs.logger.Debug("parter id check failed", zap.Strings("webhook.partnerIDs", obs.listener.PartnerIDs), zap.Strings("event.partnerIDs", msg.PartnerIDs))
+-			return
++			return false
+ 		}
+ 	}
+## -385,4 +385,4 ##
+ 	if !matchEvent {
+ 		obs.logger.Debug("destination regex doesn't match", zap.Strings("webhook.events", obs.listener.Webhook.Events), zap.String("event.dest", msg.Destination))
+-		return
++		return false
+ 	}
+## -400,4 +400,4 ##
+ 	if !matchDevice {
+ 		obs.logger.Debug("device regex doesn't match", zap.Strings("webhook.devices", obs.listener.Webhook.Matcher.DeviceID), zap.String("event.source", msg.Source))
+-		return
++		return false
+ 	}
+## -405,10 +405,12 ##
+ 	select {
+ 	case obs.queue.Load().(chan *wrp.Message) <- msg:
+ 		obs.metrics.queueDepthGauge.With(prometheus.Labels{urlLabel: obs.id}).Add(1.0)
+ 		obs.logger.Debug("event added to outbound queue", zap.String("event.source", msg.Source), zap.String("event.destination", msg.Destination))
++		return true
+ 	default:
+ 		obs.logger.Debug("queue full. event dropped", zap.String("event.source", msg.Source), zap.String("event.destination", msg.Destination))
+ 		obs.queueOverflow()
+ 		obs.metrics.droppedMessage.With(prometheus.Labels{urlLabel: obs.id, reasonLabel: "queue_full"}).Add(1.0)
++		return false
+ 	}
+ }
+diff --git a/caduceus_type_test.go b/caduceus_type_test.go
+index ecdb449..c92a7b1 100644
+--- a/caduceus_type_test.go
++++ b/caduceus_type_test.go
+## -14,4 +14,4 ## func TestCaduceusHandler(t *testing.T) {
+ 	logger := adapter.DefaultLogger().Logger
+ 
+ 	fakeSenderWrapper := new(mockSenderWrapper)
+-	fakeSenderWrapper.On("Queue", mock.AnythingOfType("*wrp.Message")).Return().Once()
++	fakeSenderWrapper.On("Queue", mock.AnythingOfType("*wrp.Message")).Return(1).Once()
+diff --git a/primaryHandler_test.go b/primaryHandler_test.go
+index 0000000..0000000 100644
+--- a/primaryHandler_test.go
++++ b/primaryHandler_test.go
+## -41,1 +41,1 ##
+-	if _, err := NewPrimaryHandler(l, viper, r, tf, sw, nil, mux.NewRouter(), true); err != nil {
++	if _, err := NewPrimaryHandler(l, viper, r, tf, sw, nil, nil, mux.NewRouter(), true); err != nil {

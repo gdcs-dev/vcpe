@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -81,6 +82,76 @@ func TestCPEWebPAProbeHealthyPathIncludesOnlineApplication(t *testing.T) {
 	if strings.Contains(string(encoded), probe.Password) {
 		t.Fatal("response exposed password")
 	}
+}
+
+func TestCPECallbackProbeEmitsOneEventAfterPrerequisites(t *testing.T) {
+	probe := CPECallbackProbe{CPE: baseCPEWebPAProbe(t, http.StatusOK, `{"devices":[{"id":"mac:001122334455"}]}`)}
+	var requests []CPEActiveEventRequest
+	probe.EmitActiveEvent = func(_ context.Context, request CPEActiveEventRequest) error {
+		requests = append(requests, request)
+		return nil
+	}
+	response := probe.RunWithInvocation(context.Background(), Invocation{ClientService: "apparmor-simulator", Subscriber: "event-sink", AllowActiveEvent: true, Event: "apparmor/diagnostic", DeviceID: "mac:001122334455", CorrelationID: strings.Repeat("a", MaxCorrelationIDLength)})
+	if err := response.Validate(); err != nil {
+		t.Fatalf("response: %v", err)
+	}
+	if len(requests) != 1 || requests[0].CorrelationID != strings.Repeat("a", MaxCorrelationIDLength) || response.ActiveEvent == nil || !response.ActiveEvent.Accepted {
+		t.Fatalf("requests = %+v, active event = %+v", requests, response.ActiveEvent)
+	}
+}
+
+func TestCPECallbackProbeSkipsEventWhenPrerequisiteFails(t *testing.T) {
+	probe := CPECallbackProbe{CPE: baseCPEWebPAProbe(t, http.StatusOK, `{"devices":[]}`)}
+	emits := 0
+	probe.EmitActiveEvent = func(context.Context, CPEActiveEventRequest) error { emits++; return nil }
+	response := probe.RunWithInvocation(context.Background(), Invocation{ClientService: "apparmor-simulator", Subscriber: "event-sink", AllowActiveEvent: true, Event: "apparmor/diagnostic", DeviceID: "mac:001122334455", CorrelationID: strings.Repeat("a", MaxCorrelationIDLength)})
+	last := response.Observations[len(response.Observations)-1]
+	if emits != 0 || last.State != StateSkipped || last.ReasonID != ReasonPrerequisiteFailed {
+		t.Fatalf("emits = %d, active observation = %+v", emits, last)
+	}
+}
+
+func TestCPEUnixEmitterSendsOnlyBoundedSelection(t *testing.T) {
+	socket, err := os.CreateTemp("/tmp", "vcpe-cpe-*.sock")
+	if err != nil {
+		t.Fatal(err)
+	}
+	socketPath := socket.Name()
+	if err := socket.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(socketPath); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(socketPath)
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		connection, err := listener.Accept()
+		if err != nil {
+			return
+		}
+		defer connection.Close()
+		var request CPEActiveEventRequest
+		if err := json.NewDecoder(io.LimitReader(connection, MaxInvocationBodySize)).Decode(&request); err != nil {
+			t.Errorf("decode request: %v", err)
+			return
+		}
+		if request.ClientService != "apparmor-simulator" || request.Event != "apparmor/diagnostic" || request.DeviceID != "mac:001122334455" || request.CorrelationID != strings.Repeat("a", MaxCorrelationIDLength) {
+			t.Errorf("request = %+v", request)
+		}
+		_, _ = io.WriteString(connection, "accepted\n")
+	}()
+	emit := newCPEUnixEmitter(socketPath)
+	if err := emit(context.Background(), CPEActiveEventRequest{ClientService: "apparmor-simulator", Event: "apparmor/diagnostic", DeviceID: "mac:001122334455", CorrelationID: strings.Repeat("a", MaxCorrelationIDLength)}); err != nil {
+		t.Fatalf("emit: %v", err)
+	}
+	<-done
 }
 
 func TestCPEWebPAProbeReportsOfflineApplication(t *testing.T) {

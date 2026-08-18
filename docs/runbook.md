@@ -83,6 +83,20 @@ controlplane/bin/vcpe diagnose --name example-full --from gateway --to webpa --c
 controlplane/bin/vcpe diagnose --name example-full --from gateway --to webpa --client-service my-test-app --json
 ```
 
+To send one explicit, bounded diagnostic event from a supported Gateway through
+WebPA to an event-sink callback, use:
+
+```bash
+controlplane/bin/vcpe diagnose --name example-full --from gateway --to callback \
+  --client-service apparmor-simulator --subscriber event-sink \
+  --allow-active-event --event apparmor/diagnostic \
+  --device-id mac:001122334455 --json
+```
+
+This is not production-event tracing. It emits at most one reserved marker only
+after CPE, Talaria, subscriber, and Argus prerequisites pass. A missing routing
+record or callback receipt is inconclusive, not proof of delivery or rejection.
+
 `failed` identifies the first confirmed broken boundary. `unknown` means the
 available signal was not authoritative; downstream checks continue only when
 that edge is explicitly non-blocking. `skipped` means a blocking prerequisite

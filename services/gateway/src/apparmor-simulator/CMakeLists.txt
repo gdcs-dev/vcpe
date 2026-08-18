@@ -14,11 +14,15 @@ target_include_directories(apparmor-simulator PRIVATE
     ${CMAKE_INSTALL_PREFIX}/include/nopoll
     ${CMAKE_INSTALL_PREFIX}/include/rbus
     ${CMAKE_INSTALL_PREFIX}/include/rtmessage
+    /usr/include/rbus
+    /usr/include/rtmessage
+    /usr/include/wrp-c
     /usr/include/cjson
 )
 
 target_link_directories(apparmor-simulator PRIVATE
     ${CMAKE_INSTALL_PREFIX}/lib
+    /usr/lib
 )
 
 # Link order: wrp-c -> libparodus (nanomsg) -> rbus -> cjson -> pthread

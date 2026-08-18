@@ -1,0 +1,20 @@
+CPE to callback diagnostic: edge/gateway[0] -> webpa
+
+[gateway application] --FAILED--> [Parodus]  verify selected Parodus client
+[Parodus] --SKIPPED--> [Talaria]  resolve Talaria
+[Talaria] --SKIPPED--> [Talaria]  connect to Talaria
+[Talaria] --SKIPPED--> [Talaria]  authenticate to Talaria
+[Talaria] --SKIPPED--> [Device registration]  find device registration
+[event-sink subscriber] --SKIPPED--> [Registration intent]  read subscriber intent
+[Registration intent] --SKIPPED--> [Argus]  reach Argus
+[Argus] --SKIPPED--> [Argus]  authenticate to Argus
+[Argus] --SKIPPED--> [Webhook registration]  find one registration
+[Webhook registration] --SKIPPED--> [Webhook registration]  verify registration freshness
+[Webhook registration] --SKIPPED--> [Callback receipt]  validate event and device matcher
+[Parodus] --SKIPPED--> [Caduceus]  accept one marked event
+[Caduceus] --SKIPPED--> [Caduceus]  observe routing selection
+[Caduceus] --SKIPPED--> [Callback receipt]  record matching callback receipt
+
+First failure: application-parodus - Parodus client is offline
+Reason: parodus-client-offline
+Remediation: start-parodus

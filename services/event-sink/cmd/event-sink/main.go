@@ -23,6 +23,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/gdcs-dev/vcpe/event-sink/internal/diagnosticapi"
+	"github.com/gdcs-dev/vcpe/event-sink/internal/diagnosticstate"
 	"github.com/gdcs-dev/vcpe/event-sink/internal/handler"
 	"github.com/gdcs-dev/vcpe/event-sink/internal/registration"
 )
@@ -46,11 +48,11 @@ func main() {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
 
 	argusURL := getEnvDefault("ARGUS_URL", "http://webpa:6600")
-	argusAuth := os.Getenv("ARGUS_BASIC_AUTH")
+	argusAuth := getEnvDefault("ARGUS_BASIC_AUTH", "dXNlcjpwYXNz")
 	webhookURL := getEnvDefault("WEBHOOK_URL", "http://event-sink:8080/webhook")
-	eventsRegex := getEnvDefault("WEBHOOK_EVENTS_REGEX", "apparmor/.*")
+	eventsRegex := getEnvDefault("WEBHOOK_EVENTS_REGEX", ".*")
 	deviceMatcher := getEnvDefault("WEBHOOK_DEVICE_MATCHER", ".*")
-	webhookSecret := os.Getenv("WEBHOOK_SECRET")
+	webhookSecret := getEnvDefault("WEBHOOK_SECRET", "vcpe-dev-webhook-secret")
 	listenAddr := getEnvDefault("LISTEN_ADDR", ":8080")
 
 	// Fail fast on invalid regexes
@@ -70,9 +72,19 @@ func main() {
 	var registered atomic.Bool
 
 	// Set up HTTP server (start before registration so /health responds immediately)
-	wh := handler.New(webhookSecret, slog.Default())
+	diagnosticState := diagnosticstate.New(diagnosticstate.Intent{
+		CallbackURL:      webhookURL,
+		EventFilter:      eventsRegex,
+		DeviceMatcher:    deviceMatcher,
+		ContentType:      "application/json",
+		SecretConfigured: webhookSecret != "",
+	}, diagnosticstate.Config{})
+	wh := handler.NewWithState(webhookSecret, slog.Default(), diagnosticState)
 	mux := http.NewServeMux()
 	mux.Handle("/webhook", wh)
+	diagnosticAPI := diagnosticapi.New(diagnosticState)
+	mux.Handle("/diagnostics", diagnosticAPI)
+	mux.Handle("/diagnostics/", diagnosticAPI)
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
@@ -110,15 +122,14 @@ func main() {
 		DeviceMatcher:  deviceMatcher,
 		WebhookSecret:  webhookSecret,
 	}
-
-	if err := registration.Register(ctx, regCfg); err != nil {
+	if err := registration.RegisterWithState(ctx, regCfg, diagnosticState); err != nil {
 		slog.Error("webhook registration failed", "error", err)
 		os.Exit(1)
 	}
 	registered.Store(true)
 
 	// Start TTL refresh goroutine
-	go registration.RefreshLoop(ctx, regCfg)
+	go registration.RefreshLoopWithState(ctx, regCfg, diagnosticState)
 
 	// Wait for shutdown signal
 	<-ctx.Done()

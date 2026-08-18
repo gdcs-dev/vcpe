@@ -1,0 +1,196 @@
+{
+  "schemaVersion": "vcpe.dev/diagnostic/v1",
+  "journey": "webhook",
+  "source": {
+    "deployment": "edge",
+    "service": "event-sink",
+    "type": "event-sink",
+    "replica": 0
+  },
+  "target": {
+    "deployment": "edge",
+    "service": "webpa",
+    "type": "webpa",
+    "replica": 0
+  },
+  "nodes": [
+    {
+      "id": "subscriber",
+      "label": "event-sink subscriber",
+      "kind": "subscriber"
+    },
+    {
+      "id": "intent",
+      "label": "Registration intent",
+      "kind": "configuration"
+    },
+    {
+      "id": "argus",
+      "label": "Argus",
+      "kind": "registry"
+    },
+    {
+      "id": "registration",
+      "label": "Webhook registration",
+      "kind": "registration"
+    },
+    {
+      "id": "callback",
+      "label": "Callback endpoint",
+      "kind": "endpoint"
+    },
+    {
+      "id": "caduceus",
+      "label": "Caduceus",
+      "kind": "delivery"
+    }
+  ],
+  "edges": [
+    {
+      "id": "subscriber-intent",
+      "from": "subscriber",
+      "to": "intent",
+      "label": "read registration intent",
+      "blocksFollowing": true
+    },
+    {
+      "id": "argus-reachability",
+      "from": "intent",
+      "to": "argus",
+      "label": "reach Argus",
+      "blocksFollowing": true
+    },
+    {
+      "id": "argus-authentication",
+      "from": "argus",
+      "to": "argus",
+      "label": "authenticate to Argus",
+      "blocksFollowing": true
+    },
+    {
+      "id": "registration-present",
+      "from": "argus",
+      "to": "registration",
+      "label": "find one registration",
+      "blocksFollowing": true
+    },
+    {
+      "id": "registration-fresh",
+      "from": "registration",
+      "to": "registration",
+      "label": "verify registration freshness",
+      "blocksFollowing": true
+    },
+    {
+      "id": "registration-conformant",
+      "from": "registration",
+      "to": "callback",
+      "label": "compare registration intent",
+      "blocksFollowing": true
+    },
+    {
+      "id": "callback-dns",
+      "from": "callback",
+      "to": "callback",
+      "label": "resolve callback endpoint",
+      "blocksFollowing": true
+    },
+    {
+      "id": "callback-transport",
+      "from": "callback",
+      "to": "callback",
+      "label": "connect to callback endpoint",
+      "blocksFollowing": true
+    },
+    {
+      "id": "callback-acceptance",
+      "from": "callback",
+      "to": "callback",
+      "label": "validate callback signature and acceptance",
+      "blocksFollowing": true
+    },
+    {
+      "id": "caduceus-ingestion",
+      "from": "caduceus",
+      "to": "caduceus",
+      "label": "accept synthetic event",
+      "blocksFollowing": true
+    },
+    {
+      "id": "caduceus-receipt",
+      "from": "caduceus",
+      "to": "subscriber",
+      "label": "receive Caduceus callback",
+      "blocksFollowing": true
+    }
+  ],
+  "observations": [
+    {
+      "edgeId": "subscriber-intent",
+      "state": "passed",
+      "observedAt": "2026-08-14T23:45:00Z"
+    },
+    {
+      "edgeId": "argus-reachability",
+      "state": "passed",
+      "observedAt": "2026-08-14T23:45:00Z"
+    },
+    {
+      "edgeId": "argus-authentication",
+      "state": "passed",
+      "observedAt": "2026-08-14T23:45:00Z"
+    },
+    {
+      "edgeId": "registration-present",
+      "state": "passed",
+      "observedAt": "2026-08-14T23:45:00Z"
+    },
+    {
+      "edgeId": "registration-fresh",
+      "state": "passed",
+      "observedAt": "2026-08-14T23:45:00Z"
+    },
+    {
+      "edgeId": "registration-conformant",
+      "state": "passed",
+      "observedAt": "2026-08-14T23:45:00Z"
+    },
+    {
+      "edgeId": "callback-dns",
+      "state": "unknown",
+      "reasonId": "active-callback-not-requested",
+      "remediationId": "allow-active-callback",
+      "message": "active callback was not requested",
+      "observedAt": "2026-08-14T23:45:00Z"
+    },
+    {
+      "edgeId": "callback-transport",
+      "state": "skipped",
+      "reasonId": "prerequisite-unknown",
+      "message": "not evaluated because a prerequisite was unresolved",
+      "observedAt": "2026-08-14T23:45:00Z"
+    },
+    {
+      "edgeId": "callback-acceptance",
+      "state": "skipped",
+      "reasonId": "prerequisite-unknown",
+      "message": "not evaluated because a prerequisite was unresolved",
+      "observedAt": "2026-08-14T23:45:00Z"
+    },
+    {
+      "edgeId": "caduceus-ingestion",
+      "state": "skipped",
+      "reasonId": "prerequisite-unknown",
+      "message": "not evaluated because a prerequisite was unresolved",
+      "observedAt": "2026-08-14T23:45:00Z"
+    },
+    {
+      "edgeId": "caduceus-receipt",
+      "state": "skipped",
+      "reasonId": "prerequisite-unknown",
+      "message": "not evaluated because a prerequisite was unresolved",
+      "observedAt": "2026-08-14T23:45:00Z"
+    }
+  ],
+  "observedAt": "2026-08-14T23:45:00Z"
+}

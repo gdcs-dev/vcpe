@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gdcs-dev/vcpe/event-sink/internal/diagnosticstate"
 	"github.com/xmidt-org/ancla"
 	"github.com/xmidt-org/argus/chrysom"
 	"go.uber.org/zap"
@@ -91,8 +92,17 @@ func buildHook(cfg Config) ancla.InternalWebhook {
 // Register registers the webhook via ancla. Blocks until the first successful
 // registration, retrying with exponential backoff (1s → ... → 30s cap).
 func Register(ctx context.Context, cfg Config) error {
+	return RegisterWithState(ctx, cfg, nil)
+}
+
+// RegisterWithState registers the webhook and records bounded diagnostic state
+// without changing the retry, health, or logging behavior of Register.
+func RegisterWithState(ctx context.Context, cfg Config, state *diagnosticstate.Store) error {
 	svc, err := newAnclaService(cfg)
 	if err != nil {
+		if state != nil {
+			state.RecordInitialFailure(time.Now(), registrationErrorCategory(err))
+		}
 		return fmt.Errorf("ancla service init: %w", err)
 	}
 
@@ -103,6 +113,9 @@ func Register(ctx context.Context, cfg Config) error {
 	for {
 		err := svc.Add(ctx, "", hook)
 		if err == nil {
+			if state != nil {
+				state.RecordInitialSuccess(time.Now())
+			}
 			slog.Info("webhook registered",
 				"events_regex", cfg.EventsRegex,
 				"device_matcher", cfg.DeviceMatcher,
@@ -111,6 +124,9 @@ func Register(ctx context.Context, cfg Config) error {
 		}
 
 		attempt++
+		if state != nil {
+			state.RecordInitialFailure(time.Now(), registrationErrorCategory(err))
+		}
 		slog.Error("argus registration failed",
 			"error", err,
 			"attempt", attempt,
@@ -133,8 +149,17 @@ func Register(ctx context.Context, cfg Config) error {
 
 // RefreshLoop re-registers the webhook every 6h to keep the Argus item alive.
 func RefreshLoop(ctx context.Context, cfg Config) {
+	RefreshLoopWithState(ctx, cfg, nil)
+}
+
+// RefreshLoopWithState refreshes the webhook at the existing interval while
+// recording only bounded success and failure diagnostic state.
+func RefreshLoopWithState(ctx context.Context, cfg Config, state *diagnosticstate.Store) {
 	svc, err := newAnclaService(cfg)
 	if err != nil {
+		if state != nil {
+			state.RecordRefreshFailure(time.Now(), registrationErrorCategory(err))
+		}
 		slog.Error("ancla service init for refresh", "error", err)
 		return
 	}
@@ -149,10 +174,31 @@ func RefreshLoop(ctx context.Context, cfg Config) {
 		case <-ticker.C:
 			hook := buildHook(cfg)
 			if err := svc.Add(ctx, "", hook); err != nil {
+				if state != nil {
+					state.RecordRefreshFailure(time.Now(), registrationErrorCategory(err))
+				}
 				slog.Error("webhook TTL refresh failed", "error", err)
 			} else {
+				if state != nil {
+					state.RecordRefreshSuccess(time.Now())
+				}
 				slog.Info("webhook TTL refreshed")
 			}
 		}
+	}
+}
+
+func registrationErrorCategory(err error) string {
+	if err == nil {
+		return ""
+	}
+	message := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(message, "authentication"), strings.Contains(message, "status 401"), strings.Contains(message, "status 403"):
+		return "argus-authentication-failed"
+	case strings.Contains(message, "context canceled"), strings.Contains(message, "deadline exceeded"):
+		return "argus-request-cancelled"
+	default:
+		return "argus-registration-failed"
 	}
 }

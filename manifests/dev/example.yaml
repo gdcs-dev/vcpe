@@ -119,8 +119,13 @@ spec:
         env:
           # Must match webpa's baked-in dev Argus credentials
           # (services/webpa/assets/argus.yaml authx.inbound.basic).
+          ARGUS_URL: "http://argus:6600"
           ARGUS_BASIC_AUTH: "dXNlcjpwYXNz"
+          WEBHOOK_URL: "http://event-sink:8080/webhook"
+          WEBHOOK_EVENTS_REGEX: ".*"
+          WEBHOOK_DEVICE_MATCHER: ".*"
           WEBHOOK_SECRET: "vcpe-dev-webhook-secret"
+          LISTEN_ADDR: ":8080"
       dependsOn:
         - bng        
     # ── GATEWAY ─────────────────────────────────────────────────────────────────

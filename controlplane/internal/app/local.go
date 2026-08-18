@@ -77,12 +77,35 @@ func runDiagnose(opts Options) (daemon.CommandResponse, error) {
 		return daemon.CommandResponse{}, err
 	}
 	defer store.Close()
+	if opts.Name == "" {
+		names, err := store.ListKnownDeployments()
+		if err != nil {
+			return daemon.CommandResponse{}, err
+		}
+		switch len(names) {
+		case 0:
+			return daemon.CommandResponse{}, fmt.Errorf("no active deployments")
+		case 1:
+			opts.Name = names[0]
+		default:
+			return daemon.CommandResponse{}, fmt.Errorf(
+				"multiple deployments active; specify one with --name:\n  %s",
+				strings.Join(names, "\n  "),
+			)
+		}
+	}
 	result, err := diagnostic.Diagnose(context.Background(), store, diagnostic.DefaultRegistry(), newDiagnosticClient(10*time.Second), diagnostic.ResolveRequest{
-		Deployment:    opts.Name,
-		Source:        opts.From,
-		Target:        opts.To,
-		Replica:       opts.Replica,
-		ClientService: opts.ClientService,
+		Deployment:          opts.Name,
+		Source:              opts.From,
+		Target:              opts.To,
+		Replica:             opts.Replica,
+		ClientService:       opts.ClientService,
+		Subscriber:          opts.Subscriber,
+		SubscriberReplica:   opts.SubscriberReplica,
+		AllowActiveCallback: opts.AllowActiveCallback,
+		AllowActiveEvent:    opts.AllowActiveEvent,
+		Event:               opts.Event,
+		DeviceID:            opts.DeviceID,
 	})
 	if err != nil {
 		return daemon.CommandResponse{}, err

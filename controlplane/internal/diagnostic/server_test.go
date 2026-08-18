@@ -57,6 +57,70 @@ func TestDiagnosticServerDiscoveryAndMethodIsolation(t *testing.T) {
 	}
 }
 
+func TestDiagnosticServerAdvertisesAndDispatchesPassiveRoutes(t *testing.T) {
+	passiveCalls := 0
+	server := Server{
+		Journeys: map[string]JourneyHandler{JourneyCPEWebPA: func(context.Context, Invocation) EndpointResponse {
+			return EndpointResponse{}
+		}},
+		PassiveRoutes: map[string]http.Handler{
+			"webhook-subscriber": http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				passiveCalls++
+				if request.Method != http.MethodGet || request.URL.Path != "/diagnostics/webhook-subscriber/intent" {
+					t.Fatalf("passive request = %s %s", request.Method, request.URL.Path)
+				}
+				writer.WriteHeader(http.StatusNoContent)
+			}),
+		},
+	}.Handler(nil)
+
+	discovery := httptest.NewRecorder()
+	server.ServeHTTP(discovery, httptest.NewRequest(http.MethodGet, "/diagnostics", nil))
+	var capabilities Capabilities
+	if err := json.Unmarshal(discovery.Body.Bytes(), &capabilities); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := strings.Join(capabilities.Journeys, ","), "cpe-webpa,webhook-subscriber"; got != want {
+		t.Fatalf("journeys = %q, want %q", got, want)
+	}
+
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/diagnostics/webhook-subscriber/intent", nil))
+	if response.Code != http.StatusNoContent || passiveCalls != 1 {
+		t.Fatalf("passive response = %d, calls = %d", response.Code, passiveCalls)
+	}
+}
+
+func TestDiagnosticServerPrefersExactActiveJourneyOverPassiveRoute(t *testing.T) {
+	now := time.Now().UTC()
+	activeCalls := 0
+	passiveCalls := 0
+	server := Server{
+		Journeys: map[string]JourneyHandler{
+			JourneyCPEWebPACallback: func(context.Context, Invocation) EndpointResponse {
+				activeCalls++
+				return EndpointResponse{
+					SchemaVersion: SchemaVersion,
+					Journey:       JourneyCPEWebPACallback,
+					ObservedAt:    now,
+					Observations:  []Observation{{EdgeID: "active-event-acceptance", State: StatePassed, ObservedAt: now}},
+					ActiveEvent:   &CPEActiveEventResult{Accepted: true},
+				}
+			},
+		},
+		PassiveRoutes: map[string]http.Handler{
+			JourneyCPEWebPACallback: http.HandlerFunc(func(http.ResponseWriter, *http.Request) { passiveCalls++ }),
+		},
+	}.Handler(nil)
+
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/diagnostics/"+JourneyCPEWebPACallback, strings.NewReader(`{"clientService":"apparmor-simulator","subscriber":"event-sink","allowActiveEvent":true,"event":"apparmor/diagnostic","deviceId":"mac:001122334455","correlationId":"`+strings.Repeat("a", MaxCorrelationIDLength)+`"}`))
+	server.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || activeCalls != 1 || passiveCalls != 0 {
+		t.Fatalf("response = %d %q; active/passive calls = %d/%d", response.Code, response.Body.String(), activeCalls, passiveCalls)
+	}
+}
+
 func TestDiagnosticServerRejectsInvalidInvocationAndResponse(t *testing.T) {
 	server := Server{Journeys: map[string]JourneyHandler{
 		JourneyCPEWebPA: func(context.Context, Invocation) EndpointResponse { return EndpointResponse{} },

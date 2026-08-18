@@ -12,21 +12,31 @@ import (
 
 // ResolveRequest selects one diagnostic source and target.
 type ResolveRequest struct {
-	Deployment    string
-	Source        string
-	Target        string
-	Replica       *int
-	ClientService string
+	Deployment          string
+	Source              string
+	Target              string
+	Replica             *int
+	ClientService       string
+	AllowActiveCallback bool
+	AllowActiveEvent    bool
+	Event               string
+	DeviceID            string
+	Subscriber          string
+	SubscriberReplica   *int
 }
 
 // Selection is the fully resolved, runtime-independent diagnostic context.
 type Selection struct {
-	Provider   Provider
-	Deployment plan.Deployment
-	Source     plan.Service
-	Instance   plan.Instance
-	Target     plan.Service
-	Endpoint   persist.HealthEndpoint
+	Provider           Provider
+	Deployment         plan.Deployment
+	Source             plan.Service
+	Instance           plan.Instance
+	Target             plan.Service
+	Endpoint           persist.HealthEndpoint
+	TargetEndpoint     persist.HealthEndpoint
+	Subscriber         plan.Service
+	SubscriberInstance plan.Instance
+	SubscriberEndpoint persist.HealthEndpoint
 }
 
 // Resolve loads the persisted desired deployment, rebuilds its deterministic
@@ -36,8 +46,15 @@ func Resolve(store *persist.Store, registry *Registry, request ResolveRequest) (
 	if request.Deployment == "" || request.Source == "" || request.Target == "" {
 		return Selection{}, fmt.Errorf("diagnose requires deployment, source, and target")
 	}
-	if request.Target != "webpa" {
-		return Selection{}, fmt.Errorf("unsupported diagnostic target %q: expected webpa", request.Target)
+	journey := JourneyCPEWebPA
+	switch request.Target {
+	case "webpa":
+	case "webhook":
+		journey = JourneyWebhook
+	case "callback":
+		journey = JourneyCPEWebPACallback
+	default:
+		return Selection{}, fmt.Errorf("unsupported diagnostic target %q: expected webpa, webhook, or callback", request.Target)
 	}
 	raw, ok, err := store.LatestDesiredSnapshot(request.Deployment)
 	if err != nil {
@@ -78,9 +95,12 @@ func Resolve(store *persist.Store, registry *Registry, request ResolveRequest) (
 		}
 		return Selection{}, fmt.Errorf("deployment %q has ambiguous webpa targets %v", request.Deployment, names)
 	}
-	provider, ok := registry.Lookup(JourneyCPEWebPA, source.Type, targets[0].Type)
+	if (journey == JourneyWebhook || journey == JourneyCPEWebPACallback) && len(targets[0].Instances) != 1 {
+		return Selection{}, fmt.Errorf("webpa service %q has %d replicas: exactly one WebPA participant is required", targets[0].Name, len(targets[0].Instances))
+	}
+	provider, ok := registry.Lookup(journey, source.Type, targets[0].Type)
 	if !ok {
-		return Selection{}, fmt.Errorf("source service %q has unsupported type %q for %s", source.Name, source.Type, JourneyCPEWebPA)
+		return Selection{}, fmt.Errorf("source service %q has unsupported type %q for %s", source.Name, source.Type, journey)
 	}
 	if len(source.Instances) == 0 {
 		return Selection{}, fmt.Errorf("source service %q has no active replicas", source.Name)
@@ -93,6 +113,37 @@ func Resolve(store *persist.Store, registry *Registry, request ResolveRequest) (
 	}
 	if replica < 0 || replica >= len(source.Instances) {
 		return Selection{}, fmt.Errorf("source service %q replica %d is out of range 0..%d", source.Name, replica, len(source.Instances)-1)
+	}
+	var subscriber *plan.Service
+	subscriberReplica := 0
+	if journey == JourneyCPEWebPACallback {
+		if request.Subscriber == "" {
+			return Selection{}, fmt.Errorf("callback diagnosis requires a subscriber service")
+		}
+		for index := range resolved.Services {
+			service := &resolved.Services[index]
+			if service.Name == request.Subscriber {
+				subscriber = service
+				break
+			}
+		}
+		if subscriber == nil {
+			return Selection{}, fmt.Errorf("deployment %q has no subscriber service %q", request.Deployment, request.Subscriber)
+		}
+		if subscriber.Type != "event-sink" {
+			return Selection{}, fmt.Errorf("subscriber service %q has unsupported type %q for %s", subscriber.Name, subscriber.Type, journey)
+		}
+		if len(subscriber.Instances) == 0 {
+			return Selection{}, fmt.Errorf("subscriber service %q has no active replicas", subscriber.Name)
+		}
+		if request.SubscriberReplica != nil {
+			subscriberReplica = *request.SubscriberReplica
+		} else if len(subscriber.Instances) > 1 {
+			return Selection{}, fmt.Errorf("subscriber service %q has replicas 0..%d: --subscriber-replica is required", subscriber.Name, len(subscriber.Instances)-1)
+		}
+		if subscriberReplica < 0 || subscriberReplica >= len(subscriber.Instances) {
+			return Selection{}, fmt.Errorf("subscriber service %q replica %d is out of range 0..%d", subscriber.Name, subscriberReplica, len(subscriber.Instances)-1)
+		}
 	}
 	endpoints, err := store.ListHealthEndpoints(request.Deployment)
 	if err != nil {
@@ -109,5 +160,41 @@ func Resolve(store *persist.Store, registry *Registry, request ResolveRequest) (
 	if endpoint == nil {
 		return Selection{}, fmt.Errorf("source service %q replica %d has no persisted loopback endpoint", source.Name, replica)
 	}
-	return Selection{Provider: provider, Deployment: resolved, Source: *source, Instance: source.Instances[replica], Target: targets[0], Endpoint: *endpoint}, nil
+	var targetEndpoint persist.HealthEndpoint
+	if journey == JourneyWebhook || journey == JourneyCPEWebPACallback {
+		var found *persist.HealthEndpoint
+		for index := range endpoints {
+			candidate := &endpoints[index]
+			if candidate.Service == targets[0].Name && candidate.Replica == 0 {
+				found = candidate
+				break
+			}
+		}
+		if found == nil {
+			return Selection{}, fmt.Errorf("webpa service %q replica 0 has no persisted loopback endpoint", targets[0].Name)
+		}
+		targetEndpoint = *found
+	}
+	var subscriberEndpoint persist.HealthEndpoint
+	if subscriber != nil {
+		var found *persist.HealthEndpoint
+		for index := range endpoints {
+			candidate := &endpoints[index]
+			if candidate.Service == subscriber.Name && candidate.Replica == subscriberReplica {
+				found = candidate
+				break
+			}
+		}
+		if found == nil {
+			return Selection{}, fmt.Errorf("subscriber service %q replica %d has no persisted loopback endpoint", subscriber.Name, subscriberReplica)
+		}
+		subscriberEndpoint = *found
+	}
+	selection := Selection{Provider: provider, Deployment: resolved, Source: *source, Instance: source.Instances[replica], Target: targets[0], Endpoint: *endpoint, TargetEndpoint: targetEndpoint}
+	if subscriber != nil {
+		selection.Subscriber = *subscriber
+		selection.SubscriberInstance = subscriber.Instances[subscriberReplica]
+		selection.SubscriberEndpoint = subscriberEndpoint
+	}
+	return selection, nil
 }

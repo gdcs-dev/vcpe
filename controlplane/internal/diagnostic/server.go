@@ -16,8 +16,9 @@ type JourneyHandler func(context.Context, Invocation) EndpointResponse
 // Server adds passive capability discovery and active journey routes to an
 // existing per-instance HTTP handler.
 type Server struct {
-	Journeys map[string]JourneyHandler
-	Timeout  time.Duration
+	Journeys      map[string]JourneyHandler
+	PassiveRoutes map[string]http.Handler
+	Timeout       time.Duration
 }
 
 // Handler returns a handler that preserves fallback routes such as /health.
@@ -37,13 +38,28 @@ func (server Server) Handler(fallback http.Handler) http.Handler {
 				http.Error(writer, "method not allowed", http.StatusMethodNotAllowed)
 				return
 			}
-			journeys := make([]string, 0, len(server.Journeys))
+			journeySet := make(map[string]struct{}, len(server.Journeys)+len(server.PassiveRoutes))
 			for journey := range server.Journeys {
+				journeySet[journey] = struct{}{}
+			}
+			for journey := range server.PassiveRoutes {
+				journeySet[journey] = struct{}{}
+			}
+			journeys := make([]string, 0, len(journeySet))
+			for journey := range journeySet {
 				journeys = append(journeys, journey)
 			}
 			sort.Strings(journeys)
 			writeJSON(writer, Capabilities{SchemaVersion: CapabilitiesSchema, Journeys: journeys})
 		case strings.HasPrefix(request.URL.Path, "/diagnostics/"):
+			route := strings.TrimPrefix(request.URL.Path, "/diagnostics/")
+			passiveJourney, _, _ := strings.Cut(route, "/")
+			if handler, ok := server.PassiveRoutes[passiveJourney]; ok {
+				if _, active := server.Journeys[route]; !active {
+					handler.ServeHTTP(writer, request)
+					return
+				}
+			}
 			if request.Method != http.MethodPost {
 				writer.Header().Set("Allow", http.MethodPost)
 				http.Error(writer, "method not allowed", http.StatusMethodNotAllowed)
@@ -53,7 +69,7 @@ func (server Server) Handler(fallback http.Handler) http.Handler {
 				http.Error(writer, "diagnostic request body is too large", http.StatusRequestEntityTooLarge)
 				return
 			}
-			journey := strings.TrimPrefix(request.URL.Path, "/diagnostics/")
+			journey := route
 			handler, ok := server.Journeys[journey]
 			if !ok {
 				http.NotFound(writer, request)
@@ -76,7 +92,7 @@ func (server Server) Handler(fallback http.Handler) http.Handler {
 					return
 				}
 			}
-			if err := invocation.Validate(); err != nil {
+			if err := invocation.ValidateFor(journey); err != nil {
 				http.Error(writer, "invalid diagnostic request", http.StatusBadRequest)
 				return
 			}

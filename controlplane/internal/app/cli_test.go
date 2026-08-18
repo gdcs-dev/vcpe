@@ -59,10 +59,67 @@ func TestParseDiagnose(t *testing.T) {
 	}
 }
 
+func TestParseWebhookDiagnose(t *testing.T) {
+	for _, testCase := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{name: "passive", args: []string{"diagnose", "--name", "edge", "--from", "event-sink", "--to", "webhook"}},
+		{name: "active", args: []string{"diagnose", "--name", "edge", "--from", "event-sink", "--to", "webhook", "--allow-active-callback", "--event", "devices/diagnostic", "--device-id", "mac:001122334455"}},
+		{name: "client service rejected", args: []string{"diagnose", "--name", "edge", "--from", "event-sink", "--to", "webhook", "--client-service", "config"}, want: "only for --to webpa"},
+		{name: "active input without consent", args: []string{"diagnose", "--name", "edge", "--from", "event-sink", "--to", "webhook", "--event", "devices/diagnostic"}, want: "require active callback consent"},
+		{name: "webpa webhook flag rejected", args: []string{"diagnose", "--name", "edge", "--from", "gateway", "--to", "webpa", "--client-service", "config", "--allow-active-callback"}, want: "webhook invocation fields"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			opts, err := parseArgs("vcpe", testCase.args)
+			if testCase.want != "" {
+				if err == nil || !strings.Contains(err.Error(), testCase.want) {
+					t.Fatalf("parse error = %v, want %q", err, testCase.want)
+				}
+				return
+			}
+			if err != nil || opts.To != "webhook" {
+				t.Fatalf("options = %+v, error = %v", opts, err)
+			}
+		})
+	}
+}
+
+func TestParseCallbackDiagnose(t *testing.T) {
+	valid := []string{"diagnose", "--name", "edge", "--from", "gateway", "--to", "callback", "--client-service", "apparmor-simulator", "--subscriber", "event-sink", "--subscriber-replica", "1", "--allow-active-event", "--event", "devices/diagnostic", "--device-id", "mac:001122334455", "--json"}
+	opts, err := parseArgs("vcpe", valid)
+	if err != nil {
+		t.Fatalf("parse callback diagnose: %v", err)
+	}
+	if opts.Subscriber != "event-sink" || opts.SubscriberReplica == nil || *opts.SubscriberReplica != 1 || !opts.AllowActiveEvent || !opts.OutputJSON {
+		t.Fatalf("callback options = %+v", opts)
+	}
+	for _, testCase := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{name: "missing consent", args: []string{"diagnose", "--name", "edge", "--from", "gateway", "--to", "callback", "--client-service", "apparmor-simulator", "--subscriber", "event-sink", "--event", "devices/diagnostic", "--device-id", "mac:001122334455"}, want: "active event consent"},
+		{name: "missing subscriber", args: []string{"diagnose", "--name", "edge", "--from", "gateway", "--to", "callback", "--client-service", "apparmor-simulator", "--allow-active-event", "--event", "devices/diagnostic", "--device-id", "mac:001122334455"}, want: "--subscriber"},
+		{name: "webhook flag", args: []string{"diagnose", "--name", "edge", "--from", "gateway", "--to", "callback", "--client-service", "apparmor-simulator", "--subscriber", "event-sink", "--allow-active-event", "--allow-active-callback", "--event", "devices/diagnostic", "--device-id", "mac:001122334455"}, want: "webhook invocation fields"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			if _, err := parseArgs("vcpe", testCase.args); err == nil || !strings.Contains(err.Error(), testCase.want) {
+				t.Fatalf("parse error = %v, want %q", err, testCase.want)
+			}
+		})
+	}
+}
+
 func TestDiagnoseRequiresSelectors(t *testing.T) {
 	_, err := parseArgs("vcpe", []string{"diagnose", "--name", "edge"})
-	if err == nil || !strings.Contains(err.Error(), "requires --name") {
+	if err == nil || !strings.Contains(err.Error(), "requires --from") {
 		t.Fatalf("expected selector error, got %v", err)
+	}
+	_, err = parseArgs("vcpe", []string{"diagnose", "--from", "gateway", "--to", "webpa", "--client-service", "config"})
+	if err != nil {
+		t.Fatalf("diagnose without name: %v", err)
 	}
 	_, err = parseArgs("vcpe", []string{"diagnose", "--name", "edge", "--from", "gateway", "--to", "webpa"})
 	if err == nil || !strings.Contains(err.Error(), "--client-service") {

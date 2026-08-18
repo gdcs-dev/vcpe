@@ -1,0 +1,17 @@
+Webhook diagnostic: edge/event-sink[0] -> webpa
+
+[event-sink subscriber] --PASSED--> [Registration intent]  read registration intent
+[Registration intent] --PASSED--> [Argus]  reach Argus
+[Argus] --PASSED--> [Argus]  authenticate to Argus
+[Argus] --PASSED--> [Webhook registration]  find one registration
+[Webhook registration] --PASSED--> [Webhook registration]  verify registration freshness
+[Webhook registration] --PASSED--> [Callback endpoint]  compare registration intent
+[Callback endpoint] --UNKNOWN--> [Callback endpoint]  resolve callback endpoint
+[Callback endpoint] --SKIPPED--> [Callback endpoint]  connect to callback endpoint
+[Callback endpoint] --SKIPPED--> [Callback endpoint]  validate callback signature and acceptance
+[Caduceus] --SKIPPED--> [Caduceus]  accept synthetic event
+[Caduceus] --SKIPPED--> [event-sink subscriber]  receive Caduceus callback
+
+Inconclusive: callback-dns - active callback was not requested
+Reason: active-callback-not-requested
+Remediation: allow-active-callback

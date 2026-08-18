@@ -28,7 +28,7 @@ func RenderASCII(result Result) (string, error) {
 		labels[node.ID] = node.Label
 	}
 	var output strings.Builder
-	fmt.Fprintf(&output, "CPE to WebPA diagnostic: %s/%s[%d] -> %s\n\n", result.Source.Deployment, result.Source.Service, result.Source.Replica, result.Target.Service)
+	fmt.Fprintf(&output, "%s: %s/%s[%d] -> %s\n\n", asciiHeading(result.Journey), result.Source.Deployment, result.Source.Service, result.Source.Replica, result.Target.Service)
 	for index, edge := range result.Edges {
 		observation := result.Observations[index]
 		fmt.Fprintf(&output, "[%s] --%s--> [%s]  %s\n", labels[edge.From], strings.ToUpper(string(observation.State)), labels[edge.To], edge.Label)
@@ -52,6 +52,16 @@ func RenderASCII(result Result) (string, error) {
 		output.WriteString("\nResult: passed\n")
 	}
 	return strings.TrimRight(output.String(), "\n"), nil
+}
+
+func asciiHeading(journey string) string {
+	if journey == JourneyCPEWebPACallback {
+		return "CPE to callback diagnostic"
+	}
+	if journey == JourneyWebhook {
+		return "Webhook diagnostic"
+	}
+	return "CPE to WebPA diagnostic"
 }
 
 func observationByEdge(result Result, edgeID string) Observation {

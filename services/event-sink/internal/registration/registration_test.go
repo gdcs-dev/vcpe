@@ -7,6 +7,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/gdcs-dev/vcpe/event-sink/internal/diagnosticstate"
 )
 
 func testConfig(argusURL string) Config {
@@ -39,6 +41,20 @@ func TestRegister_Success(t *testing.T) {
 	}
 	if atomic.LoadInt32(&putCount) == 0 {
 		t.Error("expected at least one PUT to Argus")
+	}
+}
+
+func TestRegisterWithStateRecordsInitialSuccess(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusCreated)
+	}))
+	defer srv.Close()
+	state := diagnosticstate.New(diagnosticstate.Intent{}, diagnosticstate.Config{})
+	if err := RegisterWithState(context.Background(), testConfig(srv.URL), state); err != nil {
+		t.Fatalf("RegisterWithState failed: %v", err)
+	}
+	if state.Snapshot().InitialSuccessAt.IsZero() {
+		t.Fatal("initial registration success was not recorded")
 	}
 }
 

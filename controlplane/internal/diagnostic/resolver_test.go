@@ -25,6 +25,8 @@ func resolverRegistry() *Registry {
 	registry := NewRegistry()
 	registry.Register(NewCPEWebPAProvider("gateway"))
 	registry.Register(NewCPEWebPAProvider("xb10"))
+	registry.Register(NewCPEWebPACallbackProvider())
+	registry.Register(NewWebhookProvider())
 	return registry
 }
 
@@ -61,6 +63,113 @@ func TestResolveErrors(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			store := resolverStore(t, test.services)
+			_, err := Resolve(store, resolverRegistry(), test.request)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("Resolve error = %v, want containing %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestResolveWebhookParticipantsAndEndpoints(t *testing.T) {
+	services := "    - name: event-sink\n      type: event-sink\n      replicas: 1\n      interfaces: [{role: mgmt}]\n      image: {repository: event-sink}\n    - name: webpa\n      type: webpa\n      replicas: 1\n      image: {repository: webpa}\n"
+	store := resolverStore(t, services)
+	subscriberEndpoint, err := store.ReserveHealthEndpoint("edge", "event-sink", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	webpaEndpoint, err := store.ReserveHealthEndpoint("edge", "webpa", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	selection, err := Resolve(store, resolverRegistry(), ResolveRequest{Deployment: "edge", Source: "event-sink", Target: "webhook"})
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if selection.Provider.Journey() != JourneyWebhook || selection.Endpoint != subscriberEndpoint || selection.TargetEndpoint != webpaEndpoint {
+		t.Fatalf("selection = %+v", selection)
+	}
+}
+
+func TestResolveWebhookErrors(t *testing.T) {
+	base := "    - name: event-sink\n      type: event-sink\n      replicas: 1\n      interfaces: [{role: mgmt}]\n      image: {repository: event-sink}\n    - name: webpa\n      type: webpa\n      replicas: 1\n      image: {repository: webpa}\n"
+	tests := []struct {
+		name         string
+		services     string
+		reserveWebPA bool
+		want         string
+	}{
+		{name: "missing webpa endpoint", services: base, want: "webpa service \"webpa\" replica 0 has no persisted loopback endpoint"},
+		{name: "unsupported subscriber", services: strings.Replace(base, "type: event-sink", "type: generic-container", 1), reserveWebPA: true, want: "unsupported type"},
+		{name: "ambiguous webpa service", services: base + "    - name: webpa-two\n      type: webpa\n      replicas: 1\n      image: {repository: webpa}\n", reserveWebPA: true, want: "ambiguous webpa targets"},
+		{name: "ambiguous webpa replica", services: strings.Replace(base, "replicas: 1\n      image: {repository: webpa}", "replicas: 2\n      image: {repository: webpa}", 1), reserveWebPA: true, want: "exactly one WebPA participant"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store := resolverStore(t, test.services)
+			if _, err := store.ReserveHealthEndpoint("edge", "event-sink", 0); err != nil {
+				t.Fatal(err)
+			}
+			if test.reserveWebPA {
+				if _, err := store.ReserveHealthEndpoint("edge", "webpa", 0); err != nil {
+					t.Fatal(err)
+				}
+			}
+			_, err := Resolve(store, resolverRegistry(), ResolveRequest{Deployment: "edge", Source: "event-sink", Target: "webhook"})
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("Resolve error = %v, want containing %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestResolveCallbackParticipantsAndEndpoints(t *testing.T) {
+	services := "    - name: gateway\n      type: gateway\n      replicas: 1\n      interfaces: [{role: wan}]\n      image: {repository: gateway}\n    - name: event-sink\n      type: event-sink\n      replicas: 2\n      interfaces: [{role: mgmt}]\n      image: {repository: event-sink}\n    - name: webpa\n      type: webpa\n      replicas: 1\n      image: {repository: webpa}\n"
+	store := resolverStore(t, services)
+	gatewayEndpoint, err := store.ReserveHealthEndpoint("edge", "gateway", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	webpaEndpoint, err := store.ReserveHealthEndpoint("edge", "webpa", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	subscriberEndpoint, err := store.ReserveHealthEndpoint("edge", "event-sink", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	selection, err := Resolve(store, resolverRegistry(), ResolveRequest{Deployment: "edge", Source: "gateway", Target: "callback", Subscriber: "event-sink", SubscriberReplica: intPointer(1)})
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if selection.Provider.Journey() != JourneyCPEWebPACallback || selection.Endpoint != gatewayEndpoint || selection.TargetEndpoint != webpaEndpoint || selection.SubscriberEndpoint != subscriberEndpoint || selection.SubscriberInstance.Index != 1 {
+		t.Fatalf("selection = %+v", selection)
+	}
+}
+
+func TestResolveCallbackErrors(t *testing.T) {
+	base := "    - name: gateway\n      type: gateway\n      replicas: 1\n      interfaces: [{role: wan}]\n      image: {repository: gateway}\n    - name: event-sink\n      type: event-sink\n      replicas: 2\n      interfaces: [{role: mgmt}]\n      image: {repository: event-sink}\n    - name: webpa\n      type: webpa\n      replicas: 1\n      image: {repository: webpa}\n"
+	tests := []struct {
+		name     string
+		services string
+		request  ResolveRequest
+		want     string
+	}{
+		{name: "missing subscriber", services: base, request: ResolveRequest{Deployment: "edge", Source: "gateway", Target: "callback"}, want: "requires a subscriber"},
+		{name: "unknown subscriber", services: base, request: ResolveRequest{Deployment: "edge", Source: "gateway", Target: "callback", Subscriber: "missing"}, want: "no subscriber service"},
+		{name: "unsupported subscriber", services: strings.Replace(base, "type: event-sink", "type: generic-container", 1), request: ResolveRequest{Deployment: "edge", Source: "gateway", Target: "callback", Subscriber: "event-sink"}, want: "unsupported type"},
+		{name: "subscriber replica required", services: base, request: ResolveRequest{Deployment: "edge", Source: "gateway", Target: "callback", Subscriber: "event-sink"}, want: "--subscriber-replica is required"},
+		{name: "subscriber replica range", services: base, request: ResolveRequest{Deployment: "edge", Source: "gateway", Target: "callback", Subscriber: "event-sink", SubscriberReplica: intPointer(2)}, want: "out of range"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store := resolverStore(t, test.services)
+			if _, err := store.ReserveHealthEndpoint("edge", "gateway", 0); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := store.ReserveHealthEndpoint("edge", "webpa", 0); err != nil {
+				t.Fatal(err)
+			}
 			_, err := Resolve(store, resolverRegistry(), test.request)
 			if err == nil || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("Resolve error = %v, want containing %q", err, test.want)
