@@ -121,3 +121,19 @@ func TestSanitizeCopiesAndRedactsWebhookRegistrations(t *testing.T) {
 		t.Fatalf("clean registrations = %+v", clean.WebhookRegistrations)
 	}
 }
+
+func TestSanitizeCopiesAndSortsTalariaDevices(t *testing.T) {
+	first := validTalariaDevice("mac:001122334455")
+	second := validTalariaDevice("mac:001122334456")
+	devices := []TalariaDevice{second, first}
+	result := validTalariaDeviceInventoryResult()
+	result.TalariaDevices = &devices
+	clean, err := Sanitize(result)
+	if err != nil {
+		t.Fatalf("Sanitize: %v", err)
+	}
+	devices[0].BytesSent = 99
+	if clean.TalariaDevices == nil || (*clean.TalariaDevices)[0].ID != first.ID || (*clean.TalariaDevices)[0].BytesSent != first.BytesSent {
+		t.Fatalf("clean devices = %+v", clean.TalariaDevices)
+	}
+}

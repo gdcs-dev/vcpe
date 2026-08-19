@@ -93,6 +93,24 @@ destination prefixes, probe definitions, or target URLs. Responses are
 size-limited, strictly decoded, redacted, and
 exclude raw logs and credentials.
 
+### Parodus Client Enumeration
+
+Gateway and XB10 sources can inventory the receive-enabled application clients
+registered with their own Parodus instance without a WebPA service:
+
+```bash
+vcpe diagnose --name example-full --from gateway --to parodus --json
+vcpe diagnose --name example-full --from xb10 --to parodus --replica 0 --json
+```
+
+The command uses the selected source instance's persisted loopback diagnostic
+endpoint. That source owns the derived device identity, Scytale configuration,
+and credentials used to retrieve its bounded `<device>/parodus/client-list`.
+The result lists at most 64 sorted registered client-service identifiers and
+reports whether Parodus truncated the list. It is an inventory of
+receive-enabled registrations, not an active callback delivery diagnostic;
+Gateway's active callback journey remains a separate capability.
+
 ### Webhook Registration And Callback Diagnostics
 
 The `event-sink` subscriber type supports a separate WebPA-owned webhook

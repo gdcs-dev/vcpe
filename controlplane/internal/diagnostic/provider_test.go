@@ -13,8 +13,10 @@ func TestRegistryLookupAndOrdering(t *testing.T) {
 	registry.Register(NewCPEWebPAProvider("xb10"))
 	registry.Register(NewCPEWebPAProvider("gateway"))
 	registry.Register(NewCPEWebPACallbackProvider())
-	registry.Register(NewParodusClientsProvider())
+	registry.Register(NewParodusClientsProvider("gateway"))
+	registry.Register(NewParodusClientsProvider("xb10"))
 	registry.Register(NewArgusWebhooksProvider())
+	registry.Register(NewTalariaDevicesProvider())
 	registry.Register(NewWebhookProvider())
 	if _, ok := registry.Lookup(JourneyCPEWebPA, "gateway", "webpa"); !ok {
 		t.Fatal("gateway provider not found")
@@ -28,28 +30,41 @@ func TestRegistryLookupAndOrdering(t *testing.T) {
 	if _, ok := registry.Lookup(JourneyParodusClients, "gateway", "parodus"); !ok {
 		t.Fatal("Parodus client-list provider not found")
 	}
+	if _, ok := registry.Lookup(JourneyParodusClients, "xb10", "parodus"); !ok {
+		t.Fatal("XB10 Parodus client-list provider not found")
+	}
 	if _, ok := registry.Lookup(JourneyArgusWebhooks, "webpa", "argus"); !ok {
 		t.Fatal("Argus webhook inventory provider not found")
 	}
-	want := []string{"argus-webhooks/webpa/argus", "cpe-webpa-callback/gateway/webpa", "cpe-webpa/gateway/webpa", "cpe-webpa/xb10/webpa", "parodus-clients/gateway/parodus", "webhook/event-sink/webpa"}
+	if _, ok := registry.Lookup(JourneyTalariaDevices, "webpa", "talaria"); !ok {
+		t.Fatal("Talaria device inventory provider not found")
+	}
+	want := []string{"argus-webhooks/webpa/argus", "cpe-webpa-callback/gateway/webpa", "cpe-webpa/gateway/webpa", "cpe-webpa/xb10/webpa", "parodus-clients/gateway/parodus", "parodus-clients/xb10/parodus", "talaria-devices/webpa/talaria", "webhook/event-sink/webpa"}
 	if got := registry.Keys(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("keys = %#v, want %#v", got, want)
 	}
 }
 
 func TestParodusClientsProviderContract(t *testing.T) {
-	provider := NewParodusClientsProvider()
-	graph, err := provider.Expected(ExpectedInput{
-		Deployment: plan.Deployment{Name: "edge"},
-		Source:     plan.Service{Name: "gateway", Type: "gateway"},
-		Instance:   plan.Instance{Index: 0},
-		Target:     plan.Service{Name: "parodus", Type: "parodus"},
-	})
-	if err != nil {
-		t.Fatalf("Expected: %v", err)
-	}
-	if graph.Journey != JourneyParodusClients || graph.Target.Service != "parodus" || len(graph.Edges) != 1 || graph.Edges[0].ID != "parodus-client-list" {
-		t.Fatalf("graph = %+v", graph)
+	for _, source := range []plan.Service{
+		{Name: "gateway", Type: "gateway"},
+		{Name: "xb10", Type: "xb10"},
+	} {
+		t.Run(source.Type, func(t *testing.T) {
+			provider := NewParodusClientsProvider(source.Type)
+			graph, err := provider.Expected(ExpectedInput{
+				Deployment: plan.Deployment{Name: "edge"},
+				Source:     source,
+				Instance:   plan.Instance{Index: 0},
+				Target:     plan.Service{Name: "parodus", Type: "parodus"},
+			})
+			if err != nil {
+				t.Fatalf("Expected: %v", err)
+			}
+			if graph.Journey != JourneyParodusClients || graph.Target.Service != "parodus" || len(graph.Edges) != 1 || graph.Edges[0].ID != "parodus-client-list" || graph.Nodes[0].ID != source.Name || graph.Edges[0].From != source.Name {
+				t.Fatalf("graph = %+v", graph)
+			}
+		})
 	}
 }
 
@@ -65,6 +80,22 @@ func TestArgusWebhooksProviderContract(t *testing.T) {
 		t.Fatalf("Expected: %v", err)
 	}
 	if graph.Journey != JourneyArgusWebhooks || graph.Source.Service != "webpa" || graph.Target.Type != "argus" || len(graph.Edges) != 2 || graph.Edges[1].ID != "argus-inventory" {
+		t.Fatalf("graph = %+v", graph)
+	}
+}
+
+func TestTalariaDevicesProviderContract(t *testing.T) {
+	provider := NewTalariaDevicesProvider()
+	graph, err := provider.Expected(ExpectedInput{
+		Deployment: plan.Deployment{Name: "edge"},
+		Source:     plan.Service{Name: "webpa", Type: "webpa"},
+		Instance:   plan.Instance{Index: 0},
+		Target:     plan.Service{Name: "talaria", Type: "talaria"},
+	})
+	if err != nil {
+		t.Fatalf("Expected: %v", err)
+	}
+	if graph.Journey != JourneyTalariaDevices || graph.Source.Service != "webpa" || graph.Target.Type != "talaria" || len(graph.Edges) != 2 || graph.Edges[0].ID != "talaria-reachability" || graph.Edges[1].ID != "talaria-device-inventory" {
 		t.Fatalf("graph = %+v", graph)
 	}
 }

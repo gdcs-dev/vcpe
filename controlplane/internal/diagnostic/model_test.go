@@ -62,6 +62,37 @@ func validWebhookInventoryResult() Result {
 	return result
 }
 
+func validTalariaDevice(id string) TalariaDevice {
+	return TalariaDevice{
+		ID:               id,
+		Pending:          1,
+		BytesSent:        2,
+		MessagesSent:     3,
+		BytesReceived:    4,
+		MessagesReceived: 5,
+		Duplications:     6,
+		ConnectedAt:      time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC),
+		Uptime:           "1m2s",
+	}
+}
+
+func validTalariaDeviceInventoryResult() Result {
+	result := validResult()
+	result.Journey = JourneyTalariaDevices
+	result.Source = EndpointIdentity{Deployment: "edge", Service: "webpa", Type: "webpa", Replica: 0}
+	result.Target = EndpointIdentity{Deployment: "edge", Service: "talaria", Type: "talaria", Replica: 0}
+	result.Nodes = []Node{{ID: "webpa", Label: "WebPA", Kind: "service"}, {ID: "talaria", Label: "Talaria", Kind: "service"}}
+	result.Edges = []Edge{
+		{ID: "talaria-reachability", From: "webpa", To: "talaria", Label: "reach Talaria", BlocksFollowing: true},
+		{ID: "talaria-device-inventory", From: "talaria", To: "talaria", Label: "list connected devices", BlocksFollowing: true},
+	}
+	result.Observations = []Observation{
+		{EdgeID: "talaria-reachability", State: StatePassed, ObservedAt: result.ObservedAt},
+		{EdgeID: "talaria-device-inventory", State: StatePassed, ObservedAt: result.ObservedAt},
+	}
+	return result
+}
+
 func TestResultValidate(t *testing.T) {
 	if err := validResult().Validate(); err != nil {
 		t.Fatalf("valid result rejected: %v", err)
@@ -161,6 +192,79 @@ func TestResultValidateWebhookRegistrationList(t *testing.T) {
 	}
 }
 
+func TestResultValidateTalariaDeviceInventory(t *testing.T) {
+	first := validTalariaDevice("mac:001122334455")
+	second := validTalariaDevice("mac:001122334456")
+	devices := []TalariaDevice{first, second}
+	result := validTalariaDeviceInventoryResult()
+	result.TalariaDevices = &devices
+	if err := result.Validate(); err != nil {
+		t.Fatalf("valid Talaria device inventory rejected: %v", err)
+	}
+
+	tests := []struct {
+		name   string
+		mutate func(*Result)
+		want   string
+	}{
+		{name: "missing successful inventory", mutate: func(value *Result) { value.TalariaDevices = nil }, want: "requires an explicit device list"},
+		{name: "unsorted", mutate: func(value *Result) { values := []TalariaDevice{second, first}; value.TalariaDevices = &values }, want: "sorted"},
+		{name: "negative counter", mutate: func(value *Result) {
+			device := first
+			device.BytesSent = -1
+			value.TalariaDevices = &[]TalariaDevice{device}
+		}, want: "must not be negative"},
+		{name: "invalid uptime", mutate: func(value *Result) {
+			device := first
+			device.Uptime = "later"
+			value.TalariaDevices = &[]TalariaDevice{device}
+		}, want: "uptime"},
+		{name: "too many devices", mutate: func(value *Result) {
+			values := make([]TalariaDevice, MaxTalariaDevices+1)
+			for index := range values {
+				values[index] = validTalariaDevice(fmt.Sprintf("mac:%012x", index))
+			}
+			value.TalariaDevices = &values
+		}, want: "maximum"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			candidate := result
+			test.mutate(&candidate)
+			if err := candidate.Validate(); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("Validate() error = %v, want containing %q", err, test.want)
+			}
+		})
+	}
+
+	nonInventory := validResult()
+	nonInventory.TalariaDevices = &devices
+	if err := nonInventory.Validate(); err == nil || !strings.Contains(err.Error(), "valid only") {
+		t.Fatalf("Validate() error = %v, want Talaria journey restriction", err)
+	}
+}
+
+func TestEndpointResponseValidateRequiresTalariaDeviceListOnSuccess(t *testing.T) {
+	now := time.Now().UTC()
+	response := EndpointResponse{
+		SchemaVersion: SchemaVersion,
+		Journey:       JourneyTalariaDevices,
+		ObservedAt:    now,
+		Observations: []Observation{
+			{EdgeID: "talaria-reachability", State: StatePassed, ObservedAt: now},
+			{EdgeID: "talaria-device-inventory", State: StatePassed, ObservedAt: now},
+		},
+	}
+	if err := response.Validate(); err == nil || !strings.Contains(err.Error(), "requires an explicit device list") {
+		t.Fatalf("Validate() error = %v", err)
+	}
+	empty := []TalariaDevice{}
+	response.TalariaDevices = &empty
+	if err := response.Validate(); err != nil {
+		t.Fatalf("explicit empty device list rejected: %v", err)
+	}
+}
+
 func TestResultValidateRejectsBrokenInvariants(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -224,6 +328,7 @@ func TestInvocationValidateFor(t *testing.T) {
 		{name: "callback active preserves case-sensitive client service", journey: JourneyCPEWebPACallback, invocation: Invocation{ClientService: "HermesFS", Subscriber: "event-sink", AllowActiveEvent: true, Event: "apparmor/diagnostic", DeviceID: "mac:001122334455", CorrelationID: strings.Repeat("a", 64)}},
 		{name: "Parodus clients", journey: JourneyParodusClients, invocation: Invocation{}},
 		{name: "Argus webhooks", journey: JourneyArgusWebhooks, invocation: Invocation{}},
+		{name: "Talaria devices", journey: JourneyTalariaDevices, invocation: Invocation{}},
 		{name: "webhook rejects client service", journey: JourneyWebhook, invocation: Invocation{ClientService: "config"}, wantErr: "client service"},
 		{name: "cpe rejects webhook field", journey: JourneyCPEWebPA, invocation: Invocation{ClientService: "config", AllowActiveCallback: true}, wantErr: "webhook invocation fields"},
 		{name: "callback requires consent", journey: JourneyCPEWebPACallback, invocation: Invocation{ClientService: "apparmor-simulator", Subscriber: "event-sink", Event: "apparmor/diagnostic", DeviceID: "mac:001122334455", CorrelationID: strings.Repeat("a", 64)}, wantErr: "active event consent"},
@@ -236,6 +341,7 @@ func TestInvocationValidateFor(t *testing.T) {
 		{name: "invalid device identity", journey: JourneyWebhook, invocation: Invocation{AllowActiveCallback: true, Event: "apparmor/diagnostic", DeviceID: "001122334455"}, wantErr: "device identity"},
 		{name: "Parodus clients rejects client service", journey: JourneyParodusClients, invocation: Invocation{ClientService: "config"}, wantErr: "does not accept"},
 		{name: "Argus webhooks rejects client service", journey: JourneyArgusWebhooks, invocation: Invocation{ClientService: "config"}, wantErr: "does not accept"},
+		{name: "Talaria devices rejects client service", journey: JourneyTalariaDevices, invocation: Invocation{ClientService: "config"}, wantErr: "does not accept"},
 		{name: "unknown journey", journey: "other", wantErr: "unsupported diagnostic journey"},
 	}
 	for _, test := range tests {

@@ -198,14 +198,18 @@ func (provider cpeWebPAProvider) Expected(input ExpectedInput) (ExpectedGraph, e
 	}, nil
 }
 
-type parodusClientsProvider struct{}
+type parodusClientsProvider struct {
+	sourceType string
+}
 
-// NewParodusClientsProvider creates the Gateway-only source-local client-list journey.
-func NewParodusClientsProvider() Provider { return parodusClientsProvider{} }
+// NewParodusClientsProvider creates a source-local Parodus client-list journey.
+func NewParodusClientsProvider(sourceType string) Provider {
+	return parodusClientsProvider{sourceType: sourceType}
+}
 
-func (parodusClientsProvider) Journey() string    { return JourneyParodusClients }
-func (parodusClientsProvider) SourceType() string { return "gateway" }
-func (parodusClientsProvider) TargetType() string { return "parodus" }
+func (parodusClientsProvider) Journey() string             { return JourneyParodusClients }
+func (provider parodusClientsProvider) SourceType() string { return provider.sourceType }
+func (parodusClientsProvider) TargetType() string          { return "parodus" }
 
 func (provider parodusClientsProvider) Expected(input ExpectedInput) (ExpectedGraph, error) {
 	if input.Source.Type != provider.SourceType() || input.Target.Type != provider.TargetType() {
@@ -219,11 +223,11 @@ func (provider parodusClientsProvider) Expected(input ExpectedInput) (ExpectedGr
 			{Key: "parodus-endpoint", Value: "tcp://127.0.0.1:6666"},
 		},
 		Nodes: []Node{
-			{ID: "gateway", Label: input.Source.Name, Kind: "service"},
+			{ID: input.Source.Name, Label: input.Source.Name, Kind: "service"},
 			{ID: "parodus", Label: "Parodus", Kind: "service"},
 		},
 		Edges: []Edge{
-			{ID: "parodus-client-list", From: "gateway", To: "parodus", Label: "list registered clients", BlocksFollowing: true},
+			{ID: "parodus-client-list", From: input.Source.Name, To: "parodus", Label: "list registered clients", BlocksFollowing: true},
 		},
 	}, nil
 }
@@ -252,6 +256,34 @@ func (provider argusWebhooksProvider) Expected(input ExpectedInput) (ExpectedGra
 		Edges: []Edge{
 			{ID: "argus-reachability", From: "webpa", To: "argus", Label: "reach Argus", BlocksFollowing: true},
 			{ID: "argus-inventory", From: "argus", To: "argus", Label: "list registered webhooks", BlocksFollowing: true},
+		},
+	}, nil
+}
+
+type talariaDevicesProvider struct{}
+
+// NewTalariaDevicesProvider creates the WebPA-local connected-device inventory journey.
+func NewTalariaDevicesProvider() Provider { return talariaDevicesProvider{} }
+
+func (talariaDevicesProvider) Journey() string    { return JourneyTalariaDevices }
+func (talariaDevicesProvider) SourceType() string { return "webpa" }
+func (talariaDevicesProvider) TargetType() string { return "talaria" }
+
+func (provider talariaDevicesProvider) Expected(input ExpectedInput) (ExpectedGraph, error) {
+	if input.Source.Type != provider.SourceType() || input.Target.Type != provider.TargetType() {
+		return ExpectedGraph{}, fmt.Errorf("provider %s does not support %s to %s", provider.SourceType(), input.Source.Type, input.Target.Type)
+	}
+	return ExpectedGraph{
+		Journey: JourneyTalariaDevices,
+		Source:  EndpointIdentity{Deployment: input.Deployment.Name, Service: input.Source.Name, Type: input.Source.Type, Replica: input.Instance.Index},
+		Target:  EndpointIdentity{Deployment: input.Deployment.Name, Service: input.Target.Name, Type: input.Target.Type, Replica: 0},
+		Nodes: []Node{
+			{ID: "webpa", Label: input.Source.Name, Kind: "service"},
+			{ID: "talaria", Label: "Talaria", Kind: "registry"},
+		},
+		Edges: []Edge{
+			{ID: "talaria-reachability", From: "webpa", To: "talaria", Label: "reach Talaria", BlocksFollowing: true},
+			{ID: "talaria-device-inventory", From: "talaria", To: "talaria", Label: "list connected devices", BlocksFollowing: true},
 		},
 	}, nil
 }

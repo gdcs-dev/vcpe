@@ -57,8 +57,10 @@ func Resolve(store *persist.Store, registry *Registry, request ResolveRequest) (
 		journey = JourneyParodusClients
 	case "webhooks":
 		journey = JourneyArgusWebhooks
+	case "devices":
+		journey = JourneyTalariaDevices
 	default:
-		return Selection{}, fmt.Errorf("unsupported diagnostic target %q: expected webpa, webhook, webhooks, callback, or parodus", request.Target)
+		return Selection{}, fmt.Errorf("unsupported diagnostic target %q: expected webpa, webhook, webhooks, devices, callback, or parodus", request.Target)
 	}
 	raw, ok, err := store.LatestDesiredSnapshot(request.Deployment)
 	if err != nil {
@@ -92,6 +94,8 @@ func Resolve(store *persist.Store, registry *Registry, request ResolveRequest) (
 	target := plan.Service{Name: "parodus", Type: "parodus"}
 	if journey == JourneyArgusWebhooks {
 		target = plan.Service{Name: "argus", Type: "argus"}
+	} else if journey == JourneyTalariaDevices {
+		target = plan.Service{Name: "talaria", Type: "talaria"}
 	} else if journey != JourneyParodusClients {
 		if len(targets) == 0 {
 			return Selection{}, fmt.Errorf("deployment %q has no service of type webpa", request.Deployment)

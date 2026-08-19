@@ -127,12 +127,23 @@ func TestBuildPassiveDiagnosticRoutesAddsCaduceusRoutingHandler(t *testing.T) {
 }
 
 func TestBuildDiagnosticJourneys(t *testing.T) {
-	journeys, err := buildDiagnosticJourneys([]string{"cpe-webpa", "cpe-webpa-callback", "parodus-clients", "argus-webhooks", "webhook"}, time.Second)
-	if err != nil || journeys["cpe-webpa"] == nil || journeys["cpe-webpa-callback"] == nil || journeys["parodus-clients"] == nil || journeys["argus-webhooks"] == nil || journeys["webhook"] == nil {
+	journeys, err := buildDiagnosticJourneys([]string{"cpe-webpa", "cpe-webpa-callback", "parodus-clients", "argus-webhooks", "talaria-devices", "webhook"}, time.Second)
+	if err != nil || journeys["cpe-webpa"] == nil || journeys["cpe-webpa-callback"] == nil || journeys["parodus-clients"] == nil || journeys["argus-webhooks"] == nil || journeys["talaria-devices"] == nil || journeys["webhook"] == nil {
 		t.Fatalf("buildDiagnosticJourneys() = %#v, %v", journeys, err)
 	}
 	if _, err := buildDiagnosticJourneys([]string{"unknown"}, time.Second); err == nil {
 		t.Fatal("expected unsupported journey error")
+	}
+}
+
+func TestParodusClientsJourneyRejectsInvocationFields(t *testing.T) {
+	journeys, err := buildDiagnosticJourneys([]string{diagnostic.JourneyParodusClients}, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := journeys[diagnostic.JourneyParodusClients](context.Background(), diagnostic.Invocation{ClientService: "apparmor-simulator"})
+	if response.Journey != diagnostic.JourneyParodusClients || len(response.Observations) != 1 || response.Observations[0].ReasonID != "parodus-client-list-invalid" {
+		t.Fatalf("response = %+v", response)
 	}
 }
 

@@ -18,6 +18,7 @@ const (
 	JourneyCPEWebPACallback       = "cpe-webpa-callback"
 	JourneyParodusClients         = "parodus-clients"
 	JourneyArgusWebhooks          = "argus-webhooks"
+	JourneyTalariaDevices         = "talaria-devices"
 	JourneyWebhook                = "webhook"
 	JourneyWebhookSubscriber      = "webhook-subscriber"
 	WebhookActiveDirect           = "direct"
@@ -28,6 +29,7 @@ const (
 	MaxCapabilities               = 16
 	MaxParodusClients             = 64
 	MaxWebhookRegistrations       = 64
+	MaxTalariaDevices             = 64
 	MaxWebhookRegistrationFilters = 8
 	MaxIDLength                   = 64
 	MaxLabelLength                = 128
@@ -117,6 +119,7 @@ type Result struct {
 	ParodusClients          *[]string              `json:"parodusClients,omitempty"`
 	ParodusClientsTruncated *bool                  `json:"parodusClientsTruncated,omitempty"`
 	WebhookRegistrations    *[]WebhookRegistration `json:"webhookRegistrations,omitempty"`
+	TalariaDevices          *[]TalariaDevice       `json:"talariaDevices,omitempty"`
 	FirstFailure            string                 `json:"firstFailure,omitempty"`
 	ObservedAt              time.Time              `json:"observedAt"`
 }
@@ -136,6 +139,7 @@ type EndpointResponse struct {
 	ParodusClients          *[]string              `json:"parodusClients,omitempty"`
 	ParodusClientsTruncated *bool                  `json:"parodusClientsTruncated,omitempty"`
 	WebhookRegistrations    *[]WebhookRegistration `json:"webhookRegistrations,omitempty"`
+	TalariaDevices          *[]TalariaDevice       `json:"talariaDevices,omitempty"`
 	Active                  *WebhookActiveResult   `json:"active,omitempty"`
 	ActiveEvent             *CPEActiveEventResult  `json:"activeEvent,omitempty"`
 	ObservedAt              time.Time              `json:"observedAt"`
@@ -207,6 +211,20 @@ type WebhookRegistration struct {
 	Until          time.Time `json:"until"`
 	TTLSeconds     *int64    `json:"ttlSeconds,omitempty"`
 	SecretPresent  bool      `json:"secretPresent"`
+}
+
+// TalariaDevice is the bounded operator-visible representation of one current
+// Talaria device session.
+type TalariaDevice struct {
+	ID               string    `json:"id"`
+	Pending          int64     `json:"pending"`
+	BytesSent        int64     `json:"bytesSent"`
+	MessagesSent     int64     `json:"messagesSent"`
+	BytesReceived    int64     `json:"bytesReceived"`
+	MessagesReceived int64     `json:"messagesReceived"`
+	Duplications     int64     `json:"duplications"`
+	ConnectedAt      time.Time `json:"connectedAt"`
+	Uptime           string    `json:"upTime"`
 }
 
 // Validate preserves the CPE-to-WebPA validation contract for source-local
@@ -285,6 +303,11 @@ func (invocation Invocation) ValidateFor(journey string) error {
 			return fmt.Errorf("Argus webhook inventory does not accept invocation fields")
 		}
 		return nil
+	case JourneyTalariaDevices:
+		if invocation.ClientService != "" || invocation.Subscriber != "" || invocation.AllowActiveCallback || invocation.AllowActiveEvent || invocation.Event != "" || invocation.DeviceID != "" || invocation.CorrelationID != "" || invocation.SubscriberIntent != nil || invocation.ActivePhase != "" {
+			return fmt.Errorf("Talaria device inventory does not accept invocation fields")
+		}
+		return nil
 	default:
 		return fmt.Errorf("unsupported diagnostic journey %q", journey)
 	}
@@ -310,6 +333,9 @@ func (r Result) Validate() error {
 		return err
 	}
 	if err := validateWebhookRegistrationList(r.Journey, r.WebhookRegistrations); err != nil {
+		return err
+	}
+	if err := validateTalariaDeviceList(r.Journey, r.TalariaDevices); err != nil {
 		return err
 	}
 	if r.ObservedAt.IsZero() {
@@ -409,6 +435,9 @@ func (r Result) Validate() error {
 	if r.FirstFailure != firstFailed {
 		return fmt.Errorf("firstFailure %q does not match earliest failed edge %q", r.FirstFailure, firstFailed)
 	}
+	if err := validateTalariaDeviceCollection(r.Journey, r.TalariaDevices, r.Observations); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -449,6 +478,9 @@ func (r EndpointResponse) Validate() error {
 		return err
 	}
 	if err := validateWebhookRegistrationList(r.Journey, r.WebhookRegistrations); err != nil {
+		return err
+	}
+	if err := validateTalariaDeviceList(r.Journey, r.TalariaDevices); err != nil {
 		return err
 	}
 	if r.Active != nil {
@@ -494,6 +526,9 @@ func (r EndpointResponse) Validate() error {
 		if err := validateEvidence("edge "+observation.EdgeID, observation.Evidence); err != nil {
 			return err
 		}
+	}
+	if err := validateTalariaDeviceCollection(r.Journey, r.TalariaDevices, r.Observations); err != nil {
+		return err
 	}
 	return nil
 }
@@ -644,6 +679,68 @@ func (registration WebhookRegistration) validate() error {
 	return nil
 }
 
+func validateTalariaDeviceList(journey string, devices *[]TalariaDevice) error {
+	if journey != JourneyTalariaDevices {
+		if devices != nil {
+			return fmt.Errorf("Talaria device inventory is valid only for journey %q", JourneyTalariaDevices)
+		}
+		return nil
+	}
+	if devices == nil {
+		return nil
+	}
+	if len(*devices) > MaxTalariaDevices {
+		return fmt.Errorf("Talaria device inventory has %d entries: maximum is %d", len(*devices), MaxTalariaDevices)
+	}
+	for index, device := range *devices {
+		if err := device.validate(); err != nil {
+			return fmt.Errorf("Talaria device %d: %w", index, err)
+		}
+		if index > 0 && (*devices)[index-1].ID >= device.ID {
+			return fmt.Errorf("Talaria device inventory must be sorted without duplicate device IDs")
+		}
+	}
+	return nil
+}
+
+func validateTalariaDeviceCollection(journey string, devices *[]TalariaDevice, observations []Observation) error {
+	if journey != JourneyTalariaDevices {
+		return nil
+	}
+	for _, observation := range observations {
+		if observation.EdgeID == "talaria-device-inventory" && observation.State == StatePassed && devices == nil {
+			return fmt.Errorf("successful Talaria inventory requires an explicit device list")
+		}
+	}
+	return nil
+}
+
+func (device TalariaDevice) validate() error {
+	if err := validateInvocationText("device ID", device.ID, deviceIdentityPattern); err != nil {
+		return err
+	}
+	for name, value := range map[string]int64{
+		"pending":           device.Pending,
+		"bytes sent":        device.BytesSent,
+		"messages sent":     device.MessagesSent,
+		"bytes received":    device.BytesReceived,
+		"messages received": device.MessagesReceived,
+		"duplications":      device.Duplications,
+	} {
+		if value < 0 {
+			return fmt.Errorf("%s must not be negative", name)
+		}
+	}
+	if device.ConnectedAt.IsZero() {
+		return fmt.Errorf("connection time is required")
+	}
+	uptime, err := time.ParseDuration(device.Uptime)
+	if err != nil || uptime < 0 {
+		return fmt.Errorf("uptime is invalid")
+	}
+	return nil
+}
+
 func validateWebhookPatterns(name string, values []string) error {
 	if len(values) > MaxWebhookRegistrationFilters {
 		return fmt.Errorf("%s list has %d entries: maximum is %d", name, len(values), MaxWebhookRegistrationFilters)
@@ -667,7 +764,7 @@ func validateCorrelationID(value string) error {
 }
 
 func resultJourney(journey string) bool {
-	return journey == JourneyCPEWebPA || journey == JourneyCPEWebPACallback || journey == JourneyParodusClients || journey == JourneyArgusWebhooks || journey == JourneyWebhook
+	return journey == JourneyCPEWebPA || journey == JourneyCPEWebPACallback || journey == JourneyParodusClients || journey == JourneyArgusWebhooks || journey == JourneyTalariaDevices || journey == JourneyWebhook
 }
 
 func validateOptionalID(name, value string) error {

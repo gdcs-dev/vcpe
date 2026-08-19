@@ -19,9 +19,9 @@ spec:
   networks:
     - role: mgmt
       ipv4:
-        cidr: 10.10.10.0/24
-        gateway: 10.10.10.1
-        pool: { start: 10.10.10.10, end: 10.10.10.250 }
+        cidr: 10.10.20.0/24
+        gateway: 10.10.20.1
+        pool: { start: 10.10.20.10, end: 10.10.20.250 }
     - role: wan
       nat: true
       firewall: true

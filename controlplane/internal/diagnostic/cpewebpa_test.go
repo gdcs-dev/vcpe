@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -210,6 +211,108 @@ func TestCPEWebPAProbeListsParodusClients(t *testing.T) {
 	}
 	if response.Observations[0].State != StatePassed || response.ParodusClients == nil || strings.Join(*response.ParodusClients, ",") != "apparmor-simulator,config" || response.ParodusClientsTruncated == nil || *response.ParodusClientsTruncated {
 		t.Fatalf("response = %+v", response)
+	}
+}
+
+func TestCPEWebPAProbeRefreshesMissingDeviceIDForParodusClients(t *testing.T) {
+	t.Setenv("VCPE_HEALTH_SERIAL", "001122334455")
+	probe := baseCPEWebPAProbe(t, http.StatusOK, `{"devices":[]}`)
+	probe.DeviceID = ""
+	probe.HTTPClient = &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		return parodusClientListResponse(t, request, `{"client-list":["apparmor-simulator"],"truncated":false}`, false), nil
+	})}
+	response := probe.RunParodusClients(context.Background(), Invocation{})
+	if response.Observations[0].State != StatePassed || response.ParodusClients == nil || strings.Join(*response.ParodusClients, ",") != "apparmor-simulator" {
+		t.Fatalf("response = %+v", response)
+	}
+}
+
+func TestCPEWebPAProbeInventoriesTalariaDevices(t *testing.T) {
+	var requests []*http.Request
+	probe := baseCPEWebPAProbe(t, http.StatusOK, `{"devices":[{"id":"mac:001122334456","pending":1,"statistics":{"bytesSent":2,"messagesSent":3,"bytesReceived":4,"messagesReceived":5,"duplications":6,"connectedAt":"2026-08-19T12:00:00Z","upTime":"1m2s"},"secret":"never-emit"},{"id":"mac:001122334455","pending":0,"statistics":{"bytesSent":7,"messagesSent":8,"bytesReceived":9,"messagesReceived":10,"duplications":11,"connectedAt":"2026-08-19T11:00:00Z","upTime":"2m3s"},"websocket":"never-emit"}]}`)
+	probe.HTTPClient = &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		requests = append(requests, request)
+		return jsonHTTPResponse(http.StatusOK, `{"devices":[{"id":"mac:001122334456","pending":1,"statistics":{"bytesSent":2,"messagesSent":3,"bytesReceived":4,"messagesReceived":5,"duplications":6,"connectedAt":"2026-08-19T12:00:00Z","upTime":"1m2s"},"secret":"never-emit"},{"id":"mac:001122334455","pending":0,"statistics":{"bytesSent":7,"messagesSent":8,"bytesReceived":9,"messagesReceived":10,"duplications":11,"connectedAt":"2026-08-19T11:00:00Z","upTime":"2m3s"},"websocket":"never-emit"}]}`), nil
+	})}
+	response := probe.RunTalariaDevices(context.Background(), Invocation{})
+	if err := response.Validate(); err != nil {
+		t.Fatalf("response: %v", err)
+	}
+	if len(requests) != 1 || requests[0].Method != http.MethodGet || requests[0].URL.Path != "/api/v2/devices" {
+		t.Fatalf("requests = %+v", requests)
+	}
+	username, password, ok := requests[0].BasicAuth()
+	if !ok || username != probe.Username || password != probe.Password {
+		t.Fatalf("basic auth = %q, %q, %t", username, password, ok)
+	}
+	if response.TalariaDevices == nil || len(*response.TalariaDevices) != 2 || (*response.TalariaDevices)[0].ID != "mac:001122334455" || (*response.TalariaDevices)[0].MessagesReceived != 10 {
+		t.Fatalf("devices = %+v", response.TalariaDevices)
+	}
+	encoded, err := json.Marshal(response)
+	if err != nil || strings.Contains(string(encoded), "never-emit") || strings.Contains(string(encoded), probe.Password) {
+		t.Fatalf("encoded response = %s, %v", encoded, err)
+	}
+}
+
+func TestCPEWebPAProbeInventoriesEmptyTalariaDevices(t *testing.T) {
+	probe := baseCPEWebPAProbe(t, http.StatusOK, `{"devices":[]}`)
+	response := probe.RunTalariaDevices(context.Background(), Invocation{})
+	if err := response.Validate(); err != nil {
+		t.Fatalf("response: %v", err)
+	}
+	if response.TalariaDevices == nil || len(*response.TalariaDevices) != 0 || response.Observations[1].State != StatePassed {
+		t.Fatalf("response = %+v", response)
+	}
+}
+
+func TestCPEWebPAProbeTalariaInventoryFailures(t *testing.T) {
+	limitDevices := make([]TalariaDevice, MaxTalariaDevices+1)
+	for index := range limitDevices {
+		limitDevices[index] = validTalariaDevice(fmt.Sprintf("mac:%012x", index))
+	}
+	limitBody, err := json.Marshal(struct {
+		Devices []TalariaDevice `json:"devices"`
+	}{Devices: limitDevices})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name       string
+		probe      func(*CPEWebPAProbe)
+		wantState  State
+		wantReason string
+	}{
+		{name: "authentication", probe: func(probe *CPEWebPAProbe) { probe.HTTPClient = responseClient(http.StatusUnauthorized, `{}`) }, wantState: StateFailed, wantReason: "talaria-authentication-failed"},
+		{name: "unexpected status", probe: func(probe *CPEWebPAProbe) { probe.HTTPClient = responseClient(http.StatusServiceUnavailable, `{}`) }, wantState: StateUnknown, wantReason: "talaria-inventory-unavailable"},
+		{name: "transport", probe: func(probe *CPEWebPAProbe) {
+			probe.HTTPClient = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) { return nil, context.DeadlineExceeded })}
+		}, wantState: StateFailed, wantReason: "talaria-request-failed"},
+		{name: "malformed", probe: func(probe *CPEWebPAProbe) { probe.HTTPClient = responseClient(http.StatusOK, `{`) }, wantState: StateUnknown, wantReason: "talaria-inventory-invalid"},
+		{name: "invalid field", probe: func(probe *CPEWebPAProbe) {
+			probe.HTTPClient = responseClient(http.StatusOK, `{"devices":[{"id":"bad"}]}`)
+		}, wantState: StateUnknown, wantReason: "talaria-inventory-invalid"},
+		{name: "null list", probe: func(probe *CPEWebPAProbe) { probe.HTTPClient = responseClient(http.StatusOK, `{"devices":null}`) }, wantState: StateUnknown, wantReason: "talaria-inventory-invalid"},
+		{name: "over limit", probe: func(probe *CPEWebPAProbe) { probe.HTTPClient = responseClient(http.StatusOK, string(limitBody)) }, wantState: StateUnknown, wantReason: "talaria-inventory-limit"},
+		{name: "oversized", probe: func(probe *CPEWebPAProbe) {
+			probe.HTTPClient = responseClient(http.StatusOK, `{"devices":[],"padding":"`+strings.Repeat("x", MaxDiagnosticBodyBytes)+`"}`)
+		}, wantState: StateUnknown, wantReason: "talaria-inventory-invalid"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			probe := baseCPEWebPAProbe(t, http.StatusOK, `{"devices":[]}`)
+			test.probe(&probe)
+			response := probe.RunTalariaDevices(context.Background(), Invocation{})
+			if err := response.Validate(); err != nil {
+				t.Fatalf("response: %v", err)
+			}
+			index := 1
+			if test.name == "transport" {
+				index = 0
+			}
+			if response.TalariaDevices != nil || response.Observations[index].State != test.wantState || response.Observations[index].ReasonID != test.wantReason {
+				t.Fatalf("response = %+v", response)
+			}
+		})
 	}
 }
 

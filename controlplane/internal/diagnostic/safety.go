@@ -60,6 +60,10 @@ func Sanitize(result Result) (Result, error) {
 		registrations := sanitizeWebhookRegistrations(*result.WebhookRegistrations)
 		clean.WebhookRegistrations = &registrations
 	}
+	if result.TalariaDevices != nil {
+		devices := sanitizeTalariaDevices(*result.TalariaDevices)
+		clean.TalariaDevices = &devices
+	}
 	clean.Observations = make([]Observation, len(result.Observations))
 	for index, observation := range result.Observations {
 		observation.Message = redact(truncate(observation.Message, MaxMessageLength))
@@ -88,6 +92,14 @@ func sanitizeWebhookPatterns(patterns []string) []string {
 		clean[index] = redact(truncate(pattern, MaxInvocationTextLength))
 	}
 	sort.Strings(clean)
+	return clean
+}
+
+func sanitizeTalariaDevices(devices []TalariaDevice) []TalariaDevice {
+	clean := append([]TalariaDevice(nil), devices...)
+	sort.Slice(clean, func(left, right int) bool {
+		return clean[left].ID < clean[right].ID
+	})
 	return clean
 }
 

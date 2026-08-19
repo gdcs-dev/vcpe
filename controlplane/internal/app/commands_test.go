@@ -231,6 +231,67 @@ func TestDiagnoseArgusWebhooksUsesPersistedWebPALoopbackAndRendersInventory(t *t
 	}
 }
 
+func TestDiagnoseTalariaDevicesUsesPersistedWebPALoopbackAndRendersInventory(t *testing.T) {
+	stateRoot := t.TempDir()
+	store, err := persist.Open(stateRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := []byte("apiVersion: vcpe.dev/v1\nkind: Deployment\nmetadata: {name: edge}\nspec:\n  networks: []\n  services:\n    - name: webpa\n      type: webpa\n      replicas: 1\n      image: {repository: webpa}\n")
+	if err := store.SaveDesiredSnapshot("edge", snapshot); err != nil {
+		t.Fatal(err)
+	}
+	endpoint, err := store.ReserveHealthEndpoint("edge", "webpa", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	now := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
+	devices := []diagnostic.TalariaDevice{{ID: "mac:001122334455", Pending: 1, BytesSent: 2, MessagesSent: 3, BytesReceived: 4, MessagesReceived: 5, Duplications: 6, ConnectedAt: now, Uptime: "1m2s"}}
+	requests := []string{}
+	previousFactory := newDiagnosticClient
+	newDiagnosticClient = func(time.Duration) *diagnostic.Client {
+		return &diagnostic.Client{HTTPClient: &http.Client{Transport: diagnosticRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+			if request.URL.Host != "127.0.0.1:"+strconv.Itoa(endpoint.HostPort) {
+				t.Fatalf("diagnostic host = %q", request.URL.Host)
+			}
+			requests = append(requests, request.Method+" "+request.URL.Path)
+			var payload any
+			switch request.URL.Path {
+			case "/diagnostics":
+				payload = diagnostic.Capabilities{SchemaVersion: diagnostic.CapabilitiesSchema, Journeys: []string{diagnostic.JourneyTalariaDevices}}
+			case "/diagnostics/" + diagnostic.JourneyTalariaDevices:
+				var invocation diagnostic.Invocation
+				if err := json.NewDecoder(request.Body).Decode(&invocation); err != nil || invocation != (diagnostic.Invocation{}) {
+					t.Fatalf("inventory invocation = %+v, error = %v", invocation, err)
+				}
+				payload = diagnostic.EndpointResponse{SchemaVersion: diagnostic.SchemaVersion, Journey: diagnostic.JourneyTalariaDevices, ObservedAt: now, Observations: []diagnostic.Observation{{EdgeID: "talaria-reachability", State: diagnostic.StatePassed, ObservedAt: now}, {EdgeID: "talaria-device-inventory", State: diagnostic.StatePassed, ObservedAt: now}}, TalariaDevices: &devices}
+			default:
+				return nil, fmt.Errorf("unexpected inventory request %s", request.URL.Path)
+			}
+			body, _ := json.Marshal(payload)
+			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(string(body))), Header: http.Header{}}, nil
+		})}}
+	}
+	t.Cleanup(func() { newDiagnosticClient = previousFactory })
+
+	response, err := executeLocal(Options{Command: "diagnose", Name: "edge", From: "webpa", To: "devices", StateRoot: stateRoot})
+	if err != nil || !strings.Contains(response.Message, "Talaria connected-device inventory") || !strings.Contains(response.Message, "mac:001122334455") || !strings.Contains(response.Message, "Bytes sent: 2") {
+		t.Fatalf("human inventory response = %+v, error = %v", response, err)
+	}
+	if want := []string{"GET /diagnostics", "POST /diagnostics/talaria-devices"}; !reflect.DeepEqual(requests, want) {
+		t.Fatalf("requests = %#v, want %#v", requests, want)
+	}
+
+	response, err = executeLocal(Options{Command: "diagnose", Name: "edge", From: "webpa", To: "devices", StateRoot: stateRoot, OutputJSON: true})
+	if err != nil || !strings.Contains(response.Message, `"talariaDevices"`) || !strings.Contains(response.Message, `"messagesReceived": 5`) {
+		t.Fatalf("JSON inventory response = %s, error = %v", response.Message, err)
+	}
+}
+
 func TestDiagnoseWebhookUsesPersistedLoopbackEndpointsPassively(t *testing.T) {
 	stateRoot := t.TempDir()
 	store, err := persist.Open(stateRoot)

@@ -98,11 +98,11 @@ var commandHelp = map[string]CommandHelp{
 		},
 	},
 	"diagnose": {
-		Synopsis:    "Diagnose CPE, Parodus, Argus webhook, or callback delivery paths",
-		Description: "Shows a bounded diagnostic graph and its first confirmed failure through persisted loopback endpoints. Use --to webpa with --client-service for CPE diagnostics, --to parodus to list registered clients, --to webhooks with WebPA as --from to inventory authoritative Argus registrations, --to webhook for one subscriber registration inspection, or --to callback for one bounded CPE-to-subscriber event after explicit active-event consent.",
+		Synopsis:    "Diagnose CPE, Talaria, Parodus, Argus webhook, or callback paths",
+		Description: "Shows a bounded diagnostic graph and its first confirmed failure through persisted loopback endpoints. Use --to webpa with --client-service for a selected CPE diagnosis; --to devices with WebPA as --from passively inventories Talaria's current connected-device sessions, exposing operator-visible IDs, queue depth, counters, connection time, and uptime. An empty device list is valid and the inventory is limited to 64 sessions. Use --to parodus to list registered clients, --to webhooks to inventory authoritative Argus registrations, --to webhook for one subscriber registration inspection, or --to callback for one bounded CPE-to-subscriber event after explicit active-event consent.",
 		RequiredFlags: []FlagHelp{
 			{Name: "--from", Arg: "<service>", Description: "Source service name"},
-			{Name: "--to", Arg: "<webpa|webhook|webhooks|callback|parodus>", Description: "Diagnostic target journey"},
+			{Name: "--to", Arg: "<webpa|webhook|webhooks|devices|callback|parodus>", Description: "Diagnostic target journey"},
 		},
 		OptionalFlags: []FlagHelp{
 			{Name: "--name", Arg: "<deployment>", Description: "Deployment containing the source and required participants; optional when exactly one deployment is active"},
@@ -118,12 +118,13 @@ var commandHelp = map[string]CommandHelp{
 			{Name: "--json", Description: "Emit the vcpe.dev/diagnostic/v1 graph"},
 		},
 		Examples: []string{
-			"vcpe diagnose --from gateway --to webpa --client-service apparmor-simulator",
-			"vcpe diagnose --name example --from gateway --to parodus",
-			"vcpe diagnose --name example --from webpa --to webhooks",
-			"vcpe diagnose --name example --from event-sink --to webhook",
-			"vcpe diagnose --name example --from event-sink --to webhook --allow-active-callback --event devices/diagnostic --device-id mac:02f9491df122",
-			"vcpe diagnose --name example --from gateway --to callback --client-service apparmor-simulator --subscriber event-sink --allow-active-event --event devices/diagnostic --device-id mac:02f9491df122",
+			"vcpe diag --from gateway --to webpa --client-service apparmor-simulator",
+			"vcpe diag --from gateway --to parodus",
+			"vcpe diag --from webpa --to webhooks",
+			"vcpe diag --from webpa --to devices",
+			"vcpe diag --from event-sink --to webhook",
+			"vcpe diag --from event-sink --to webhook --allow-active-callback --event devices/diagnostic --device-id mac:02f9491df122",
+			"vcpe diag --from gateway --to callback --client-service apparmor-simulator --subscriber event-sink --allow-active-event --event devices/diagnostic --device-id mac:02f9491df122",
 		},
 	},
 	"logs": {

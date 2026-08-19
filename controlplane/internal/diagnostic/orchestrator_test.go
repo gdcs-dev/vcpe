@@ -116,6 +116,84 @@ func TestDiagnoseArgusWebhooksUsesPersistedLoopbackEndpoint(t *testing.T) {
 	}
 }
 
+func TestDiagnoseTalariaDevicesUsesPersistedWebPALoopbackEndpoint(t *testing.T) {
+	store := resolverStore(t, "    - name: webpa\n      type: webpa\n      replicas: 1\n      image: {repository: webpa}\n")
+	endpoint, err := store.ReserveHealthEndpoint("edge", "webpa", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
+	devices := []TalariaDevice{validTalariaDevice("mac:001122334455")}
+	requests := []string{}
+	client := &Client{HTTPClient: &http.Client{Transport: clientRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if request.URL.Port() != fmt.Sprint(endpoint.HostPort) {
+			t.Fatalf("diagnostic port = %q", request.URL.Port())
+		}
+		requests = append(requests, request.Method+" "+request.URL.Path)
+		switch request.URL.Path {
+		case "/diagnostics":
+			return jsonResponse(Capabilities{SchemaVersion: CapabilitiesSchema, Journeys: []string{JourneyTalariaDevices}}), nil
+		case "/diagnostics/" + JourneyTalariaDevices:
+			var invocation Invocation
+			if err := json.NewDecoder(request.Body).Decode(&invocation); err != nil || invocation != (Invocation{}) {
+				t.Fatalf("inventory invocation = %+v, %v", invocation, err)
+			}
+			return jsonResponse(EndpointResponse{SchemaVersion: SchemaVersion, Journey: JourneyTalariaDevices, ObservedAt: now, Observations: []Observation{
+				{EdgeID: "talaria-reachability", State: StatePassed, ObservedAt: now},
+				{EdgeID: "talaria-device-inventory", State: StatePassed, ObservedAt: now},
+			}, TalariaDevices: &devices}), nil
+		default:
+			return nil, fmt.Errorf("unexpected request %s", request.URL.Path)
+		}
+	})}}
+
+	result, err := Diagnose(context.Background(), store, resolverRegistry(), client, ResolveRequest{Deployment: "edge", Source: "webpa", Target: "devices"})
+	if err != nil {
+		t.Fatalf("Diagnose: %v", err)
+	}
+	if result.Journey != JourneyTalariaDevices || result.Target.Type != "talaria" || result.TalariaDevices == nil || len(*result.TalariaDevices) != 1 || strings.Join(requests, ",") != "GET /diagnostics,POST /diagnostics/talaria-devices" {
+		t.Fatalf("result = %+v, requests = %v", result, requests)
+	}
+}
+
+func TestDiagnoseXB10ParodusClientsUsesPersistedLoopbackEndpoint(t *testing.T) {
+	store := resolverStore(t, "    - name: xb10\n      type: xb10\n      replicas: 1\n      interfaces: [{role: wan}]\n      image: {repository: xb10}\n")
+	endpoint, err := store.ReserveHealthEndpoint("edge", "xb10", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
+	clients := []string{"apparmor-simulator", "config"}
+	truncated := false
+	requests := []string{}
+	client := &Client{HTTPClient: &http.Client{Transport: clientRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if request.URL.Port() != fmt.Sprint(endpoint.HostPort) {
+			t.Fatalf("diagnostic port = %q", request.URL.Port())
+		}
+		requests = append(requests, request.Method+" "+request.URL.Path)
+		switch request.URL.Path {
+		case "/diagnostics":
+			return jsonResponse(Capabilities{SchemaVersion: CapabilitiesSchema, Journeys: []string{JourneyParodusClients}}), nil
+		case "/diagnostics/" + JourneyParodusClients:
+			var invocation Invocation
+			if err := json.NewDecoder(request.Body).Decode(&invocation); err != nil || invocation != (Invocation{}) {
+				t.Fatalf("Parodus invocation = %+v, %v", invocation, err)
+			}
+			return jsonResponse(EndpointResponse{SchemaVersion: SchemaVersion, Journey: JourneyParodusClients, ObservedAt: now, Observations: []Observation{{EdgeID: "parodus-client-list", State: StatePassed, ObservedAt: now}}, ParodusClients: &clients, ParodusClientsTruncated: &truncated}), nil
+		default:
+			return nil, fmt.Errorf("unexpected request %s", request.URL.Path)
+		}
+	})}}
+
+	result, err := Diagnose(context.Background(), store, resolverRegistry(), client, ResolveRequest{Deployment: "edge", Source: "xb10", Target: "parodus"})
+	if err != nil {
+		t.Fatalf("Diagnose: %v", err)
+	}
+	if result.Journey != JourneyParodusClients || result.Source.Type != "xb10" || result.Target.Type != "parodus" || len(result.Nodes) != 2 || result.Nodes[0].ID != "xb10" || len(result.Edges) != 1 || result.Edges[0].From != "xb10" || result.ParodusClients == nil || strings.Join(*result.ParodusClients, ",") != "apparmor-simulator,config" || result.ParodusClientsTruncated == nil || *result.ParodusClientsTruncated || strings.Join(requests, ",") != "GET /diagnostics,POST /diagnostics/parodus-clients" {
+		t.Fatalf("result = %+v, requests = %v", result, requests)
+	}
+}
+
 func TestDiagnoseWebhookPassivelyCollectsBothParticipants(t *testing.T) {
 	store := resolverStore(t, "    - name: event-sink\n      type: event-sink\n      replicas: 1\n      interfaces: [{role: mgmt}]\n      image: {repository: event-sink}\n    - name: webpa\n      type: webpa\n      replicas: 1\n      image: {repository: webpa}\n")
 	subscriberEndpoint, err := store.ReserveHealthEndpoint("edge", "event-sink", 0)

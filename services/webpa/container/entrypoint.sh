@@ -23,5 +23,6 @@ exec /usr/local/bin/vcpe-healthd \
 	--probe "themis=/usr/local/bin/webpa-health-probe themis" \
 	--diagnostic webhook \
 	--diagnostic argus-webhooks \
+	--diagnostic talaria-devices \
 	--diagnostic cpe-webpa-callback \
 	--run /usr/local/bin/start-services.sh

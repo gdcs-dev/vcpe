@@ -35,6 +35,7 @@ func TestParsePublicCommands(t *testing.T) {
 		"diag":              {"diag", "--name", "edge", "--from", "gateway", "--to", "webpa", "--client-service", "config"},
 		"diagnose parodus":  {"diagnose", "--name", "edge", "--from", "gateway", "--to", "parodus"},
 		"diagnose webhooks": {"diagnose", "--name", "edge", "--from", "webpa", "--to", "webhooks"},
+		"diag devices":      {"diag", "--name", "edge", "--from", "webpa", "--to", "devices"},
 		"logs":              {"logs"},
 		"config":            {"config", "show"},
 		"state":             {"state", "reset"},
@@ -117,6 +118,36 @@ func TestParseArgusWebhookInventoryDiagnose(t *testing.T) {
 				return
 			}
 			if err != nil || opts.To != "webhooks" || opts.Replica == nil || *opts.Replica != 1 {
+				t.Fatalf("options = %+v, error = %v", opts, err)
+			}
+		})
+	}
+}
+
+func TestParseTalariaDeviceInventoryDiagnose(t *testing.T) {
+	for _, testCase := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{name: "valid alias", args: []string{"diag", "--name", "edge", "--from", "webpa", "--to", "devices", "--replica", "1", "--json"}},
+		{name: "client service", args: []string{"diagnose", "--name", "edge", "--from", "webpa", "--to", "devices", "--client-service", "config"}, want: "does not accept"},
+		{name: "subscriber", args: []string{"diagnose", "--name", "edge", "--from", "webpa", "--to", "devices", "--subscriber", "event-sink"}, want: "does not accept"},
+		{name: "active callback", args: []string{"diagnose", "--name", "edge", "--from", "webpa", "--to", "devices", "--allow-active-callback"}, want: "does not accept"},
+		{name: "active event", args: []string{"diagnose", "--name", "edge", "--from", "webpa", "--to", "devices", "--allow-active-event"}, want: "does not accept"},
+		{name: "event", args: []string{"diagnose", "--name", "edge", "--from", "webpa", "--to", "devices", "--event", "devices/diagnostic"}, want: "does not accept"},
+		{name: "device", args: []string{"diagnose", "--name", "edge", "--from", "webpa", "--to", "devices", "--device-id", "mac:001122334455"}, want: "does not accept"},
+		{name: "subscriber replica", args: []string{"diagnose", "--name", "edge", "--from", "webpa", "--to", "devices", "--subscriber-replica", "1"}, want: "only for --to callback"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			opts, err := parseArgs("vcpe", testCase.args)
+			if testCase.want != "" {
+				if err == nil || !strings.Contains(err.Error(), testCase.want) {
+					t.Fatalf("parse error = %v, want %q", err, testCase.want)
+				}
+				return
+			}
+			if err != nil || opts.Command != "diagnose" || opts.To != "devices" || opts.Replica == nil || *opts.Replica != 1 || !opts.OutputJSON {
 				t.Fatalf("options = %+v, error = %v", opts, err)
 			}
 		})

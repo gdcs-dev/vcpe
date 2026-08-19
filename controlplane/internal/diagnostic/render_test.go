@@ -88,6 +88,27 @@ func TestRenderParodusClientList(t *testing.T) {
 	}
 }
 
+func TestRenderXB10ParodusClientList(t *testing.T) {
+	clients := []string{"apparmor-simulator"}
+	truncated := false
+	result := validResult()
+	result.Journey = JourneyParodusClients
+	result.Source = EndpointIdentity{Deployment: "edge", Service: "xb10", Type: "xb10", Replica: 0}
+	result.Target = EndpointIdentity{Deployment: "edge", Service: "parodus", Type: "parodus", Replica: 0}
+	result.Nodes = []Node{{ID: "xb10", Label: "XB10", Kind: "service"}, {ID: "parodus", Label: "Parodus", Kind: "service"}}
+	result.Edges = []Edge{{ID: "parodus-client-list", From: "xb10", To: "parodus", Label: "list registered clients", BlocksFollowing: true}}
+	result.Observations = []Observation{{EdgeID: "parodus-client-list", State: StatePassed, ObservedAt: result.ObservedAt}}
+	result.ParodusClients = &clients
+	result.ParodusClientsTruncated = &truncated
+	output, err := RenderASCII(result)
+	if err != nil {
+		t.Fatalf("RenderASCII: %v", err)
+	}
+	if !strings.Contains(output, "Parodus client enumeration: edge/xb10[0] -> parodus") || !strings.Contains(output, "apparmor-simulator") {
+		t.Fatalf("output = %q", output)
+	}
+}
+
 func TestRenderWebhookInventory(t *testing.T) {
 	first := validWebhookRegistration(strings.Repeat("a", 64))
 	second := validWebhookRegistration(strings.Repeat("b", 64))
@@ -107,6 +128,35 @@ func TestRenderWebhookInventory(t *testing.T) {
 	jsonOutput, err := RenderJSON(result)
 	if err != nil || !strings.Contains(jsonOutput, `"webhookRegistrations": [`) {
 		t.Fatalf("RenderJSON() = %q, %v", jsonOutput, err)
+	}
+}
+
+func TestRenderTalariaDeviceInventory(t *testing.T) {
+	first := validTalariaDevice("mac:001122334455")
+	second := validTalariaDevice("mac:001122334456")
+	devices := []TalariaDevice{first, second}
+	result := validTalariaDeviceInventoryResult()
+	result.TalariaDevices = &devices
+	output, err := RenderASCII(result)
+	if err != nil {
+		t.Fatalf("RenderASCII: %v", err)
+	}
+	for _, content := range []string{"Talaria connected-device inventory: edge/webpa[0] -> talaria", "Connected devices:", first.ID, "Pending: 1", "Bytes sent: 2", "Uptime: 1m2s"} {
+		if !strings.Contains(output, content) {
+			t.Errorf("output missing %q:\n%s", content, output)
+		}
+	}
+	jsonOutput, err := RenderJSON(result)
+	if err != nil || !strings.Contains(jsonOutput, `"talariaDevices": [`) || !strings.Contains(jsonOutput, `"bytesSent": 2`) {
+		t.Fatalf("RenderJSON() = %q, %v", jsonOutput, err)
+	}
+
+	empty := validTalariaDeviceInventoryResult()
+	emptyDevices := []TalariaDevice{}
+	empty.TalariaDevices = &emptyDevices
+	emptyOutput, err := RenderASCII(empty)
+	if err != nil || !strings.Contains(emptyOutput, "Connected devices:\n  (none)") {
+		t.Fatalf("empty RenderASCII() = %q, %v", emptyOutput, err)
 	}
 }
 

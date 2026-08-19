@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 )
 
 // RenderJSON serializes the validated output-safe graph.
@@ -81,6 +82,24 @@ func RenderASCII(result Result) (string, error) {
 			}
 		}
 	}
+	if result.Journey == JourneyTalariaDevices && result.TalariaDevices != nil {
+		output.WriteString("\nConnected devices:\n")
+		if len(*result.TalariaDevices) == 0 {
+			output.WriteString("  (none)\n")
+		} else {
+			for _, device := range *result.TalariaDevices {
+				fmt.Fprintf(&output, "  %s\n", device.ID)
+				fmt.Fprintf(&output, "    Pending: %d\n", device.Pending)
+				fmt.Fprintf(&output, "    Bytes sent: %d\n", device.BytesSent)
+				fmt.Fprintf(&output, "    Messages sent: %d\n", device.MessagesSent)
+				fmt.Fprintf(&output, "    Bytes received: %d\n", device.BytesReceived)
+				fmt.Fprintf(&output, "    Messages received: %d\n", device.MessagesReceived)
+				fmt.Fprintf(&output, "    Duplications: %d\n", device.Duplications)
+				fmt.Fprintf(&output, "    Connected at: %s\n", device.ConnectedAt.UTC().Format(time.RFC3339))
+				fmt.Fprintf(&output, "    Uptime: %s\n", device.Uptime)
+			}
+		}
+	}
 	return strings.TrimRight(output.String(), "\n"), nil
 }
 
@@ -103,6 +122,9 @@ func asciiHeading(journey string) string {
 	}
 	if journey == JourneyArgusWebhooks {
 		return "Argus webhook inventory"
+	}
+	if journey == JourneyTalariaDevices {
+		return "Talaria connected-device inventory"
 	}
 	return "CPE to WebPA diagnostic"
 }

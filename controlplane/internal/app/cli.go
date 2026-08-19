@@ -480,7 +480,7 @@ func validateCommandShape(opts *Options) error {
 		}
 	case "diagnose":
 		if opts.From == "" || opts.To == "" {
-			return fmt.Errorf("diagnose requires --from <service> and --to <webpa|webhook|webhooks|callback|parodus>; run `vcpe diagnose --help` for usage")
+			return fmt.Errorf("diagnose requires --from <service> and --to <webpa|webhook|webhooks|devices|callback|parodus>; run `vcpe diagnose --help` for usage")
 		}
 		switch opts.To {
 		case "webpa":
@@ -523,8 +523,15 @@ func validateCommandShape(opts *Options) error {
 			if err := (diagnostic.Invocation{ClientService: opts.ClientService, Subscriber: opts.Subscriber, AllowActiveCallback: opts.AllowActiveCallback, AllowActiveEvent: opts.AllowActiveEvent, Event: opts.Event, DeviceID: opts.DeviceID}).ValidateFor(diagnostic.JourneyArgusWebhooks); err != nil {
 				return fmt.Errorf("invalid Argus webhook inventory options: %w", err)
 			}
+		case "devices":
+			if opts.SubscriberReplica != nil {
+				return fmt.Errorf("--subscriber-replica is valid only for --to callback")
+			}
+			if err := (diagnostic.Invocation{ClientService: opts.ClientService, Subscriber: opts.Subscriber, AllowActiveCallback: opts.AllowActiveCallback, AllowActiveEvent: opts.AllowActiveEvent, Event: opts.Event, DeviceID: opts.DeviceID}).ValidateFor(diagnostic.JourneyTalariaDevices); err != nil {
+				return fmt.Errorf("invalid Talaria device inventory options: %w", err)
+			}
 		default:
-			return fmt.Errorf("diagnose --to must be webpa, webhook, webhooks, callback, or parodus")
+			return fmt.Errorf("diagnose --to must be webpa, webhook, webhooks, devices, callback, or parodus")
 		}
 	}
 	return nil

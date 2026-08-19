@@ -26,8 +26,10 @@ func resolverRegistry() *Registry {
 	registry.Register(NewCPEWebPAProvider("gateway"))
 	registry.Register(NewCPEWebPAProvider("xb10"))
 	registry.Register(NewCPEWebPACallbackProvider())
-	registry.Register(NewParodusClientsProvider())
+	registry.Register(NewParodusClientsProvider("gateway"))
+	registry.Register(NewParodusClientsProvider("xb10"))
 	registry.Register(NewArgusWebhooksProvider())
+	registry.Register(NewTalariaDevicesProvider())
 	registry.Register(NewWebhookProvider())
 	return registry
 }
@@ -62,6 +64,28 @@ func TestResolveParodusClientsWithoutWebPA(t *testing.T) {
 	}
 }
 
+func TestResolveXB10ParodusClientsWithoutWebPA(t *testing.T) {
+	store := resolverStore(t, "    - name: xb10\n      type: xb10\n      replicas: 1\n      interfaces: [{role: wan}]\n      image: {repository: xb10}\n")
+	endpoint, err := store.ReserveHealthEndpoint("edge", "xb10", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	selection, err := Resolve(store, resolverRegistry(), ResolveRequest{Deployment: "edge", Source: "xb10", Target: "parodus"})
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if selection.Provider.Journey() != JourneyParodusClients || selection.Endpoint != endpoint || selection.Source.Name != "xb10" || selection.Target.Name != "parodus" || selection.TargetEndpoint != (persist.HealthEndpoint{}) {
+		t.Fatalf("selection = %+v", selection)
+	}
+}
+
+func TestResolveXB10ParodusClientsRequiresReplicaSelection(t *testing.T) {
+	store := resolverStore(t, "    - name: xb10\n      type: xb10\n      replicas: 2\n      interfaces: [{role: wan}]\n      image: {repository: xb10}\n")
+	if _, err := Resolve(store, resolverRegistry(), ResolveRequest{Deployment: "edge", Source: "xb10", Target: "parodus"}); err == nil || !strings.Contains(err.Error(), "--replica is required") {
+		t.Fatalf("Resolve error = %v", err)
+	}
+}
+
 func TestResolveArgusWebhooksFromWebPA(t *testing.T) {
 	store := resolverStore(t, "    - name: webpa\n      type: webpa\n      replicas: 1\n      image: {repository: webpa}\n")
 	endpoint, err := store.ReserveHealthEndpoint("edge", "webpa", 0)
@@ -74,6 +98,28 @@ func TestResolveArgusWebhooksFromWebPA(t *testing.T) {
 	}
 	if selection.Provider.Journey() != JourneyArgusWebhooks || selection.Endpoint != endpoint || selection.Target.Name != "argus" || selection.Target.Type != "argus" || selection.TargetEndpoint != (persist.HealthEndpoint{}) {
 		t.Fatalf("selection = %+v", selection)
+	}
+}
+
+func TestResolveTalariaDevicesFromWebPA(t *testing.T) {
+	store := resolverStore(t, "    - name: webpa\n      type: webpa\n      replicas: 1\n      image: {repository: webpa}\n")
+	endpoint, err := store.ReserveHealthEndpoint("edge", "webpa", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	selection, err := Resolve(store, resolverRegistry(), ResolveRequest{Deployment: "edge", Source: "webpa", Target: "devices"})
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if selection.Provider.Journey() != JourneyTalariaDevices || selection.Endpoint != endpoint || selection.Target.Name != "talaria" || selection.Target.Type != "talaria" || selection.TargetEndpoint != (persist.HealthEndpoint{}) {
+		t.Fatalf("selection = %+v", selection)
+	}
+}
+
+func TestResolveTalariaDevicesRequiresReplicaSelection(t *testing.T) {
+	store := resolverStore(t, "    - name: webpa\n      type: webpa\n      replicas: 2\n      image: {repository: webpa}\n")
+	if _, err := Resolve(store, resolverRegistry(), ResolveRequest{Deployment: "edge", Source: "webpa", Target: "devices"}); err == nil || !strings.Contains(err.Error(), "--replica is required") {
+		t.Fatalf("Resolve error = %v", err)
 	}
 }
 

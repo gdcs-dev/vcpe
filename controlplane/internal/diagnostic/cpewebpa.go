@@ -3,6 +3,7 @@ package diagnostic
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -10,8 +11,14 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"sort"
 	"strings"
 	"time"
+)
+
+var (
+	ErrTalariaInventoryInvalid = errors.New("Talaria device inventory is invalid")
+	ErrTalariaInventoryLimit   = errors.New("Talaria device inventory exceeds the diagnostic limit")
 )
 
 // CPEWebPAProbe owns source-local dependencies for the active journey. Tests
@@ -36,15 +43,6 @@ type CPEWebPAProbe struct {
 func NewCPEWebPAProbeFromEnvironment(timeout time.Duration) CPEWebPAProbe {
 	talariaURL := getenv("VCPE_TALARIA_DEVICES_URL", "http://talaria:6200/api/v2/devices")
 	username, password, _ := strings.Cut(getenv("VCPE_TALARIA_BASIC_AUTH", "user:pass"), ":")
-	deviceID := os.Getenv("VCPE_HEALTH_SERIAL")
-	if deviceID == "" {
-		if address, err := os.ReadFile("/sys/class/net/erouter0/address"); err == nil {
-			deviceID = strings.ReplaceAll(strings.TrimSpace(string(address)), ":", "")
-		}
-	}
-	if deviceID != "" && !strings.HasPrefix(deviceID, "mac:") {
-		deviceID = "mac:" + deviceID
-	}
 	if timeout <= 0 {
 		timeout = 2 * time.Second
 	}
@@ -54,7 +52,7 @@ func NewCPEWebPAProbeFromEnvironment(timeout time.Duration) CPEWebPAProbe {
 		ScytaleURL: getenv("VCPE_SCYTALE_URL", "http://scytale:6300/api/v3/device"),
 		Username:   username,
 		Password:   password,
-		DeviceID:   deviceID,
+		DeviceID:   sourceDeviceID(),
 		Timeout:    timeout,
 		Now:        func() time.Time { return time.Now().UTC() },
 		ServiceState: func(ctx context.Context) string {
@@ -209,7 +207,143 @@ func (probe CPEWebPAProbe) RunParodusClients(parent context.Context, invocation 
 	return response
 }
 
+// RunTalariaDevices performs one passive, source-local Talaria device-list
+// request. The caller cannot influence the Talaria endpoint or credentials.
+func (probe CPEWebPAProbe) RunTalariaDevices(ctx context.Context, invocation Invocation) EndpointResponse {
+	probe.defaults()
+	now := probe.Now()
+	response := EndpointResponse{SchemaVersion: SchemaVersion, Journey: JourneyTalariaDevices, ObservedAt: now}
+	if err := invocation.ValidateFor(JourneyTalariaDevices); err != nil {
+		response.Observations = []Observation{
+			{EdgeID: "talaria-reachability", State: StateUnknown, ReasonID: "talaria-inventory-invalid", RemediationID: "check-diagnostic-request", Message: "Talaria device inventory invocation is invalid", ObservedAt: now},
+			{EdgeID: "talaria-device-inventory", State: StateSkipped, ReasonID: ReasonPrerequisiteFailed, ObservedAt: now},
+		}
+		return response
+	}
+
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, probe.TalariaURL, nil)
+	if err != nil {
+		response.Observations = []Observation{
+			failedObservation("talaria-reachability", "talaria-url-invalid", "check-talaria-configuration", "configured Talaria URL is invalid", now),
+			{EdgeID: "talaria-device-inventory", State: StateSkipped, ReasonID: ReasonPrerequisiteFailed, ObservedAt: now},
+		}
+		return response
+	}
+	request.SetBasicAuth(probe.Username, probe.Password)
+	client := *probe.HTTPClient
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	httpResponse, err := client.Do(request)
+	if err != nil {
+		response.Observations = []Observation{
+			failedObservation("talaria-reachability", "talaria-request-failed", "check-talaria-http", "Talaria device inventory request failed", now),
+			{EdgeID: "talaria-device-inventory", State: StateSkipped, ReasonID: ReasonPrerequisiteFailed, ObservedAt: now},
+		}
+		return response
+	}
+	defer httpResponse.Body.Close()
+	reachability := Observation{EdgeID: "talaria-reachability", State: StatePassed, Evidence: []Evidence{{Key: "http-status", Value: fmt.Sprint(httpResponse.StatusCode)}}, ObservedAt: now}
+	if httpResponse.StatusCode == http.StatusUnauthorized || httpResponse.StatusCode == http.StatusForbidden {
+		response.Observations = []Observation{
+			reachability,
+			{EdgeID: "talaria-device-inventory", State: StateFailed, ReasonID: "talaria-authentication-failed", RemediationID: "check-talaria-credentials", Message: "Talaria rejected authentication", ObservedAt: now},
+		}
+		return response
+	}
+	if httpResponse.StatusCode < http.StatusOK || httpResponse.StatusCode >= http.StatusMultipleChoices {
+		response.Observations = []Observation{
+			reachability,
+			{EdgeID: "talaria-device-inventory", State: StateUnknown, ReasonID: "talaria-inventory-unavailable", RemediationID: "check-talaria-service", Message: "Talaria returned an unexpected HTTP status", ObservedAt: now},
+		}
+		return response
+	}
+	body, err := io.ReadAll(io.LimitReader(httpResponse.Body, MaxDiagnosticBodyBytes+1))
+	if err == nil && len(body) > MaxDiagnosticBodyBytes {
+		err = fmt.Errorf("%w: response exceeds %d bytes", ErrTalariaInventoryInvalid, MaxDiagnosticBodyBytes)
+	}
+	devices, decodeErr := decodeTalariaDevices(body)
+	if err == nil {
+		err = decodeErr
+	}
+	if err != nil {
+		reason := "talaria-inventory-invalid"
+		if errors.Is(err, ErrTalariaInventoryLimit) {
+			reason = "talaria-inventory-limit"
+		}
+		response.Observations = []Observation{
+			reachability,
+			{EdgeID: "talaria-device-inventory", State: StateUnknown, ReasonID: reason, RemediationID: "check-talaria-registry", Message: "Talaria device inventory was unavailable", ObservedAt: now},
+		}
+		return response
+	}
+	response.Observations = []Observation{
+		reachability,
+		{EdgeID: "talaria-device-inventory", State: StatePassed, ObservedAt: now},
+	}
+	response.TalariaDevices = &devices
+	return response
+}
+
+func decodeTalariaDevices(body []byte) ([]TalariaDevice, error) {
+	var registry struct {
+		Devices *json.RawMessage `json:"devices"`
+	}
+	if err := json.Unmarshal(body, &registry); err != nil || registry.Devices == nil {
+		return nil, ErrTalariaInventoryInvalid
+	}
+	type talariaStatistics struct {
+		BytesSent        int64     `json:"bytesSent"`
+		MessagesSent     int64     `json:"messagesSent"`
+		BytesReceived    int64     `json:"bytesReceived"`
+		MessagesReceived int64     `json:"messagesReceived"`
+		Duplications     int64     `json:"duplications"`
+		ConnectedAt      time.Time `json:"connectedAt"`
+		Uptime           string    `json:"upTime"`
+	}
+	type talariaDevice struct {
+		ID         string             `json:"id"`
+		Pending    int64              `json:"pending"`
+		Statistics *talariaStatistics `json:"statistics"`
+	}
+	var responseDevices []talariaDevice
+	if err := json.Unmarshal(*registry.Devices, &responseDevices); err != nil {
+		return nil, ErrTalariaInventoryInvalid
+	}
+	if responseDevices == nil {
+		return nil, ErrTalariaInventoryInvalid
+	}
+	if len(responseDevices) > MaxTalariaDevices {
+		return nil, ErrTalariaInventoryLimit
+	}
+	devices := make([]TalariaDevice, 0, len(responseDevices))
+	for _, responseDevice := range responseDevices {
+		if responseDevice.Statistics == nil {
+			return nil, ErrTalariaInventoryInvalid
+		}
+		devices = append(devices, TalariaDevice{
+			ID:               responseDevice.ID,
+			Pending:          responseDevice.Pending,
+			BytesSent:        responseDevice.Statistics.BytesSent,
+			MessagesSent:     responseDevice.Statistics.MessagesSent,
+			BytesReceived:    responseDevice.Statistics.BytesReceived,
+			MessagesReceived: responseDevice.Statistics.MessagesReceived,
+			Duplications:     responseDevice.Statistics.Duplications,
+			ConnectedAt:      responseDevice.Statistics.ConnectedAt,
+			Uptime:           responseDevice.Statistics.Uptime,
+		})
+	}
+	sort.Slice(devices, func(left, right int) bool {
+		return devices[left].ID < devices[right].ID
+	})
+	if err := validateTalariaDeviceList(JourneyTalariaDevices, &devices); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrTalariaInventoryInvalid, err)
+	}
+	return devices, nil
+}
+
 func (probe *CPEWebPAProbe) defaults() {
+	if probe.DeviceID == "" {
+		probe.DeviceID = sourceDeviceID()
+	}
 	if probe.Timeout <= 0 {
 		probe.Timeout = 2 * time.Second
 	}
@@ -229,6 +363,19 @@ func (probe *CPEWebPAProbe) defaults() {
 	if probe.HTTPClient == nil {
 		probe.HTTPClient = &http.Client{Timeout: probe.Timeout}
 	}
+}
+
+func sourceDeviceID() string {
+	deviceID := os.Getenv("VCPE_HEALTH_SERIAL")
+	if deviceID == "" {
+		if address, err := os.ReadFile("/sys/class/net/erouter0/address"); err == nil {
+			deviceID = strings.ReplaceAll(strings.TrimSpace(string(address)), ":", "")
+		}
+	}
+	if deviceID != "" && !strings.HasPrefix(deviceID, "mac:") {
+		return "mac:" + deviceID
+	}
+	return deviceID
 }
 
 func (probe CPEWebPAProbe) finish(edges []Edge, observations []Observation, observedAt time.Time) EndpointResponse {
