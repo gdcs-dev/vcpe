@@ -45,6 +45,7 @@ func TestHelpCoverage(t *testing.T) {
 	excluded := map[string]struct{}{
 		"apply":   {}, // alias for up
 		"destroy": {}, // alias for down
+		"diag":    {}, // alias for diagnose
 		"daemon":  {}, // hidden
 	}
 	for cmd := range topLevelCommands {
@@ -141,6 +142,10 @@ func TestHelpAliasRedirects(t *testing.T) {
 	destroy := HelpFor("destroy")
 	if !strings.Contains(destroy, "alias for down") {
 		t.Errorf("HelpFor(destroy) expected 'alias for down', got: %s", destroy)
+	}
+	diag := HelpFor("diag")
+	if !strings.Contains(diag, "alias for diagnose") {
+		t.Errorf("HelpFor(diag) expected 'alias for diagnose', got: %s", diag)
 	}
 }
 

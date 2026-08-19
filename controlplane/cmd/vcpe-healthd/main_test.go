@@ -127,8 +127,8 @@ func TestBuildPassiveDiagnosticRoutesAddsCaduceusRoutingHandler(t *testing.T) {
 }
 
 func TestBuildDiagnosticJourneys(t *testing.T) {
-	journeys, err := buildDiagnosticJourneys([]string{"cpe-webpa", "cpe-webpa-callback", "parodus-clients", "webhook"}, time.Second)
-	if err != nil || journeys["cpe-webpa"] == nil || journeys["cpe-webpa-callback"] == nil || journeys["parodus-clients"] == nil || journeys["webhook"] == nil {
+	journeys, err := buildDiagnosticJourneys([]string{"cpe-webpa", "cpe-webpa-callback", "parodus-clients", "argus-webhooks", "webhook"}, time.Second)
+	if err != nil || journeys["cpe-webpa"] == nil || journeys["cpe-webpa-callback"] == nil || journeys["parodus-clients"] == nil || journeys["argus-webhooks"] == nil || journeys["webhook"] == nil {
 		t.Fatalf("buildDiagnosticJourneys() = %#v, %v", journeys, err)
 	}
 	if _, err := buildDiagnosticJourneys([]string{"unknown"}, time.Second); err == nil {

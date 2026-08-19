@@ -15,4 +15,7 @@ func TestRegisterAddsWebhookDiagnosticProvider(t *testing.T) {
 	if _, ok := diagnostic.DefaultRegistry().Lookup(diagnostic.JourneyParodusClients, "gateway", "parodus"); !ok {
 		t.Fatal("Parodus client-list diagnostic provider is not registered")
 	}
+	if _, ok := diagnostic.DefaultRegistry().Lookup(diagnostic.JourneyArgusWebhooks, "webpa", "argus"); !ok {
+		t.Fatal("Argus webhook inventory provider is not registered")
+	}
 }

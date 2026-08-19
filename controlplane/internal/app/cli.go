@@ -74,6 +74,7 @@ var topLevelCommands = map[string]struct{}{
 	"service":  {},
 	"status":   {},
 	"diagnose": {},
+	"diag":     {},
 	"logs":     {},
 	"config":   {},
 	"state":    {},
@@ -121,6 +122,7 @@ func extractHelpCommand(args []string) (string, bool) {
 	aliasMap := map[string]string{
 		"apply":   "up",
 		"destroy": "down",
+		"diag":    "diagnose",
 	}
 	for i := 0; i < len(args); i++ {
 		a := args[i]
@@ -254,6 +256,9 @@ func parseArgs(_ string, args []string) (Options, error) {
 	}
 	if _, ok := topLevelCommands[command]; !ok {
 		return Options{}, fmt.Errorf("unknown command %q", command)
+	}
+	if command == "diag" {
+		command = "diagnose"
 	}
 
 	opts.Command = command
@@ -475,7 +480,7 @@ func validateCommandShape(opts *Options) error {
 		}
 	case "diagnose":
 		if opts.From == "" || opts.To == "" {
-			return fmt.Errorf("diagnose requires --from <service> and --to <webpa|webhook|callback|parodus>; run `vcpe diagnose --help` for usage")
+			return fmt.Errorf("diagnose requires --from <service> and --to <webpa|webhook|webhooks|callback|parodus>; run `vcpe diagnose --help` for usage")
 		}
 		switch opts.To {
 		case "webpa":
@@ -511,8 +516,15 @@ func validateCommandShape(opts *Options) error {
 			if err := (diagnostic.Invocation{ClientService: opts.ClientService, Subscriber: opts.Subscriber, AllowActiveCallback: opts.AllowActiveCallback, AllowActiveEvent: opts.AllowActiveEvent, Event: opts.Event, DeviceID: opts.DeviceID}).ValidateFor(diagnostic.JourneyParodusClients); err != nil {
 				return fmt.Errorf("invalid Parodus diagnose options: %w", err)
 			}
+		case "webhooks":
+			if opts.SubscriberReplica != nil {
+				return fmt.Errorf("--subscriber-replica is valid only for --to callback")
+			}
+			if err := (diagnostic.Invocation{ClientService: opts.ClientService, Subscriber: opts.Subscriber, AllowActiveCallback: opts.AllowActiveCallback, AllowActiveEvent: opts.AllowActiveEvent, Event: opts.Event, DeviceID: opts.DeviceID}).ValidateFor(diagnostic.JourneyArgusWebhooks); err != nil {
+				return fmt.Errorf("invalid Argus webhook inventory options: %w", err)
+			}
 		default:
-			return fmt.Errorf("diagnose --to must be webpa, webhook, callback, or parodus")
+			return fmt.Errorf("diagnose --to must be webpa, webhook, webhooks, callback, or parodus")
 		}
 	}
 	return nil

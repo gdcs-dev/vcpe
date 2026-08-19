@@ -1,10 +1,10 @@
-Usage: vcpe diagnose --from <service> --to <webpa|webhook|callback|parodus> [flags]
+Usage: vcpe diagnose --from <service> --to <webpa|webhook|webhooks|callback|parodus> [flags]
 
-Shows a bounded diagnostic graph and its first confirmed failure through persisted loopback endpoints. Use --to webpa with --client-service for CPE diagnostics, --to parodus to list registered clients, --to webhook for registration inspection, or --to callback for one bounded CPE-to-subscriber event after explicit active-event consent.
+Shows a bounded diagnostic graph and its first confirmed failure through persisted loopback endpoints. Use --to webpa with --client-service for CPE diagnostics, --to parodus to list registered clients, --to webhooks with WebPA as --from to inventory authoritative Argus registrations, --to webhook for one subscriber registration inspection, or --to callback for one bounded CPE-to-subscriber event after explicit active-event consent.
 
 Required flags:
   --from <service>        Source service name
-  --to <webpa|webhook|callback|parodus>  Diagnostic target journey
+  --to <webpa|webhook|webhooks|callback|parodus>  Diagnostic target journey
 
 Optional flags:
   --name <deployment>     Deployment containing the source and required participants; optional when exactly one deployment is active
@@ -22,6 +22,7 @@ Optional flags:
 Examples:
   vcpe diagnose --from gateway --to webpa --client-service apparmor-simulator
   vcpe diagnose --name example --from gateway --to parodus
+  vcpe diagnose --name example --from webpa --to webhooks
   vcpe diagnose --name example --from event-sink --to webhook
-  vcpe diagnose --name example --from event-sink --to webhook --allow-active-callback --event devices/diagnostic --device-id mac:001122334455
-  vcpe diagnose --name example --from gateway --to callback --client-service apparmor-simulator --subscriber event-sink --allow-active-event --event devices/diagnostic --device-id mac:001122334455
+  vcpe diagnose --name example --from event-sink --to webhook --allow-active-callback --event devices/diagnostic --device-id mac:02f9491df122
+  vcpe diagnose --name example --from gateway --to callback --client-service apparmor-simulator --subscriber event-sink --allow-active-event --event devices/diagnostic --device-id mac:02f9491df122

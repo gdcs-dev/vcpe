@@ -13,7 +13,7 @@ Commands:
   manifest  Manage and discover manifest files
   service   Inspect registered service types
   status    Show control-plane status
-  diagnose  Diagnose CPE, Parodus, webhook, or callback delivery paths
+  diagnose  Diagnose CPE, Parodus, Argus webhook, or callback delivery paths
   logs      Show operation timeline and deployment logs
   config    Show effective configuration
   state     Manage persisted control-plane state
@@ -22,6 +22,7 @@ Commands:
 Aliases:
   apply    alias for up
   destroy  alias for down (also requires --force)
+  diag     alias for diagnose
 
 Global flags:
   --state-root <path>  Override state root directory

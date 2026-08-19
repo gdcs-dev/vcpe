@@ -30,6 +30,7 @@ func Register() {
 	diagnostic.Register(diagnostic.NewParodusClientsProvider())
 	oktopus.Register()
 	webpa.Register()
+	diagnostic.Register(diagnostic.NewArgusWebhooksProvider())
 	xb10.Register()
 	diagnostic.Register(diagnostic.NewCPEWebPAProvider("xb10"))
 	genericcontainer.Register()

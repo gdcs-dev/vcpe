@@ -75,6 +75,47 @@ func TestDiagnoseTransportAndProtocolErrors(t *testing.T) {
 	}
 }
 
+func TestDiagnoseArgusWebhooksUsesPersistedLoopbackEndpoint(t *testing.T) {
+	store := resolverStore(t, "    - name: webpa\n      type: webpa\n      replicas: 1\n      image: {repository: webpa}\n")
+	endpoint, err := store.ReserveHealthEndpoint("edge", "webpa", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
+	registration := validWebhookRegistration(strings.Repeat("a", 64))
+	registrations := []WebhookRegistration{registration}
+	requests := []string{}
+	client := &Client{HTTPClient: &http.Client{Transport: clientRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if request.URL.Port() != fmt.Sprint(endpoint.HostPort) {
+			t.Fatalf("diagnostic port = %q", request.URL.Port())
+		}
+		requests = append(requests, request.Method+" "+request.URL.Path)
+		switch request.URL.Path {
+		case "/diagnostics":
+			return jsonResponse(Capabilities{SchemaVersion: CapabilitiesSchema, Journeys: []string{JourneyArgusWebhooks}}), nil
+		case "/diagnostics/" + JourneyArgusWebhooks:
+			var invocation Invocation
+			if err := json.NewDecoder(request.Body).Decode(&invocation); err != nil || invocation != (Invocation{}) {
+				t.Fatalf("inventory invocation = %+v, %v", invocation, err)
+			}
+			return jsonResponse(EndpointResponse{SchemaVersion: SchemaVersion, Journey: JourneyArgusWebhooks, ObservedAt: now, Observations: []Observation{
+				{EdgeID: "argus-reachability", State: StatePassed, ObservedAt: now},
+				{EdgeID: "argus-inventory", State: StatePassed, ObservedAt: now},
+			}, WebhookRegistrations: &registrations}), nil
+		default:
+			return nil, fmt.Errorf("unexpected request %s", request.URL.Path)
+		}
+	})}}
+
+	result, err := Diagnose(context.Background(), store, resolverRegistry(), client, ResolveRequest{Deployment: "edge", Source: "webpa", Target: "webhooks"})
+	if err != nil {
+		t.Fatalf("Diagnose: %v", err)
+	}
+	if result.Journey != JourneyArgusWebhooks || result.Target.Type != "argus" || result.WebhookRegistrations == nil || len(*result.WebhookRegistrations) != 1 || strings.Join(requests, ",") != "GET /diagnostics,POST /diagnostics/argus-webhooks" {
+		t.Fatalf("result = %+v, requests = %v", result, requests)
+	}
+}
+
 func TestDiagnoseWebhookPassivelyCollectsBothParticipants(t *testing.T) {
 	store := resolverStore(t, "    - name: event-sink\n      type: event-sink\n      replicas: 1\n      interfaces: [{role: mgmt}]\n      image: {repository: event-sink}\n    - name: webpa\n      type: webpa\n      replicas: 1\n      image: {repository: webpa}\n")
 	subscriberEndpoint, err := store.ReserveHealthEndpoint("edge", "event-sink", 0)

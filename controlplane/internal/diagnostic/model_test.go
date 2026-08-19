@@ -1,6 +1,7 @@
 package diagnostic
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -28,6 +29,37 @@ func validResult() Result {
 		},
 		ObservedAt: now,
 	}
+}
+
+func validWebhookRegistration(fingerprint string) WebhookRegistration {
+	ttlSeconds := int64(3600)
+	return WebhookRegistration{
+		Fingerprint:    fingerprint,
+		CallbackURL:    "http://event-sink/webhook",
+		EventFilters:   []string{"devices/.*"},
+		DeviceMatchers: []string{"mac:.*"},
+		ContentType:    "application/json",
+		Until:          time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC),
+		TTLSeconds:     &ttlSeconds,
+		SecretPresent:  true,
+	}
+}
+
+func validWebhookInventoryResult() Result {
+	result := validResult()
+	result.Journey = JourneyArgusWebhooks
+	result.Source = EndpointIdentity{Deployment: "edge", Service: "webpa", Type: "webpa", Replica: 0}
+	result.Target = EndpointIdentity{Deployment: "edge", Service: "argus", Type: "argus", Replica: 0}
+	result.Nodes = []Node{{ID: "webpa", Label: "WebPA", Kind: "service"}, {ID: "argus", Label: "Argus", Kind: "service"}}
+	result.Edges = []Edge{
+		{ID: "argus-reachability", From: "webpa", To: "argus", Label: "Argus reachability", BlocksFollowing: true},
+		{ID: "argus-inventory", From: "webpa", To: "argus", Label: "list registered webhooks", BlocksFollowing: true},
+	}
+	result.Observations = []Observation{
+		{EdgeID: "argus-reachability", State: StatePassed, ObservedAt: result.ObservedAt},
+		{EdgeID: "argus-inventory", State: StatePassed, ObservedAt: result.ObservedAt},
+	}
+	return result
 }
 
 func TestResultValidate(t *testing.T) {
@@ -72,6 +104,50 @@ func TestResultValidateParodusClientList(t *testing.T) {
 				values[index] = "client" + string(rune('a'+index))
 			}
 			value.ParodusClients = &values
+		}, want: "maximum"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			candidate := result
+			test.mutate(&candidate)
+			if err := candidate.Validate(); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("Validate() error = %v, want containing %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestResultValidateWebhookRegistrationList(t *testing.T) {
+	first := validWebhookRegistration(strings.Repeat("a", 64))
+	second := validWebhookRegistration(strings.Repeat("b", 64))
+	registrations := []WebhookRegistration{first, second}
+	result := validWebhookInventoryResult()
+	result.WebhookRegistrations = &registrations
+	if err := result.Validate(); err != nil {
+		t.Fatalf("valid webhook registrations rejected: %v", err)
+	}
+
+	tests := []struct {
+		name   string
+		mutate func(*Result)
+		want   string
+	}{
+		{name: "unsorted", mutate: func(value *Result) {
+			values := []WebhookRegistration{second, first}
+			value.WebhookRegistrations = &values
+		}, want: "sorted"},
+		{name: "unsafe callback URL", mutate: func(value *Result) {
+			value.WebhookRegistrations = &[]WebhookRegistration{{Fingerprint: first.Fingerprint, CallbackURL: "http://event-sink/webhook?token=private", EventFilters: first.EventFilters, DeviceMatchers: first.DeviceMatchers, ContentType: first.ContentType, Until: first.Until}}
+		}, want: "normalized safe identity"},
+		{name: "unsorted filter", mutate: func(value *Result) {
+			value.WebhookRegistrations = &[]WebhookRegistration{{Fingerprint: first.Fingerprint, CallbackURL: first.CallbackURL, EventFilters: []string{"z", "a"}, DeviceMatchers: first.DeviceMatchers, ContentType: first.ContentType, Until: first.Until}}
+		}, want: "event filter list must be sorted"},
+		{name: "too many registrations", mutate: func(value *Result) {
+			values := make([]WebhookRegistration, MaxWebhookRegistrations+1)
+			for index := range values {
+				values[index] = validWebhookRegistration(fmt.Sprintf("%064x", index))
+			}
+			value.WebhookRegistrations = &values
 		}, want: "maximum"},
 	}
 	for _, test := range tests {
@@ -147,6 +223,7 @@ func TestInvocationValidateFor(t *testing.T) {
 		{name: "callback active", journey: JourneyCPEWebPACallback, invocation: Invocation{ClientService: "apparmor-simulator", Subscriber: "event-sink", AllowActiveEvent: true, Event: "apparmor/diagnostic", DeviceID: "mac:001122334455", CorrelationID: strings.Repeat("a", 64)}},
 		{name: "callback active preserves case-sensitive client service", journey: JourneyCPEWebPACallback, invocation: Invocation{ClientService: "HermesFS", Subscriber: "event-sink", AllowActiveEvent: true, Event: "apparmor/diagnostic", DeviceID: "mac:001122334455", CorrelationID: strings.Repeat("a", 64)}},
 		{name: "Parodus clients", journey: JourneyParodusClients, invocation: Invocation{}},
+		{name: "Argus webhooks", journey: JourneyArgusWebhooks, invocation: Invocation{}},
 		{name: "webhook rejects client service", journey: JourneyWebhook, invocation: Invocation{ClientService: "config"}, wantErr: "client service"},
 		{name: "cpe rejects webhook field", journey: JourneyCPEWebPA, invocation: Invocation{ClientService: "config", AllowActiveCallback: true}, wantErr: "webhook invocation fields"},
 		{name: "callback requires consent", journey: JourneyCPEWebPACallback, invocation: Invocation{ClientService: "apparmor-simulator", Subscriber: "event-sink", Event: "apparmor/diagnostic", DeviceID: "mac:001122334455", CorrelationID: strings.Repeat("a", 64)}, wantErr: "active event consent"},
@@ -158,6 +235,7 @@ func TestInvocationValidateFor(t *testing.T) {
 		{name: "invalid event", journey: JourneyWebhook, invocation: Invocation{AllowActiveCallback: true, Event: "event:apparmor", DeviceID: "mac:001122334455"}, wantErr: "event"},
 		{name: "invalid device identity", journey: JourneyWebhook, invocation: Invocation{AllowActiveCallback: true, Event: "apparmor/diagnostic", DeviceID: "001122334455"}, wantErr: "device identity"},
 		{name: "Parodus clients rejects client service", journey: JourneyParodusClients, invocation: Invocation{ClientService: "config"}, wantErr: "does not accept"},
+		{name: "Argus webhooks rejects client service", journey: JourneyArgusWebhooks, invocation: Invocation{ClientService: "config"}, wantErr: "does not accept"},
 		{name: "unknown journey", journey: "other", wantErr: "unsupported diagnostic journey"},
 	}
 	for _, test := range tests {

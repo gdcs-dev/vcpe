@@ -88,6 +88,28 @@ func TestRenderParodusClientList(t *testing.T) {
 	}
 }
 
+func TestRenderWebhookInventory(t *testing.T) {
+	first := validWebhookRegistration(strings.Repeat("a", 64))
+	second := validWebhookRegistration(strings.Repeat("b", 64))
+	second.CallbackURL = "http://other/webhook"
+	registrations := []WebhookRegistration{first, second}
+	result := validWebhookInventoryResult()
+	result.WebhookRegistrations = &registrations
+	output, err := RenderASCII(result)
+	if err != nil {
+		t.Fatalf("RenderASCII: %v", err)
+	}
+	for _, content := range []string{"Argus webhook inventory: edge/webpa[0] -> argus", "Registered webhooks:", first.Fingerprint, second.Fingerprint, "Callback URL: http://event-sink/webhook", "Secret configured: true"} {
+		if !strings.Contains(output, content) {
+			t.Errorf("output missing %q:\n%s", content, output)
+		}
+	}
+	jsonOutput, err := RenderJSON(result)
+	if err != nil || !strings.Contains(jsonOutput, `"webhookRegistrations": [`) {
+		t.Fatalf("RenderJSON() = %q, %v", jsonOutput, err)
+	}
+}
+
 func TestRenderWebhookEvidence(t *testing.T) {
 	result := validResult()
 	result.Observations[0].State = StateFailed

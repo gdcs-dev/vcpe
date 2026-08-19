@@ -27,6 +27,7 @@ func resolverRegistry() *Registry {
 	registry.Register(NewCPEWebPAProvider("xb10"))
 	registry.Register(NewCPEWebPACallbackProvider())
 	registry.Register(NewParodusClientsProvider())
+	registry.Register(NewArgusWebhooksProvider())
 	registry.Register(NewWebhookProvider())
 	return registry
 }
@@ -57,6 +58,21 @@ func TestResolveParodusClientsWithoutWebPA(t *testing.T) {
 		t.Fatalf("Resolve: %v", err)
 	}
 	if selection.Provider.Journey() != JourneyParodusClients || selection.Endpoint != endpoint || selection.Target.Name != "parodus" || selection.Target.Type != "parodus" || selection.TargetEndpoint != (persist.HealthEndpoint{}) {
+		t.Fatalf("selection = %+v", selection)
+	}
+}
+
+func TestResolveArgusWebhooksFromWebPA(t *testing.T) {
+	store := resolverStore(t, "    - name: webpa\n      type: webpa\n      replicas: 1\n      image: {repository: webpa}\n")
+	endpoint, err := store.ReserveHealthEndpoint("edge", "webpa", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	selection, err := Resolve(store, resolverRegistry(), ResolveRequest{Deployment: "edge", Source: "webpa", Target: "webhooks"})
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if selection.Provider.Journey() != JourneyArgusWebhooks || selection.Endpoint != endpoint || selection.Target.Name != "argus" || selection.Target.Type != "argus" || selection.TargetEndpoint != (persist.HealthEndpoint{}) {
 		t.Fatalf("selection = %+v", selection)
 	}
 }

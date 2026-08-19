@@ -169,6 +169,68 @@ func TestDiagnoseUsesPersistedLoopbackHTTPAndRendersResult(t *testing.T) {
 	}
 }
 
+func TestDiagnoseArgusWebhooksUsesPersistedWebPALoopbackAndRendersInventory(t *testing.T) {
+	stateRoot := t.TempDir()
+	store, err := persist.Open(stateRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := []byte("apiVersion: vcpe.dev/v1\nkind: Deployment\nmetadata: {name: edge}\nspec:\n  networks: []\n  services:\n    - name: webpa\n      type: webpa\n      replicas: 1\n      image: {repository: webpa}\n")
+	if err := store.SaveDesiredSnapshot("edge", snapshot); err != nil {
+		t.Fatal(err)
+	}
+	endpoint, err := store.ReserveHealthEndpoint("edge", "webpa", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	now := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
+	ttlSeconds := int64(3600)
+	registrations := []diagnostic.WebhookRegistration{{Fingerprint: strings.Repeat("a", 64), CallbackURL: "http://event-sink/webhook", EventFilters: []string{"devices/.*"}, DeviceMatchers: []string{"mac:.*"}, ContentType: "application/json", Until: now, TTLSeconds: &ttlSeconds, SecretPresent: true}}
+	requests := []string{}
+	previousFactory := newDiagnosticClient
+	newDiagnosticClient = func(time.Duration) *diagnostic.Client {
+		return &diagnostic.Client{HTTPClient: &http.Client{Transport: diagnosticRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+			if request.URL.Host != "127.0.0.1:"+strconv.Itoa(endpoint.HostPort) {
+				t.Fatalf("diagnostic host = %q", request.URL.Host)
+			}
+			requests = append(requests, request.Method+" "+request.URL.Path)
+			var payload any
+			switch request.URL.Path {
+			case "/diagnostics":
+				payload = diagnostic.Capabilities{SchemaVersion: diagnostic.CapabilitiesSchema, Journeys: []string{diagnostic.JourneyArgusWebhooks}}
+			case "/diagnostics/" + diagnostic.JourneyArgusWebhooks:
+				var invocation diagnostic.Invocation
+				if err := json.NewDecoder(request.Body).Decode(&invocation); err != nil || invocation != (diagnostic.Invocation{}) {
+					t.Fatalf("inventory invocation = %+v, error = %v", invocation, err)
+				}
+				payload = diagnostic.EndpointResponse{SchemaVersion: diagnostic.SchemaVersion, Journey: diagnostic.JourneyArgusWebhooks, ObservedAt: now, Observations: []diagnostic.Observation{{EdgeID: "argus-reachability", State: diagnostic.StatePassed, ObservedAt: now}, {EdgeID: "argus-inventory", State: diagnostic.StatePassed, ObservedAt: now}}, WebhookRegistrations: &registrations}
+			default:
+				return nil, fmt.Errorf("unexpected inventory request %s", request.URL.Path)
+			}
+			body, _ := json.Marshal(payload)
+			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(string(body))), Header: http.Header{}}, nil
+		})}}
+	}
+	t.Cleanup(func() { newDiagnosticClient = previousFactory })
+
+	response, err := executeLocal(Options{Command: "diagnose", Name: "edge", From: "webpa", To: "webhooks", StateRoot: stateRoot})
+	if err != nil || !strings.Contains(response.Message, "Argus webhook inventory") || !strings.Contains(response.Message, "http://event-sink/webhook") {
+		t.Fatalf("human inventory response = %+v, error = %v", response, err)
+	}
+	if want := []string{"GET /diagnostics", "POST /diagnostics/argus-webhooks"}; !reflect.DeepEqual(requests, want) {
+		t.Fatalf("requests = %#v, want %#v", requests, want)
+	}
+
+	response, err = executeLocal(Options{Command: "diagnose", Name: "edge", From: "webpa", To: "webhooks", StateRoot: stateRoot, OutputJSON: true})
+	if err != nil || !strings.Contains(response.Message, `"webhookRegistrations"`) || !strings.Contains(response.Message, `"fingerprint"`) {
+		t.Fatalf("JSON inventory response = %s, error = %v", response.Message, err)
+	}
+}
+
 func TestDiagnoseWebhookUsesPersistedLoopbackEndpointsPassively(t *testing.T) {
 	stateRoot := t.TempDir()
 	store, err := persist.Open(stateRoot)

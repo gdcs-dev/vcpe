@@ -25,17 +25,19 @@ func tempManifest(t *testing.T) string {
 func TestParsePublicCommands(t *testing.T) {
 	m := tempManifest(t)
 	cases := map[string][]string{
-		"init":             {"init"},
-		"build":            {"build", "--manifest", m},
-		"up":               {"up", "--manifest", m},
-		"apply":            {"apply", "--manifest", m},
-		"plan":             {"plan", "--manifest", m},
-		"status":           {"status"},
-		"diagnose":         {"diagnose", "--name", "edge", "--from", "gateway", "--to", "webpa", "--client-service", "config"},
-		"diagnose parodus": {"diagnose", "--name", "edge", "--from", "gateway", "--to", "parodus"},
-		"logs":             {"logs"},
-		"config":           {"config", "show"},
-		"state":            {"state", "reset"},
+		"init":              {"init"},
+		"build":             {"build", "--manifest", m},
+		"up":                {"up", "--manifest", m},
+		"apply":             {"apply", "--manifest", m},
+		"plan":              {"plan", "--manifest", m},
+		"status":            {"status"},
+		"diagnose":          {"diagnose", "--name", "edge", "--from", "gateway", "--to", "webpa", "--client-service", "config"},
+		"diag":              {"diag", "--name", "edge", "--from", "gateway", "--to", "webpa", "--client-service", "config"},
+		"diagnose parodus":  {"diagnose", "--name", "edge", "--from", "gateway", "--to", "parodus"},
+		"diagnose webhooks": {"diagnose", "--name", "edge", "--from", "webpa", "--to", "webhooks"},
+		"logs":              {"logs"},
+		"config":            {"config", "show"},
+		"state":             {"state", "reset"},
 	}
 	for command, args := range cases {
 		t.Run(command, func(t *testing.T) {
@@ -43,8 +45,12 @@ func TestParsePublicCommands(t *testing.T) {
 			if err != nil {
 				t.Fatalf("parse %s: %v", command, err)
 			}
-			if opts.Command != args[0] {
-				t.Fatalf("expected command %q, got %q", args[0], opts.Command)
+			wantCommand := args[0]
+			if wantCommand == "diag" {
+				wantCommand = "diagnose"
+			}
+			if opts.Command != wantCommand {
+				t.Fatalf("expected command %q, got %q", wantCommand, opts.Command)
 			}
 		})
 	}
@@ -81,6 +87,36 @@ func TestParseParodusDiagnose(t *testing.T) {
 				return
 			}
 			if err != nil || opts.To != "parodus" || opts.Replica == nil || *opts.Replica != 1 {
+				t.Fatalf("options = %+v, error = %v", opts, err)
+			}
+		})
+	}
+}
+
+func TestParseArgusWebhookInventoryDiagnose(t *testing.T) {
+	for _, testCase := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{name: "valid", args: []string{"diagnose", "--name", "edge", "--from", "webpa", "--to", "webhooks", "--replica", "1"}},
+		{name: "client service", args: []string{"diagnose", "--name", "edge", "--from", "webpa", "--to", "webhooks", "--client-service", "config"}, want: "does not accept"},
+		{name: "subscriber", args: []string{"diagnose", "--name", "edge", "--from", "webpa", "--to", "webhooks", "--subscriber", "event-sink"}, want: "does not accept"},
+		{name: "active callback", args: []string{"diagnose", "--name", "edge", "--from", "webpa", "--to", "webhooks", "--allow-active-callback"}, want: "does not accept"},
+		{name: "active event", args: []string{"diagnose", "--name", "edge", "--from", "webpa", "--to", "webhooks", "--allow-active-event"}, want: "does not accept"},
+		{name: "event", args: []string{"diagnose", "--name", "edge", "--from", "webpa", "--to", "webhooks", "--event", "devices/diagnostic"}, want: "does not accept"},
+		{name: "device", args: []string{"diagnose", "--name", "edge", "--from", "webpa", "--to", "webhooks", "--device-id", "mac:001122334455"}, want: "does not accept"},
+		{name: "subscriber replica", args: []string{"diagnose", "--name", "edge", "--from", "webpa", "--to", "webhooks", "--subscriber-replica", "1"}, want: "only for --to callback"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			opts, err := parseArgs("vcpe", testCase.args)
+			if testCase.want != "" {
+				if err == nil || !strings.Contains(err.Error(), testCase.want) {
+					t.Fatalf("parse error = %v, want %q", err, testCase.want)
+				}
+				return
+			}
+			if err != nil || opts.To != "webhooks" || opts.Replica == nil || *opts.Replica != 1 {
 				t.Fatalf("options = %+v, error = %v", opts, err)
 			}
 		})

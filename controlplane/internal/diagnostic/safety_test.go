@@ -105,3 +105,19 @@ func TestSanitizeCopiesParodusClientList(t *testing.T) {
 		t.Fatalf("clean result = %+v", clean)
 	}
 }
+
+func TestSanitizeCopiesAndRedactsWebhookRegistrations(t *testing.T) {
+	registration := validWebhookRegistration(strings.Repeat("a", 64))
+	registration.EventFilters = []string{"devices/.*", "secret=private"}
+	registrations := []WebhookRegistration{registration}
+	result := validWebhookInventoryResult()
+	result.WebhookRegistrations = &registrations
+	clean, err := Sanitize(result)
+	if err != nil {
+		t.Fatalf("Sanitize: %v", err)
+	}
+	registrations[0].EventFilters[0] = "changed"
+	if clean.WebhookRegistrations == nil || strings.Contains(strings.Join((*clean.WebhookRegistrations)[0].EventFilters, ","), "private") || strings.Contains(strings.Join((*clean.WebhookRegistrations)[0].EventFilters, ","), "changed") {
+		t.Fatalf("clean registrations = %+v", clean.WebhookRegistrations)
+	}
+}

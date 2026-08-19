@@ -16,6 +16,7 @@ const (
 	ReasonParticipantResultIncomplete    = "participant-result-incomplete"
 	ReasonArgusUnreachable               = "argus-unreachable"
 	ReasonArgusAuthenticationFailed      = "argus-authentication-failed"
+	ReasonArgusInventoryUnavailable      = "argus-inventory-unavailable"
 	ReasonRegistrationMissing            = "registration-missing"
 	ReasonRegistrationAmbiguous          = "registration-ambiguous"
 	ReasonRegistrationExpired            = "registration-expired"
@@ -37,6 +38,7 @@ const (
 	RemediationCheckParticipant        = "check-participant-diagnostic"
 	RemediationCheckArgusReachability  = "check-argus-reachability"
 	RemediationCheckArgusCredentials   = "check-argus-credentials"
+	RemediationCheckArgusInventory     = "check-argus-inventory"
 	RemediationRegisterWebhook         = "register-webhook"
 	RemediationRemoveDuplicateHooks    = "remove-duplicate-webhooks"
 	RemediationRefreshWebhook          = "refresh-webhook-registration"
@@ -222,6 +224,34 @@ func (provider parodusClientsProvider) Expected(input ExpectedInput) (ExpectedGr
 		},
 		Edges: []Edge{
 			{ID: "parodus-client-list", From: "gateway", To: "parodus", Label: "list registered clients", BlocksFollowing: true},
+		},
+	}, nil
+}
+
+type argusWebhooksProvider struct{}
+
+// NewArgusWebhooksProvider creates the WebPA-local authoritative inventory journey.
+func NewArgusWebhooksProvider() Provider { return argusWebhooksProvider{} }
+
+func (argusWebhooksProvider) Journey() string    { return JourneyArgusWebhooks }
+func (argusWebhooksProvider) SourceType() string { return "webpa" }
+func (argusWebhooksProvider) TargetType() string { return "argus" }
+
+func (provider argusWebhooksProvider) Expected(input ExpectedInput) (ExpectedGraph, error) {
+	if input.Source.Type != provider.SourceType() || input.Target.Type != provider.TargetType() {
+		return ExpectedGraph{}, fmt.Errorf("provider %s does not support %s to %s", provider.SourceType(), input.Source.Type, input.Target.Type)
+	}
+	return ExpectedGraph{
+		Journey: JourneyArgusWebhooks,
+		Source:  EndpointIdentity{Deployment: input.Deployment.Name, Service: input.Source.Name, Type: input.Source.Type, Replica: input.Instance.Index},
+		Target:  EndpointIdentity{Deployment: input.Deployment.Name, Service: input.Target.Name, Type: input.Target.Type, Replica: 0},
+		Nodes: []Node{
+			{ID: "webpa", Label: input.Source.Name, Kind: "service"},
+			{ID: "argus", Label: "Argus", Kind: "registry"},
+		},
+		Edges: []Edge{
+			{ID: "argus-reachability", From: "webpa", To: "argus", Label: "reach Argus", BlocksFollowing: true},
+			{ID: "argus-inventory", From: "argus", To: "argus", Label: "list registered webhooks", BlocksFollowing: true},
 		},
 	}, nil
 }

@@ -14,6 +14,7 @@ func TestRegistryLookupAndOrdering(t *testing.T) {
 	registry.Register(NewCPEWebPAProvider("gateway"))
 	registry.Register(NewCPEWebPACallbackProvider())
 	registry.Register(NewParodusClientsProvider())
+	registry.Register(NewArgusWebhooksProvider())
 	registry.Register(NewWebhookProvider())
 	if _, ok := registry.Lookup(JourneyCPEWebPA, "gateway", "webpa"); !ok {
 		t.Fatal("gateway provider not found")
@@ -27,7 +28,10 @@ func TestRegistryLookupAndOrdering(t *testing.T) {
 	if _, ok := registry.Lookup(JourneyParodusClients, "gateway", "parodus"); !ok {
 		t.Fatal("Parodus client-list provider not found")
 	}
-	want := []string{"cpe-webpa-callback/gateway/webpa", "cpe-webpa/gateway/webpa", "cpe-webpa/xb10/webpa", "parodus-clients/gateway/parodus", "webhook/event-sink/webpa"}
+	if _, ok := registry.Lookup(JourneyArgusWebhooks, "webpa", "argus"); !ok {
+		t.Fatal("Argus webhook inventory provider not found")
+	}
+	want := []string{"argus-webhooks/webpa/argus", "cpe-webpa-callback/gateway/webpa", "cpe-webpa/gateway/webpa", "cpe-webpa/xb10/webpa", "parodus-clients/gateway/parodus", "webhook/event-sink/webpa"}
 	if got := registry.Keys(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("keys = %#v, want %#v", got, want)
 	}
@@ -45,6 +49,22 @@ func TestParodusClientsProviderContract(t *testing.T) {
 		t.Fatalf("Expected: %v", err)
 	}
 	if graph.Journey != JourneyParodusClients || graph.Target.Service != "parodus" || len(graph.Edges) != 1 || graph.Edges[0].ID != "parodus-client-list" {
+		t.Fatalf("graph = %+v", graph)
+	}
+}
+
+func TestArgusWebhooksProviderContract(t *testing.T) {
+	provider := NewArgusWebhooksProvider()
+	graph, err := provider.Expected(ExpectedInput{
+		Deployment: plan.Deployment{Name: "edge"},
+		Source:     plan.Service{Name: "webpa", Type: "webpa"},
+		Instance:   plan.Instance{Index: 0},
+		Target:     plan.Service{Name: "argus", Type: "argus"},
+	})
+	if err != nil {
+		t.Fatalf("Expected: %v", err)
+	}
+	if graph.Journey != JourneyArgusWebhooks || graph.Source.Service != "webpa" || graph.Target.Type != "argus" || len(graph.Edges) != 2 || graph.Edges[1].ID != "argus-inventory" {
 		t.Fatalf("graph = %+v", graph)
 	}
 }

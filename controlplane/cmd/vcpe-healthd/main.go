@@ -263,7 +263,7 @@ func subscriberDiagnosticMaximum(path string) (int64, bool) {
 func buildDiagnosticJourneys(values []string, timeout time.Duration) (map[string]diagnostic.JourneyHandler, error) {
 	journeys := make(map[string]diagnostic.JourneyHandler, len(values))
 	for _, value := range values {
-		if value != diagnostic.JourneyCPEWebPA && value != diagnostic.JourneyCPEWebPACallback && value != diagnostic.JourneyParodusClients && value != diagnostic.JourneyWebhook {
+		if value != diagnostic.JourneyCPEWebPA && value != diagnostic.JourneyCPEWebPACallback && value != diagnostic.JourneyParodusClients && value != diagnostic.JourneyArgusWebhooks && value != diagnostic.JourneyWebhook {
 			return nil, fmt.Errorf("unsupported diagnostic journey %q", value)
 		}
 		if _, duplicate := journeys[value]; duplicate {
@@ -282,6 +282,9 @@ func buildDiagnosticJourneys(values []string, timeout time.Duration) (map[string
 		case diagnostic.JourneyWebhook:
 			probe := diagnostic.NewWebhookProbeFromEnvironment(timeout)
 			journeys[value] = probe.RunWithInvocation
+		case diagnostic.JourneyArgusWebhooks:
+			probe := diagnostic.NewWebhookProbeFromEnvironment(timeout)
+			journeys[value] = probe.RunInventory
 		}
 	}
 	return journeys, nil

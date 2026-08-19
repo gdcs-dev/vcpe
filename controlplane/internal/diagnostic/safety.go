@@ -3,6 +3,7 @@ package diagnostic
 import (
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 )
 
@@ -55,6 +56,10 @@ func Sanitize(result Result) (Result, error) {
 		truncated := *result.ParodusClientsTruncated
 		clean.ParodusClientsTruncated = &truncated
 	}
+	if result.WebhookRegistrations != nil {
+		registrations := sanitizeWebhookRegistrations(*result.WebhookRegistrations)
+		clean.WebhookRegistrations = &registrations
+	}
 	clean.Observations = make([]Observation, len(result.Observations))
 	for index, observation := range result.Observations {
 		observation.Message = redact(truncate(observation.Message, MaxMessageLength))
@@ -65,6 +70,25 @@ func Sanitize(result Result) (Result, error) {
 		return Result{}, err
 	}
 	return clean, nil
+}
+
+func sanitizeWebhookRegistrations(registrations []WebhookRegistration) []WebhookRegistration {
+	clean := make([]WebhookRegistration, len(registrations))
+	for index, registration := range registrations {
+		registration.EventFilters = sanitizeWebhookPatterns(registration.EventFilters)
+		registration.DeviceMatchers = sanitizeWebhookPatterns(registration.DeviceMatchers)
+		clean[index] = registration
+	}
+	return clean
+}
+
+func sanitizeWebhookPatterns(patterns []string) []string {
+	clean := make([]string, len(patterns))
+	for index, pattern := range patterns {
+		clean[index] = redact(truncate(pattern, MaxInvocationTextLength))
+	}
+	sort.Strings(clean)
+	return clean
 }
 
 func sanitizeEvidence(evidence []Evidence) []Evidence {

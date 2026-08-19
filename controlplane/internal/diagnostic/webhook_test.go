@@ -82,6 +82,101 @@ func TestWebhookProbeRefusesOversizedCandidateSet(t *testing.T) {
 	}
 }
 
+func TestWebhookProbeInventoryListsAllSafeRegistrations(t *testing.T) {
+	now := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
+	first, err := ancla.InternalWebhookToItem(func() time.Time { return now }, ancla.InternalWebhook{Webhook: ancla.Webhook{
+		Config:   ancla.DeliveryConfig{URL: "http://user:password@EVENT-SINK:80/webhook?token=private", ContentType: "application/json", Secret: "first-secret"},
+		Events:   []string{"devices/.*", "apparmor/.*"},
+		Matcher:  ancla.MetadataMatcherConfig{DeviceID: []string{"serial:.*", "mac:.*"}},
+		Duration: webhookDuration,
+		Until:    now.Add(webhookDuration),
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := ancla.InternalWebhookToItem(func() time.Time { return now }, ancla.InternalWebhook{Webhook: ancla.Webhook{
+		Config:   ancla.DeliveryConfig{URL: "http://other/webhook", ContentType: "application/json", Secret: "second-secret"},
+		Events:   []string{"devices/.*"},
+		Matcher:  ancla.MetadataMatcherConfig{DeviceID: []string{"mac:.*"}},
+		Duration: webhookDuration,
+		Until:    now.Add(webhookDuration),
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	probe := WebhookProbe{getItems: func(context.Context) (chrysom.Items, error) { return chrysom.Items{second, first}, nil }}
+	registrations, err := probe.Inventory(context.Background())
+	if err != nil {
+		t.Fatalf("Inventory() error = %v", err)
+	}
+	if len(registrations) != 2 || registrations[0].Fingerprint >= registrations[1].Fingerprint {
+		t.Fatalf("registrations = %+v", registrations)
+	}
+	for _, registration := range registrations {
+		if registration.CallbackURL == "http://event-sink/webhook" && (len(registration.EventFilters) != 2 || registration.EventFilters[0] != "apparmor/.*") {
+			t.Fatalf("registration filters = %+v", registration.EventFilters)
+		}
+	}
+	encoded, err := json.Marshal(registrations)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), "first-secret") || strings.Contains(string(encoded), "password") || strings.Contains(string(encoded), "token=private") {
+		t.Fatalf("inventory exposed unsafe data: %s", encoded)
+	}
+}
+
+func TestWebhookProbeInventoryRefusesOversizedOrMalformedBucket(t *testing.T) {
+	probe := WebhookProbe{getItems: func(context.Context) (chrysom.Items, error) {
+		return make(chrysom.Items, MaxWebhookRegistrations+1), nil
+	}}
+	if _, err := probe.Inventory(context.Background()); !errors.Is(err, ErrWebhookInventoryLimit) {
+		t.Fatalf("Inventory() error = %v, want inventory limit", err)
+	}
+	malformed := WebhookProbe{getItems: func(context.Context) (chrysom.Items, error) {
+		return chrysom.Items{{ID: strings.Repeat("a", 64), Data: map[string]any{"webhook": true}}}, nil
+	}}
+	if _, err := malformed.Inventory(context.Background()); !errors.Is(err, ErrWebhookInventoryInvalid) {
+		t.Fatalf("Inventory() error = %v, want invalid inventory", err)
+	}
+}
+
+func TestWebhookProbeRunInventorySeparatesFailures(t *testing.T) {
+	now := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
+	for _, testCase := range []struct {
+		name       string
+		getItems   func(context.Context) (chrysom.Items, error)
+		wantEdges  []string
+		wantState  State
+		wantReason string
+	}{
+		{name: "authentication", getItems: func(context.Context) (chrysom.Items, error) { return nil, chrysom.ErrFailedAuthentication }, wantEdges: []string{"argus-reachability", "argus-inventory"}, wantState: StateFailed, wantReason: ReasonArgusAuthenticationFailed},
+		{name: "transport", getItems: func(context.Context) (chrysom.Items, error) { return nil, context.DeadlineExceeded }, wantEdges: []string{"argus-reachability"}, wantState: StateFailed, wantReason: ReasonArgusUnreachable},
+		{name: "limit", getItems: func(context.Context) (chrysom.Items, error) {
+			return make(chrysom.Items, MaxWebhookRegistrations+1), nil
+		}, wantEdges: []string{"argus-reachability", "argus-inventory"}, wantState: StateUnknown, wantReason: ReasonArgusInventoryUnavailable},
+		{name: "decode", getItems: func(context.Context) (chrysom.Items, error) {
+			return chrysom.Items{{ID: strings.Repeat("a", 64), Data: map[string]any{"webhook": true}}}, nil
+		}, wantEdges: []string{"argus-reachability", "argus-inventory"}, wantState: StateUnknown, wantReason: ReasonArgusInventoryUnavailable},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			response := (WebhookProbe{Now: func() time.Time { return now }, getItems: testCase.getItems}).RunInventory(context.Background(), Invocation{})
+			if response.WebhookRegistrations != nil || len(response.Observations) != len(testCase.wantEdges) {
+				t.Fatalf("response = %+v", response)
+			}
+			for index, edgeID := range testCase.wantEdges {
+				if response.Observations[index].EdgeID != edgeID {
+					t.Fatalf("observation %d = %+v, want %q", index, response.Observations[index], edgeID)
+				}
+			}
+			last := response.Observations[len(response.Observations)-1]
+			if last.State != testCase.wantState || last.ReasonID != testCase.wantReason {
+				t.Fatalf("last observation = %+v", last)
+			}
+		})
+	}
+}
+
 func TestMatchWebhookCandidateNormalizesSafeCallbackIdentity(t *testing.T) {
 	candidate, err := MatchWebhookCandidate("http://user:password@EVENT-SINK:80/webhook?token=private#fragment", []WebhookCandidate{
 		{Fingerprint: "first", CallbackURL: "http://event-sink/webhook"},

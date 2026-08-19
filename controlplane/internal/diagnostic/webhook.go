@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -36,6 +37,8 @@ const (
 
 var (
 	ErrWebhookCandidateLimit        = errors.New("Argus webhook candidate limit exceeded")
+	ErrWebhookInventoryLimit        = errors.New("Argus webhook inventory limit exceeded")
+	ErrWebhookInventoryInvalid      = errors.New("Argus webhook inventory is invalid")
 	ErrWebhookRegistrationMissing   = errors.New("Argus webhook registration is missing")
 	ErrWebhookRegistrationAmbiguous = errors.New("Argus webhook registration is ambiguous")
 	ErrWebhookRegistrationExpired   = errors.New("Argus webhook registration is expired")
@@ -183,6 +186,10 @@ func (probe WebhookProbe) Candidates(ctx context.Context) ([]WebhookCandidate, e
 	if len(items) > probe.MaxItems {
 		return nil, fmt.Errorf("%w: %d exceeds %d", ErrWebhookCandidateLimit, len(items), probe.MaxItems)
 	}
+	return decodeWebhookCandidates(items)
+}
+
+func decodeWebhookCandidates(items chrysom.Items) ([]WebhookCandidate, error) {
 	candidates := make([]WebhookCandidate, 0, len(items))
 	for _, item := range items {
 		webhook, err := ancla.ItemToInternalWebhook(item)
@@ -207,6 +214,58 @@ func (probe WebhookProbe) Candidates(ctx context.Context) ([]WebhookCandidate, e
 		candidates = append(candidates, candidate)
 	}
 	return candidates, nil
+}
+
+// Inventory returns every safe webhook registration from the authoritative
+// Argus bucket, up to the broader inventory-specific limit.
+func (probe WebhookProbe) Inventory(ctx context.Context) ([]WebhookRegistration, error) {
+	probe.defaults()
+	items, err := probe.items(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if len(items) > MaxWebhookRegistrations {
+		return nil, fmt.Errorf("%w: %d exceeds %d", ErrWebhookInventoryLimit, len(items), MaxWebhookRegistrations)
+	}
+	candidates, err := decodeWebhookCandidates(items)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrWebhookInventoryInvalid, err)
+	}
+	registrations := make([]WebhookRegistration, 0, len(candidates))
+	for _, candidate := range candidates {
+		callbackURL, err := NormalizeCallbackIdentity(candidate.CallbackURL)
+		if err != nil {
+			return nil, fmt.Errorf("%w: normalize callback URL: %v", ErrWebhookInventoryInvalid, err)
+		}
+		registration := WebhookRegistration{
+			Fingerprint:    candidate.Fingerprint,
+			CallbackURL:    callbackURL,
+			EventFilters:   append([]string(nil), candidate.EventFilters...),
+			DeviceMatchers: append([]string(nil), candidate.DeviceMatchers...),
+			ContentType:    candidate.ContentType,
+			Until:          candidate.Until,
+			SecretPresent:  candidate.SecretPresent,
+		}
+		if candidate.TTLKnown {
+			ttlSeconds := candidate.TTLSeconds
+			registration.TTLSeconds = &ttlSeconds
+		}
+		sort.Strings(registration.EventFilters)
+		sort.Strings(registration.DeviceMatchers)
+		if err := registration.validate(); err != nil {
+			return nil, fmt.Errorf("%w: %v", ErrWebhookInventoryInvalid, err)
+		}
+		registrations = append(registrations, registration)
+	}
+	sort.Slice(registrations, func(left, right int) bool {
+		return registrations[left].Fingerprint < registrations[right].Fingerprint
+	})
+	for index := 1; index < len(registrations); index++ {
+		if registrations[index-1].Fingerprint == registrations[index].Fingerprint {
+			return nil, fmt.Errorf("%w: duplicate fingerprint", ErrWebhookInventoryInvalid)
+		}
+	}
+	return registrations, nil
 }
 
 // EvaluateWebhookFreshness checks the stored duration and expiry against the
@@ -425,6 +484,34 @@ func (probe WebhookProbe) RunWithInvocation(ctx context.Context, invocation Invo
 		{EdgeID: "argus-reachability", State: StatePassed, ObservedAt: now},
 		{EdgeID: "argus-authentication", State: StatePassed, ObservedAt: now},
 	}}
+}
+
+// RunInventory performs the passive source-local Argus inventory journey.
+func (probe WebhookProbe) RunInventory(ctx context.Context, invocation Invocation) EndpointResponse {
+	now := probe.observedAt()
+	if err := invocation.ValidateFor(JourneyArgusWebhooks); err != nil {
+		return EndpointResponse{SchemaVersion: SchemaVersion, Journey: JourneyArgusWebhooks, ObservedAt: now, Observations: []Observation{{EdgeID: "argus-reachability", State: StateUnknown, ReasonID: ReasonArgusUnreachable, RemediationID: RemediationCheckArgusReachability, Message: "Argus inventory invocation is invalid", ObservedAt: now}}}
+	}
+	registrations, err := probe.Inventory(ctx)
+	if err == nil {
+		return EndpointResponse{SchemaVersion: SchemaVersion, Journey: JourneyArgusWebhooks, ObservedAt: now, Observations: []Observation{
+			{EdgeID: "argus-reachability", State: StatePassed, ObservedAt: now},
+			{EdgeID: "argus-inventory", State: StatePassed, ObservedAt: now},
+		}, WebhookRegistrations: &registrations}
+	}
+	if errors.Is(err, chrysom.ErrFailedAuthentication) {
+		return EndpointResponse{SchemaVersion: SchemaVersion, Journey: JourneyArgusWebhooks, ObservedAt: now, Observations: []Observation{
+			{EdgeID: "argus-reachability", State: StatePassed, ObservedAt: now},
+			{EdgeID: "argus-inventory", State: StateFailed, ReasonID: ReasonArgusAuthenticationFailed, RemediationID: RemediationCheckArgusCredentials, Message: "Argus rejected authentication", ObservedAt: now},
+		}}
+	}
+	if errors.Is(err, ErrWebhookInventoryLimit) || errors.Is(err, ErrWebhookInventoryInvalid) {
+		return EndpointResponse{SchemaVersion: SchemaVersion, Journey: JourneyArgusWebhooks, ObservedAt: now, Observations: []Observation{
+			{EdgeID: "argus-reachability", State: StatePassed, ObservedAt: now},
+			{EdgeID: "argus-inventory", State: StateUnknown, ReasonID: ReasonArgusInventoryUnavailable, RemediationID: RemediationCheckArgusInventory, Message: "Argus webhook inventory was unavailable", ObservedAt: now},
+		}}
+	}
+	return EndpointResponse{SchemaVersion: SchemaVersion, Journey: JourneyArgusWebhooks, ObservedAt: now, Observations: []Observation{{EdgeID: "argus-reachability", State: StateFailed, ReasonID: ReasonArgusUnreachable, RemediationID: RemediationCheckArgusReachability, Message: "Argus webhook inventory lookup failed", ObservedAt: now}}}
 }
 
 func (probe WebhookProbe) inspectWebhookRegistration(now time.Time, intent WebhookSubscriberIntent, candidates []WebhookCandidate) EndpointResponse {

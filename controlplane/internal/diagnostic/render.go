@@ -62,7 +62,33 @@ func RenderASCII(result Result) (string, error) {
 		}
 		fmt.Fprintf(&output, "Truncated: %t\n", *result.ParodusClientsTruncated)
 	}
+	if result.Journey == JourneyArgusWebhooks && result.WebhookRegistrations != nil {
+		output.WriteString("\nRegistered webhooks:\n")
+		if len(*result.WebhookRegistrations) == 0 {
+			output.WriteString("  (none)\n")
+		} else {
+			for _, registration := range *result.WebhookRegistrations {
+				fmt.Fprintf(&output, "  %s\n", registration.Fingerprint)
+				fmt.Fprintf(&output, "    Callback URL: %s\n", registration.CallbackURL)
+				fmt.Fprintf(&output, "    Event filters: %s\n", formatRegistrationPatterns(registration.EventFilters))
+				fmt.Fprintf(&output, "    Device matchers: %s\n", formatRegistrationPatterns(registration.DeviceMatchers))
+				fmt.Fprintf(&output, "    Content type: %s\n", registration.ContentType)
+				fmt.Fprintf(&output, "    Expires: %s\n", registration.Until.UTC().Format("2006-01-02T15:04:05Z07:00"))
+				if registration.TTLSeconds != nil {
+					fmt.Fprintf(&output, "    TTL seconds: %d\n", *registration.TTLSeconds)
+				}
+				fmt.Fprintf(&output, "    Secret configured: %t\n", registration.SecretPresent)
+			}
+		}
+	}
 	return strings.TrimRight(output.String(), "\n"), nil
+}
+
+func formatRegistrationPatterns(patterns []string) string {
+	if len(patterns) == 0 {
+		return "(none)"
+	}
+	return strings.Join(patterns, ", ")
 }
 
 func asciiHeading(journey string) string {
@@ -74,6 +100,9 @@ func asciiHeading(journey string) string {
 	}
 	if journey == JourneyParodusClients {
 		return "Parodus client enumeration"
+	}
+	if journey == JourneyArgusWebhooks {
+		return "Argus webhook inventory"
 	}
 	return "CPE to WebPA diagnostic"
 }

@@ -98,11 +98,11 @@ var commandHelp = map[string]CommandHelp{
 		},
 	},
 	"diagnose": {
-		Synopsis:    "Diagnose CPE, Parodus, webhook, or callback delivery paths",
-		Description: "Shows a bounded diagnostic graph and its first confirmed failure through persisted loopback endpoints. Use --to webpa with --client-service for CPE diagnostics, --to parodus to list registered clients, --to webhook for registration inspection, or --to callback for one bounded CPE-to-subscriber event after explicit active-event consent.",
+		Synopsis:    "Diagnose CPE, Parodus, Argus webhook, or callback delivery paths",
+		Description: "Shows a bounded diagnostic graph and its first confirmed failure through persisted loopback endpoints. Use --to webpa with --client-service for CPE diagnostics, --to parodus to list registered clients, --to webhooks with WebPA as --from to inventory authoritative Argus registrations, --to webhook for one subscriber registration inspection, or --to callback for one bounded CPE-to-subscriber event after explicit active-event consent.",
 		RequiredFlags: []FlagHelp{
 			{Name: "--from", Arg: "<service>", Description: "Source service name"},
-			{Name: "--to", Arg: "<webpa|webhook|callback|parodus>", Description: "Diagnostic target journey"},
+			{Name: "--to", Arg: "<webpa|webhook|webhooks|callback|parodus>", Description: "Diagnostic target journey"},
 		},
 		OptionalFlags: []FlagHelp{
 			{Name: "--name", Arg: "<deployment>", Description: "Deployment containing the source and required participants; optional when exactly one deployment is active"},
@@ -120,6 +120,7 @@ var commandHelp = map[string]CommandHelp{
 		Examples: []string{
 			"vcpe diagnose --from gateway --to webpa --client-service apparmor-simulator",
 			"vcpe diagnose --name example --from gateway --to parodus",
+			"vcpe diagnose --name example --from webpa --to webhooks",
 			"vcpe diagnose --name example --from event-sink --to webhook",
 			"vcpe diagnose --name example --from event-sink --to webhook --allow-active-callback --event devices/diagnostic --device-id mac:02f9491df122",
 			"vcpe diagnose --name example --from gateway --to callback --client-service apparmor-simulator --subscriber event-sink --allow-active-event --event devices/diagnostic --device-id mac:02f9491df122",
@@ -240,6 +241,7 @@ func GlobalHelp() string {
 	b.WriteString("\nAliases:\n")
 	b.WriteString("  apply    alias for up\n")
 	b.WriteString("  destroy  alias for down (also requires --force)\n")
+	b.WriteString("  diag     alias for diagnose\n")
 
 	b.WriteString("\nGlobal flags:\n")
 	b.WriteString("  --state-root <path>  Override state root directory\n")
@@ -258,6 +260,8 @@ func HelpFor(command string) string {
 		return "apply is an alias for up — run `vcpe up --help` for usage\n"
 	case "destroy":
 		return "destroy is an alias for down (also requires --force) — run `vcpe down --help` for usage\n"
+	case "diag":
+		return "diag is an alias for diagnose — run `vcpe diagnose --help` for usage\n"
 	}
 
 	h, ok := commandHelp[command]

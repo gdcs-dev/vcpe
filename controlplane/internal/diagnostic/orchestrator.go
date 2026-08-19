@@ -71,6 +71,7 @@ func Diagnose(ctx context.Context, store *persist.Store, registry *Registry, cli
 		Observations:            observations,
 		ParodusClients:          endpointResponse.ParodusClients,
 		ParodusClientsTruncated: endpointResponse.ParodusClientsTruncated,
+		WebhookRegistrations:    endpointResponse.WebhookRegistrations,
 		FirstFailure:            firstFailure,
 		ObservedAt:              observedAt,
 	}

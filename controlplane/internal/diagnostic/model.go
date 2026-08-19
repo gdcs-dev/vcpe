@@ -4,6 +4,7 @@ package diagnostic
 
 import (
 	"fmt"
+	"mime"
 	"regexp"
 	"strconv"
 	"strings"
@@ -11,33 +12,36 @@ import (
 )
 
 const (
-	SchemaVersion            = "vcpe.dev/diagnostic/v1"
-	CapabilitiesSchema       = "vcpe.dev/diagnostics/v1"
-	JourneyCPEWebPA          = "cpe-webpa"
-	JourneyCPEWebPACallback  = "cpe-webpa-callback"
-	JourneyParodusClients    = "parodus-clients"
-	JourneyWebhook           = "webhook"
-	JourneyWebhookSubscriber = "webhook-subscriber"
-	WebhookActiveDirect      = "direct"
-	WebhookActiveCaduceus    = "caduceus"
-	MaxNodes                 = 16
-	MaxEdges                 = 16
-	MaxEvidencePerEdge       = 8
-	MaxCapabilities          = 16
-	MaxParodusClients        = 64
-	MaxIDLength              = 64
-	MaxLabelLength           = 128
-	MaxMessageLength         = 256
-	MaxEvidenceValueLength   = 256
-	MaxDiagnosticBodyBytes   = 64 * 1024
-	MaxCapabilitiesBodySize  = 4 * 1024
-	MaxInvocationBodySize    = 1024
-	MaxInvocationTextLength  = 256
-	MaxCallbackURLLength     = 2048
-	MaxWebhookIntentBodySize = 4 * 1024
-	MaxWebhookCandidates     = 8
-	MaxReceiptPollAttempts   = 5
-	MaxCorrelationIDLength   = 64
+	SchemaVersion                 = "vcpe.dev/diagnostic/v1"
+	CapabilitiesSchema            = "vcpe.dev/diagnostics/v1"
+	JourneyCPEWebPA               = "cpe-webpa"
+	JourneyCPEWebPACallback       = "cpe-webpa-callback"
+	JourneyParodusClients         = "parodus-clients"
+	JourneyArgusWebhooks          = "argus-webhooks"
+	JourneyWebhook                = "webhook"
+	JourneyWebhookSubscriber      = "webhook-subscriber"
+	WebhookActiveDirect           = "direct"
+	WebhookActiveCaduceus         = "caduceus"
+	MaxNodes                      = 16
+	MaxEdges                      = 16
+	MaxEvidencePerEdge            = 8
+	MaxCapabilities               = 16
+	MaxParodusClients             = 64
+	MaxWebhookRegistrations       = 64
+	MaxWebhookRegistrationFilters = 8
+	MaxIDLength                   = 64
+	MaxLabelLength                = 128
+	MaxMessageLength              = 256
+	MaxEvidenceValueLength        = 256
+	MaxDiagnosticBodyBytes        = 64 * 1024
+	MaxCapabilitiesBodySize       = 4 * 1024
+	MaxInvocationBodySize         = 1024
+	MaxInvocationTextLength       = 256
+	MaxCallbackURLLength          = 2048
+	MaxWebhookIntentBodySize      = 4 * 1024
+	MaxWebhookCandidates          = 8
+	MaxReceiptPollAttempts        = 5
+	MaxCorrelationIDLength        = 64
 )
 
 var (
@@ -102,18 +106,19 @@ type Observation struct {
 
 // Result is the complete CPE-to-WebPA diagnostic graph.
 type Result struct {
-	SchemaVersion           string           `json:"schemaVersion"`
-	Journey                 string           `json:"journey"`
-	Source                  EndpointIdentity `json:"source"`
-	Target                  EndpointIdentity `json:"target"`
-	Metadata                []Evidence       `json:"metadata,omitempty"`
-	Nodes                   []Node           `json:"nodes"`
-	Edges                   []Edge           `json:"edges"`
-	Observations            []Observation    `json:"observations"`
-	ParodusClients          *[]string        `json:"parodusClients,omitempty"`
-	ParodusClientsTruncated *bool            `json:"parodusClientsTruncated,omitempty"`
-	FirstFailure            string           `json:"firstFailure,omitempty"`
-	ObservedAt              time.Time        `json:"observedAt"`
+	SchemaVersion           string                 `json:"schemaVersion"`
+	Journey                 string                 `json:"journey"`
+	Source                  EndpointIdentity       `json:"source"`
+	Target                  EndpointIdentity       `json:"target"`
+	Metadata                []Evidence             `json:"metadata,omitempty"`
+	Nodes                   []Node                 `json:"nodes"`
+	Edges                   []Edge                 `json:"edges"`
+	Observations            []Observation          `json:"observations"`
+	ParodusClients          *[]string              `json:"parodusClients,omitempty"`
+	ParodusClientsTruncated *bool                  `json:"parodusClientsTruncated,omitempty"`
+	WebhookRegistrations    *[]WebhookRegistration `json:"webhookRegistrations,omitempty"`
+	FirstFailure            string                 `json:"firstFailure,omitempty"`
+	ObservedAt              time.Time              `json:"observedAt"`
 }
 
 // Capabilities is the passive response returned by GET /diagnostics.
@@ -125,14 +130,15 @@ type Capabilities struct {
 // EndpointResponse is the bounded source-local response returned by an active
 // diagnostic route before the control plane merges expected graph metadata.
 type EndpointResponse struct {
-	SchemaVersion           string                `json:"schemaVersion"`
-	Journey                 string                `json:"journey"`
-	Observations            []Observation         `json:"observations"`
-	ParodusClients          *[]string             `json:"parodusClients,omitempty"`
-	ParodusClientsTruncated *bool                 `json:"parodusClientsTruncated,omitempty"`
-	Active                  *WebhookActiveResult  `json:"active,omitempty"`
-	ActiveEvent             *CPEActiveEventResult `json:"activeEvent,omitempty"`
-	ObservedAt              time.Time             `json:"observedAt"`
+	SchemaVersion           string                 `json:"schemaVersion"`
+	Journey                 string                 `json:"journey"`
+	Observations            []Observation          `json:"observations"`
+	ParodusClients          *[]string              `json:"parodusClients,omitempty"`
+	ParodusClientsTruncated *bool                  `json:"parodusClientsTruncated,omitempty"`
+	WebhookRegistrations    *[]WebhookRegistration `json:"webhookRegistrations,omitempty"`
+	Active                  *WebhookActiveResult   `json:"active,omitempty"`
+	ActiveEvent             *CPEActiveEventResult  `json:"activeEvent,omitempty"`
+	ObservedAt              time.Time              `json:"observedAt"`
 }
 
 // Invocation contains the bounded caller-selectable inputs for active journeys.
@@ -188,6 +194,19 @@ type WebhookSubscriberIntent struct {
 	RefreshFailureAt  time.Time `json:"refreshFailureAt,omitempty"`
 	LastFailureAt     time.Time `json:"lastFailureAt,omitempty"`
 	LastErrorCategory string    `json:"lastErrorCategory,omitempty"`
+}
+
+// WebhookRegistration is the bounded, non-secret representation of one
+// authoritative Argus webhook record.
+type WebhookRegistration struct {
+	Fingerprint    string    `json:"fingerprint"`
+	CallbackURL    string    `json:"callbackUrl"`
+	EventFilters   []string  `json:"eventFilters"`
+	DeviceMatchers []string  `json:"deviceMatchers"`
+	ContentType    string    `json:"contentType"`
+	Until          time.Time `json:"until"`
+	TTLSeconds     *int64    `json:"ttlSeconds,omitempty"`
+	SecretPresent  bool      `json:"secretPresent"`
 }
 
 // Validate preserves the CPE-to-WebPA validation contract for source-local
@@ -261,6 +280,11 @@ func (invocation Invocation) ValidateFor(journey string) error {
 			return fmt.Errorf("Parodus enumeration does not accept invocation fields")
 		}
 		return nil
+	case JourneyArgusWebhooks:
+		if invocation.ClientService != "" || invocation.Subscriber != "" || invocation.AllowActiveCallback || invocation.AllowActiveEvent || invocation.Event != "" || invocation.DeviceID != "" || invocation.CorrelationID != "" || invocation.SubscriberIntent != nil || invocation.ActivePhase != "" {
+			return fmt.Errorf("Argus webhook inventory does not accept invocation fields")
+		}
+		return nil
 	default:
 		return fmt.Errorf("unsupported diagnostic journey %q", journey)
 	}
@@ -283,6 +307,9 @@ func (r Result) Validate() error {
 		return err
 	}
 	if err := validateParodusClientList(r.Journey, r.ParodusClients, r.ParodusClientsTruncated); err != nil {
+		return err
+	}
+	if err := validateWebhookRegistrationList(r.Journey, r.WebhookRegistrations); err != nil {
 		return err
 	}
 	if r.ObservedAt.IsZero() {
@@ -419,6 +446,9 @@ func (r EndpointResponse) Validate() error {
 		return fmt.Errorf("unsupported diagnostic journey %q", r.Journey)
 	}
 	if err := validateParodusClientList(r.Journey, r.ParodusClients, r.ParodusClientsTruncated); err != nil {
+		return err
+	}
+	if err := validateWebhookRegistrationList(r.Journey, r.WebhookRegistrations); err != nil {
 		return err
 	}
 	if r.Active != nil {
@@ -564,6 +594,71 @@ func validateParodusClientList(journey string, clients *[]string, truncated *boo
 	return nil
 }
 
+func validateWebhookRegistrationList(journey string, registrations *[]WebhookRegistration) error {
+	if journey != JourneyArgusWebhooks {
+		if registrations != nil {
+			return fmt.Errorf("webhook registrations are valid only for journey %q", JourneyArgusWebhooks)
+		}
+		return nil
+	}
+	if registrations == nil {
+		return nil
+	}
+	if len(*registrations) > MaxWebhookRegistrations {
+		return fmt.Errorf("webhook registration list has %d entries: maximum is %d", len(*registrations), MaxWebhookRegistrations)
+	}
+	for index, registration := range *registrations {
+		if err := registration.validate(); err != nil {
+			return fmt.Errorf("webhook registration %d: %w", index, err)
+		}
+		if index > 0 && (*registrations)[index-1].Fingerprint >= registration.Fingerprint {
+			return fmt.Errorf("webhook registration list must be sorted without duplicate fingerprints")
+		}
+	}
+	return nil
+}
+
+func (registration WebhookRegistration) validate() error {
+	if !registrationIDPattern.MatchString(registration.Fingerprint) {
+		return fmt.Errorf("fingerprint is invalid")
+	}
+	normalizedURL, err := NormalizeCallbackIdentity(registration.CallbackURL)
+	if err != nil || normalizedURL != registration.CallbackURL {
+		return fmt.Errorf("callback URL is not a normalized safe identity")
+	}
+	if err := validateWebhookPatterns("event filter", registration.EventFilters); err != nil {
+		return err
+	}
+	if err := validateWebhookPatterns("device matcher", registration.DeviceMatchers); err != nil {
+		return err
+	}
+	if mediaType, _, err := mime.ParseMediaType(registration.ContentType); err != nil || mediaType == "" {
+		return fmt.Errorf("content type is invalid")
+	}
+	if registration.Until.IsZero() {
+		return fmt.Errorf("expiry time is required")
+	}
+	if registration.TTLSeconds != nil && *registration.TTLSeconds < 0 {
+		return fmt.Errorf("TTL seconds must not be negative")
+	}
+	return nil
+}
+
+func validateWebhookPatterns(name string, values []string) error {
+	if len(values) > MaxWebhookRegistrationFilters {
+		return fmt.Errorf("%s list has %d entries: maximum is %d", name, len(values), MaxWebhookRegistrationFilters)
+	}
+	for index, value := range values {
+		if err := validateText(name, value, MaxInvocationTextLength, true); err != nil {
+			return err
+		}
+		if index > 0 && values[index-1] > value {
+			return fmt.Errorf("%s list must be sorted", name)
+		}
+	}
+	return nil
+}
+
 func validateCorrelationID(value string) error {
 	if len(value) != MaxCorrelationIDLength || !registrationIDPattern.MatchString(value) {
 		return fmt.Errorf("correlation ID is invalid")
@@ -572,7 +667,7 @@ func validateCorrelationID(value string) error {
 }
 
 func resultJourney(journey string) bool {
-	return journey == JourneyCPEWebPA || journey == JourneyCPEWebPACallback || journey == JourneyParodusClients || journey == JourneyWebhook
+	return journey == JourneyCPEWebPA || journey == JourneyCPEWebPACallback || journey == JourneyParodusClients || journey == JourneyArgusWebhooks || journey == JourneyWebhook
 }
 
 func validateOptionalID(name, value string) error {
