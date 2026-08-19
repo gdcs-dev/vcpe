@@ -4,7 +4,7 @@ Define the local declarative CLI contract and safety guarantees for planning and
 ## Requirements
 
 ### Requirement: Declarative local control-plane commands
-The system SHALL provide a local CLI contract with `plan`, `apply`, `status`, `diagnose`, and `destroy` commands for deployments, and SHALL expose `init`, `build`, `up`, `down`, `logs`, `config`, `state`, and `release` commands as Go-owned operator commands rather than bash-owned behavior. Every command SHALL support `-h`/`--help` to display structured help text and exit 0. The `down` command SHALL remove the Podman networks created for the deployment after stopping all compose services. Network removal failures SHALL be treated as warnings and SHALL NOT prevent state cleanup. The `manifest` command group SHALL expose `list` and `build` subcommands; `build` SHALL run the interactive manifest builder wizard. The `release` command SHALL require an explicit `--version <vX.Y.Z>` flag, stamp first-party image tags in the manifest, commit and tag the manifest change in git, push the commit and tag to origin, then build and push container images. The `build`, `push`, and `release` commands SHALL be conditionally compiled: under the `homebrew` Go build tag they SHALL be absent from the binary; under the default (no build tag) build they SHALL be fully available.
+The system SHALL provide a local CLI contract with `plan`, `apply`, `status`, `diagnose`, and `destroy` commands for deployments, and SHALL expose `init`, `build`, `up`, `down`, `logs`, `config`, `state`, and `release` commands as Go-owned operator commands rather than bash-owned behavior. Every command SHALL support `-h`/`--help` to display structured help text and exit 0. The `down` command SHALL remove the Podman networks created for the deployment after stopping all compose services. Network removal failures SHALL be treated as warnings and SHALL NOT prevent state cleanup. The `manifest` command group SHALL expose `list` and `build` subcommands; `build` SHALL run the interactive manifest builder wizard. The `release` command SHALL require an explicit `--version <vX.Y.Z>` flag, stamp first-party image tags in the manifest, commit and tag the manifest change in git, push the commit and tag to origin, then build and push container images. The `build`, `push`, and `release` commands SHALL be conditionally compiled: under the `homebrew` Go build tag they SHALL be absent from the binary; under the default (no build tag) build they SHALL be fully available. The `diagnose` command SHALL accept `--to parodus` as a source-local registered-client enumeration journey and SHALL reject options belonging to other diagnostic journeys before state access or active probing.
 
 #### Scenario: Plan reports intended changes
 - **WHEN** an operator runs `plan` for a valid deployment manifest
@@ -21,6 +21,10 @@ The system SHALL provide a local CLI contract with `plan`, `apply`, `status`, `d
 #### Scenario: Diagnose runs only on explicit invocation
 - **WHEN** an operator runs `vcpe diagnose` with valid deployment, source, and target arguments
 - **THEN** the Go operator requests bounded active probes through the source instance's persisted loopback HTTP endpoint without invoking a container runtime and without changing the passive behavior of `vcpe status`
+
+#### Scenario: Diagnose selects Parodus enumeration
+- **WHEN** an operator runs `vcpe diagnose --from gateway --to parodus`
+- **THEN** the command selects the source-local registered Parodus client enumeration journey
 
 #### Scenario: down removes networks
 - **WHEN** an operator runs `vcpe down --name <deployment>`
@@ -250,3 +254,18 @@ The Go-owned `vcpe diagnose` command SHALL support `--to webhook` with required 
 #### Scenario: Webhook help documents safety
 - **WHEN** an operator runs `vcpe diagnose --help`
 - **THEN** help text documents passive webhook diagnosis, explicit active consent, required active inputs, examples, and the fact that active mode generates diagnostic callback traffic
+
+### Requirement: Active callback journey CLI invocation
+The `vcpe diagnose` command SHALL support `--to callback` for the `cpe-webpa-callback` journey. This invocation SHALL require `--name`, `--from`, `--client-service`, `--subscriber`, `--event`, `--device-id`, and `--allow-active-event`; it SHALL accept `--replica`, `--subscriber-replica`, and `--json` where valid. The command SHALL reject missing, malformed, cross-journey, or incompatible flags before state access, diagnostic HTTP requests, or active event generation.
+
+#### Scenario: Valid callback journey is dispatched
+- **WHEN** an operator supplies all required callback journey flags for a supported deployment and source
+- **THEN** the Go operator dispatches the bounded active journey through persisted loopback diagnostic endpoints
+
+#### Scenario: Callback journey rejects unsafe incomplete invocation
+- **WHEN** an operator omits active-event consent or a required client, subscriber, event, or device selection
+- **THEN** the command exits non-zero with an actionable flag error before performing active work
+
+#### Scenario: Help distinguishes active traffic
+- **WHEN** an operator runs `vcpe diagnose --help`
+- **THEN** the structured help identifies callback-journey required flags and states that it generates one bounded diagnostic event only after explicit consent
