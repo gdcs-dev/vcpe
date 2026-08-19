@@ -98,14 +98,14 @@ var commandHelp = map[string]CommandHelp{
 		},
 	},
 	"diagnose": {
-		Synopsis:    "Diagnose CPE-to-WebPA, webhook, or callback delivery paths",
-		Description: "Shows a bounded diagnostic graph and its first confirmed failure through persisted loopback endpoints. Use --to webpa with --client-service for CPE diagnostics, --to webhook for registration inspection, or --to callback for one bounded CPE-to-subscriber event after explicit active-event consent.",
+		Synopsis:    "Diagnose CPE, Parodus, webhook, or callback delivery paths",
+		Description: "Shows a bounded diagnostic graph and its first confirmed failure through persisted loopback endpoints. Use --to webpa with --client-service for CPE diagnostics, --to parodus to list registered clients, --to webhook for registration inspection, or --to callback for one bounded CPE-to-subscriber event after explicit active-event consent.",
 		RequiredFlags: []FlagHelp{
 			{Name: "--from", Arg: "<service>", Description: "Source service name"},
-			{Name: "--to", Arg: "<webpa|webhook|callback>", Description: "Diagnostic target journey"},
+			{Name: "--to", Arg: "<webpa|webhook|callback|parodus>", Description: "Diagnostic target journey"},
 		},
 		OptionalFlags: []FlagHelp{
-			{Name: "--name", Arg: "<deployment>", Description: "Deployment containing the source and WebPA services; optional when exactly one deployment is active"},
+			{Name: "--name", Arg: "<deployment>", Description: "Deployment containing the source and required participants; optional when exactly one deployment is active"},
 			{Name: "--client-service", Arg: "<name>", Description: "Required for --to webpa and --to callback; receive-enabled libparodus service"},
 			{Name: "--subscriber", Arg: "<service>", Description: "Required for --to callback; selected event-sink subscriber"},
 			{Name: "--allow-active-callback", Description: "Generate one direct callback and one synthetic Caduceus event for --to webhook"},
@@ -119,9 +119,10 @@ var commandHelp = map[string]CommandHelp{
 		},
 		Examples: []string{
 			"vcpe diagnose --from gateway --to webpa --client-service apparmor-simulator",
+			"vcpe diagnose --name example --from gateway --to parodus",
 			"vcpe diagnose --name example --from event-sink --to webhook",
-			"vcpe diagnose --name example --from event-sink --to webhook --allow-active-callback --event devices/diagnostic --device-id mac:001122334455",
-			"vcpe diagnose --name example --from gateway --to callback --client-service apparmor-simulator --subscriber event-sink --allow-active-event --event devices/diagnostic --device-id mac:001122334455",
+			"vcpe diagnose --name example --from event-sink --to webhook --allow-active-callback --event devices/diagnostic --device-id mac:02f9491df122",
+			"vcpe diagnose --name example --from gateway --to callback --client-service apparmor-simulator --subscriber event-sink --allow-active-event --event devices/diagnostic --device-id mac:02f9491df122",
 		},
 	},
 	"logs": {

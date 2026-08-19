@@ -43,7 +43,7 @@ func NewCPECallbackProbeFromEnvironment(timeout time.Duration) CPECallbackProbe 
 
 func newCPEUnixEmitter(socketPath string) func(context.Context, CPEActiveEventRequest) error {
 	return func(ctx context.Context, request CPEActiveEventRequest) error {
-		if err := validateID("client service", request.ClientService); err != nil {
+		if err := validateClientService(request.ClientService); err != nil {
 			return err
 		}
 		if err := validateInvocationText("event", request.Event, eventDestinationPattern); err != nil {

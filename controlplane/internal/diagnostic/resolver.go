@@ -53,8 +53,10 @@ func Resolve(store *persist.Store, registry *Registry, request ResolveRequest) (
 		journey = JourneyWebhook
 	case "callback":
 		journey = JourneyCPEWebPACallback
+	case "parodus":
+		journey = JourneyParodusClients
 	default:
-		return Selection{}, fmt.Errorf("unsupported diagnostic target %q: expected webpa, webhook, or callback", request.Target)
+		return Selection{}, fmt.Errorf("unsupported diagnostic target %q: expected webpa, webhook, callback, or parodus", request.Target)
 	}
 	raw, ok, err := store.LatestDesiredSnapshot(request.Deployment)
 	if err != nil {
@@ -85,20 +87,24 @@ func Resolve(store *persist.Store, registry *Registry, request ResolveRequest) (
 	if source == nil {
 		return Selection{}, fmt.Errorf("deployment %q has no source service %q", request.Deployment, request.Source)
 	}
-	if len(targets) == 0 {
-		return Selection{}, fmt.Errorf("deployment %q has no service of type webpa", request.Deployment)
-	}
-	if len(targets) > 1 {
-		names := make([]string, len(targets))
-		for index := range targets {
-			names[index] = targets[index].Name
+	target := plan.Service{Name: "parodus", Type: "parodus"}
+	if journey != JourneyParodusClients {
+		if len(targets) == 0 {
+			return Selection{}, fmt.Errorf("deployment %q has no service of type webpa", request.Deployment)
 		}
-		return Selection{}, fmt.Errorf("deployment %q has ambiguous webpa targets %v", request.Deployment, names)
+		if len(targets) > 1 {
+			names := make([]string, len(targets))
+			for index := range targets {
+				names[index] = targets[index].Name
+			}
+			return Selection{}, fmt.Errorf("deployment %q has ambiguous webpa targets %v", request.Deployment, names)
+		}
+		target = targets[0]
+		if (journey == JourneyWebhook || journey == JourneyCPEWebPACallback) && len(target.Instances) != 1 {
+			return Selection{}, fmt.Errorf("webpa service %q has %d replicas: exactly one WebPA participant is required", target.Name, len(target.Instances))
+		}
 	}
-	if (journey == JourneyWebhook || journey == JourneyCPEWebPACallback) && len(targets[0].Instances) != 1 {
-		return Selection{}, fmt.Errorf("webpa service %q has %d replicas: exactly one WebPA participant is required", targets[0].Name, len(targets[0].Instances))
-	}
-	provider, ok := registry.Lookup(journey, source.Type, targets[0].Type)
+	provider, ok := registry.Lookup(journey, source.Type, target.Type)
 	if !ok {
 		return Selection{}, fmt.Errorf("source service %q has unsupported type %q for %s", source.Name, source.Type, journey)
 	}
@@ -165,13 +171,13 @@ func Resolve(store *persist.Store, registry *Registry, request ResolveRequest) (
 		var found *persist.HealthEndpoint
 		for index := range endpoints {
 			candidate := &endpoints[index]
-			if candidate.Service == targets[0].Name && candidate.Replica == 0 {
+			if candidate.Service == target.Name && candidate.Replica == 0 {
 				found = candidate
 				break
 			}
 		}
 		if found == nil {
-			return Selection{}, fmt.Errorf("webpa service %q replica 0 has no persisted loopback endpoint", targets[0].Name)
+			return Selection{}, fmt.Errorf("webpa service %q replica 0 has no persisted loopback endpoint", target.Name)
 		}
 		targetEndpoint = *found
 	}
@@ -190,7 +196,7 @@ func Resolve(store *persist.Store, registry *Registry, request ResolveRequest) (
 		}
 		subscriberEndpoint = *found
 	}
-	selection := Selection{Provider: provider, Deployment: resolved, Source: *source, Instance: source.Instances[replica], Target: targets[0], Endpoint: *endpoint, TargetEndpoint: targetEndpoint}
+	selection := Selection{Provider: provider, Deployment: resolved, Source: *source, Instance: source.Instances[replica], Target: target, Endpoint: *endpoint, TargetEndpoint: targetEndpoint}
 	if subscriber != nil {
 		selection.Subscriber = *subscriber
 		selection.SubscriberInstance = subscriber.Instances[subscriberReplica]

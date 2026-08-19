@@ -84,3 +84,24 @@ func TestSanitizeRejectsExcessiveGraph(t *testing.T) {
 		t.Fatalf("expected structural limit error, got %v", err)
 	}
 }
+
+func TestSanitizeCopiesParodusClientList(t *testing.T) {
+	clients := []string{"apparmor-simulator"}
+	truncated := false
+	result := validResult()
+	result.Journey = JourneyParodusClients
+	result.Target = EndpointIdentity{Deployment: "edge", Service: "parodus", Type: "parodus", Replica: 0}
+	result.Nodes = []Node{{ID: "gateway", Label: "Gateway", Kind: "service"}, {ID: "parodus", Label: "Parodus", Kind: "service"}}
+	result.Edges = []Edge{{ID: "parodus-client-list", From: "gateway", To: "parodus", Label: "list registered clients", BlocksFollowing: true}}
+	result.Observations = []Observation{{EdgeID: "parodus-client-list", State: StatePassed, ObservedAt: result.ObservedAt}}
+	result.ParodusClients = &clients
+	result.ParodusClientsTruncated = &truncated
+	clean, err := Sanitize(result)
+	if err != nil {
+		t.Fatalf("Sanitize: %v", err)
+	}
+	clients[0] = "changed"
+	if clean.ParodusClients == nil || (*clean.ParodusClients)[0] != "apparmor-simulator" || clean.ParodusClientsTruncated == nil || *clean.ParodusClientsTruncated {
+		t.Fatalf("clean result = %+v", clean)
+	}
+}

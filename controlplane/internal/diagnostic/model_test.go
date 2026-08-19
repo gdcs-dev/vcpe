@@ -36,6 +36,55 @@ func TestResultValidate(t *testing.T) {
 	}
 }
 
+func TestResultValidateParodusClientList(t *testing.T) {
+	clients := []string{"apparmor-simulator", "config"}
+	truncated := false
+	result := validResult()
+	result.Journey = JourneyParodusClients
+	result.Target = EndpointIdentity{Deployment: "edge", Service: "parodus", Type: "parodus", Replica: 0}
+	result.Nodes = []Node{
+		{ID: "gateway", Label: "Gateway", Kind: "service"},
+		{ID: "parodus", Label: "Parodus", Kind: "service"},
+	}
+	result.Edges = []Edge{{ID: "parodus-client-list", From: "gateway", To: "parodus", Label: "list registered clients", BlocksFollowing: true}}
+	result.Observations = []Observation{{EdgeID: "parodus-client-list", State: StatePassed, ObservedAt: result.ObservedAt}}
+	result.ParodusClients = &clients
+	result.ParodusClientsTruncated = &truncated
+	if err := result.Validate(); err != nil {
+		t.Fatalf("valid Parodus client list rejected: %v", err)
+	}
+
+	tests := []struct {
+		name   string
+		mutate func(*Result)
+		want   string
+	}{
+		{name: "missing clients", mutate: func(value *Result) { value.ParodusClients = nil }, want: "present together"},
+		{name: "missing truncation", mutate: func(value *Result) { value.ParodusClientsTruncated = nil }, want: "present together"},
+		{name: "unsorted", mutate: func(value *Result) {
+			values := []string{"config", "apparmor-simulator"}
+			value.ParodusClients = &values
+		}, want: "sorted"},
+		{name: "invalid client", mutate: func(value *Result) { values := []string{"invalid client"}; value.ParodusClients = &values }, want: "stable identifier"},
+		{name: "too many clients", mutate: func(value *Result) {
+			values := make([]string, MaxParodusClients+1)
+			for index := range values {
+				values[index] = "client" + string(rune('a'+index))
+			}
+			value.ParodusClients = &values
+		}, want: "maximum"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			candidate := result
+			test.mutate(&candidate)
+			if err := candidate.Validate(); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("Validate() error = %v, want containing %q", err, test.want)
+			}
+		})
+	}
+}
+
 func TestResultValidateRejectsBrokenInvariants(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -92,9 +141,12 @@ func TestInvocationValidateFor(t *testing.T) {
 		wantErr    string
 	}{
 		{name: "cpe webpa", journey: JourneyCPEWebPA, invocation: Invocation{ClientService: "apparmor-simulator"}},
+		{name: "cpe webpa preserves case-sensitive client service", journey: JourneyCPEWebPA, invocation: Invocation{ClientService: "HermesFS"}},
 		{name: "webhook passive", journey: JourneyWebhook, invocation: Invocation{}},
 		{name: "webhook active", journey: JourneyWebhook, invocation: Invocation{AllowActiveCallback: true, Event: "apparmor/diagnostic", DeviceID: "mac:001122334455"}},
 		{name: "callback active", journey: JourneyCPEWebPACallback, invocation: Invocation{ClientService: "apparmor-simulator", Subscriber: "event-sink", AllowActiveEvent: true, Event: "apparmor/diagnostic", DeviceID: "mac:001122334455", CorrelationID: strings.Repeat("a", 64)}},
+		{name: "callback active preserves case-sensitive client service", journey: JourneyCPEWebPACallback, invocation: Invocation{ClientService: "HermesFS", Subscriber: "event-sink", AllowActiveEvent: true, Event: "apparmor/diagnostic", DeviceID: "mac:001122334455", CorrelationID: strings.Repeat("a", 64)}},
+		{name: "Parodus clients", journey: JourneyParodusClients, invocation: Invocation{}},
 		{name: "webhook rejects client service", journey: JourneyWebhook, invocation: Invocation{ClientService: "config"}, wantErr: "client service"},
 		{name: "cpe rejects webhook field", journey: JourneyCPEWebPA, invocation: Invocation{ClientService: "config", AllowActiveCallback: true}, wantErr: "webhook invocation fields"},
 		{name: "callback requires consent", journey: JourneyCPEWebPACallback, invocation: Invocation{ClientService: "apparmor-simulator", Subscriber: "event-sink", Event: "apparmor/diagnostic", DeviceID: "mac:001122334455", CorrelationID: strings.Repeat("a", 64)}, wantErr: "active event consent"},
@@ -105,6 +157,7 @@ func TestInvocationValidateFor(t *testing.T) {
 		{name: "active requires device identity", journey: JourneyWebhook, invocation: Invocation{AllowActiveCallback: true, Event: "apparmor/diagnostic"}, wantErr: "device identity"},
 		{name: "invalid event", journey: JourneyWebhook, invocation: Invocation{AllowActiveCallback: true, Event: "event:apparmor", DeviceID: "mac:001122334455"}, wantErr: "event"},
 		{name: "invalid device identity", journey: JourneyWebhook, invocation: Invocation{AllowActiveCallback: true, Event: "apparmor/diagnostic", DeviceID: "001122334455"}, wantErr: "device identity"},
+		{name: "Parodus clients rejects client service", journey: JourneyParodusClients, invocation: Invocation{ClientService: "config"}, wantErr: "does not accept"},
 		{name: "unknown journey", journey: "other", wantErr: "unsupported diagnostic journey"},
 	}
 	for _, test := range tests {

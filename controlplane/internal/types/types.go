@@ -27,6 +27,7 @@ func Register() {
 	gateway.Register()
 	diagnostic.Register(diagnostic.NewCPEWebPAProvider("gateway"))
 	diagnostic.Register(diagnostic.NewCPEWebPACallbackProvider())
+	diagnostic.Register(diagnostic.NewParodusClientsProvider())
 	oktopus.Register()
 	webpa.Register()
 	xb10.Register()

@@ -182,6 +182,33 @@ func (probe CPEWebPAProbe) RunWithInvocation(parent context.Context, invocation 
 	return probe.finish(edges, observations, now)
 }
 
+// RunParodusClients retrieves the bounded list of receive-enabled clients from
+// the source-owned Parodus instance without requiring a WebPA target.
+func (probe CPEWebPAProbe) RunParodusClients(parent context.Context, invocation Invocation) EndpointResponse {
+	probe.defaults()
+	now := probe.Now()
+	response := EndpointResponse{
+		SchemaVersion: SchemaVersion,
+		Journey:       JourneyParodusClients,
+		ObservedAt:    now,
+	}
+	if err := invocation.ValidateFor(JourneyParodusClients); err != nil {
+		response.Observations = []Observation{{EdgeID: "parodus-client-list", State: StateUnknown, ReasonID: "parodus-client-list-invalid", RemediationID: "check-diagnostic-request", Message: "Parodus client-list request is invalid", ObservedAt: now}}
+		return response
+	}
+	if state := probe.ServiceState(parent); state != "active" {
+		response.Observations = []Observation{{EdgeID: "parodus-client-list", State: StateUnknown, ReasonID: "parodus-inactive", RemediationID: "start-parodus", Message: "Parodus is not active", Evidence: []Evidence{{Key: "service-state", Value: state}}, ObservedAt: now}}
+		return response
+	}
+	clients, truncated, observation := probe.observeParodusClients(parent, now)
+	response.Observations = []Observation{observation}
+	if observation.State == StatePassed {
+		response.ParodusClients = &clients
+		response.ParodusClientsTruncated = &truncated
+	}
+	return response
+}
+
 func (probe *CPEWebPAProbe) defaults() {
 	if probe.Timeout <= 0 {
 		probe.Timeout = 2 * time.Second

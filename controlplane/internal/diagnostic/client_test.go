@@ -45,11 +45,25 @@ func TestClientDiscoveryAndRun(t *testing.T) {
 }
 
 func TestClientRejectsInvalidClientService(t *testing.T) {
-	for _, clientService := range []string{"", "../config"} {
+	for _, clientService := range []string{"", "../config", "Hermes FS"} {
 		_, err := NewClient(time.Second).Run(context.Background(), Target{Host: "127.0.0.1", Port: 47000}, JourneyCPEWebPA, Invocation{ClientService: clientService})
 		if err == nil || !strings.Contains(err.Error(), "stable identifier") {
 			t.Fatalf("Run(%q) error = %v", clientService, err)
 		}
+	}
+}
+
+func TestClientPreservesCaseSensitiveClientService(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		var invocation Invocation
+		if err := json.NewDecoder(request.Body).Decode(&invocation); err != nil || invocation.ClientService != "HermesFS" {
+			t.Fatalf("invocation = %+v, error = %v", invocation, err)
+		}
+		_ = json.NewEncoder(writer).Encode(EndpointResponse{SchemaVersion: SchemaVersion, Journey: JourneyCPEWebPA, ObservedAt: time.Now().UTC(), Observations: []Observation{{EdgeID: "application-parodus", State: StateUnknown, ObservedAt: time.Now().UTC()}}})
+	}))
+	defer server.Close()
+	if _, err := NewClient(time.Second).Run(context.Background(), testTarget(t, server.URL), JourneyCPEWebPA, Invocation{ClientService: "HermesFS"}); err != nil {
+		t.Fatalf("Run() error = %v", err)
 	}
 }
 

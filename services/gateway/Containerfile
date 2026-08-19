@@ -7,7 +7,7 @@ RUN echo "deb [trusted=yes] https://gdcs-dev.github.io/debian stable main" | tee
 
 RUN apt-get update && \
    DEBIAN_FRONTEND=noninteractive apt-get -y install \
-   rbus parodus libparodus-dev librbus-dev libwrp-c-dev libnanomsg-dev libcimplog-dev && \
+   rbus parodus libparodus-dev librbus-dev wrp-c-dev libnanomsg-dev libcimplog-dev && \
    rm -rf /var/lib/apt/lists/*
 
 COPY src/apparmor-simulator /opt/vcpe/apparmor-simulator

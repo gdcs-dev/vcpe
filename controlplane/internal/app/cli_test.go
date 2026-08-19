@@ -25,16 +25,17 @@ func tempManifest(t *testing.T) string {
 func TestParsePublicCommands(t *testing.T) {
 	m := tempManifest(t)
 	cases := map[string][]string{
-		"init":     {"init"},
-		"build":    {"build", "--manifest", m},
-		"up":       {"up", "--manifest", m},
-		"apply":    {"apply", "--manifest", m},
-		"plan":     {"plan", "--manifest", m},
-		"status":   {"status"},
-		"diagnose": {"diagnose", "--name", "edge", "--from", "gateway", "--to", "webpa", "--client-service", "config"},
-		"logs":     {"logs"},
-		"config":   {"config", "show"},
-		"state":    {"state", "reset"},
+		"init":             {"init"},
+		"build":            {"build", "--manifest", m},
+		"up":               {"up", "--manifest", m},
+		"apply":            {"apply", "--manifest", m},
+		"plan":             {"plan", "--manifest", m},
+		"status":           {"status"},
+		"diagnose":         {"diagnose", "--name", "edge", "--from", "gateway", "--to", "webpa", "--client-service", "config"},
+		"diagnose parodus": {"diagnose", "--name", "edge", "--from", "gateway", "--to", "parodus"},
+		"logs":             {"logs"},
+		"config":           {"config", "show"},
+		"state":            {"state", "reset"},
 	}
 	for command, args := range cases {
 		t.Run(command, func(t *testing.T) {
@@ -42,8 +43,8 @@ func TestParsePublicCommands(t *testing.T) {
 			if err != nil {
 				t.Fatalf("parse %s: %v", command, err)
 			}
-			if opts.Command != command {
-				t.Fatalf("expected command %q, got %q", command, opts.Command)
+			if opts.Command != args[0] {
+				t.Fatalf("expected command %q, got %q", args[0], opts.Command)
 			}
 		})
 	}
@@ -56,6 +57,33 @@ func TestParseDiagnose(t *testing.T) {
 	}
 	if opts.Name != "edge" || opts.From != "gateway" || opts.To != "webpa" || opts.ClientService != "config" || opts.Replica == nil || *opts.Replica != 1 || !opts.OutputJSON {
 		t.Fatalf("options = %+v", opts)
+	}
+}
+
+func TestParseParodusDiagnose(t *testing.T) {
+	for _, testCase := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{name: "valid", args: []string{"diagnose", "--name", "edge", "--from", "gateway", "--to", "parodus", "--replica", "1"}},
+		{name: "client service", args: []string{"diagnose", "--name", "edge", "--from", "gateway", "--to", "parodus", "--client-service", "config"}, want: "does not accept"},
+		{name: "subscriber", args: []string{"diagnose", "--name", "edge", "--from", "gateway", "--to", "parodus", "--subscriber", "event-sink"}, want: "does not accept"},
+		{name: "active event", args: []string{"diagnose", "--name", "edge", "--from", "gateway", "--to", "parodus", "--allow-active-event"}, want: "does not accept"},
+		{name: "subscriber replica", args: []string{"diagnose", "--name", "edge", "--from", "gateway", "--to", "parodus", "--subscriber-replica", "1"}, want: "only for --to callback"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			opts, err := parseArgs("vcpe", testCase.args)
+			if testCase.want != "" {
+				if err == nil || !strings.Contains(err.Error(), testCase.want) {
+					t.Fatalf("parse error = %v, want %q", err, testCase.want)
+				}
+				return
+			}
+			if err != nil || opts.To != "parodus" || opts.Replica == nil || *opts.Replica != 1 {
+				t.Fatalf("options = %+v, error = %v", opts, err)
+			}
+		})
 	}
 }
 

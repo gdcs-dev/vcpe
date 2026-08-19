@@ -196,6 +196,36 @@ func (provider cpeWebPAProvider) Expected(input ExpectedInput) (ExpectedGraph, e
 	}, nil
 }
 
+type parodusClientsProvider struct{}
+
+// NewParodusClientsProvider creates the Gateway-only source-local client-list journey.
+func NewParodusClientsProvider() Provider { return parodusClientsProvider{} }
+
+func (parodusClientsProvider) Journey() string    { return JourneyParodusClients }
+func (parodusClientsProvider) SourceType() string { return "gateway" }
+func (parodusClientsProvider) TargetType() string { return "parodus" }
+
+func (provider parodusClientsProvider) Expected(input ExpectedInput) (ExpectedGraph, error) {
+	if input.Source.Type != provider.SourceType() || input.Target.Type != provider.TargetType() {
+		return ExpectedGraph{}, fmt.Errorf("provider %s does not support %s to %s", provider.SourceType(), input.Source.Type, input.Target.Type)
+	}
+	return ExpectedGraph{
+		Journey: JourneyParodusClients,
+		Source:  EndpointIdentity{Deployment: input.Deployment.Name, Service: input.Source.Name, Type: input.Source.Type, Replica: input.Instance.Index},
+		Target:  EndpointIdentity{Deployment: input.Deployment.Name, Service: input.Target.Name, Type: input.Target.Type, Replica: 0},
+		Metadata: []Evidence{
+			{Key: "parodus-endpoint", Value: "tcp://127.0.0.1:6666"},
+		},
+		Nodes: []Node{
+			{ID: "gateway", Label: input.Source.Name, Kind: "service"},
+			{ID: "parodus", Label: "Parodus", Kind: "service"},
+		},
+		Edges: []Edge{
+			{ID: "parodus-client-list", From: "gateway", To: "parodus", Label: "list registered clients", BlocksFollowing: true},
+		},
+	}, nil
+}
+
 type cpeWebPACallbackProvider struct{}
 
 // NewCPEWebPACallbackProvider creates the bounded Gateway-to-event-sink

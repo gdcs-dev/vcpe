@@ -13,6 +13,7 @@ func TestRegistryLookupAndOrdering(t *testing.T) {
 	registry.Register(NewCPEWebPAProvider("xb10"))
 	registry.Register(NewCPEWebPAProvider("gateway"))
 	registry.Register(NewCPEWebPACallbackProvider())
+	registry.Register(NewParodusClientsProvider())
 	registry.Register(NewWebhookProvider())
 	if _, ok := registry.Lookup(JourneyCPEWebPA, "gateway", "webpa"); !ok {
 		t.Fatal("gateway provider not found")
@@ -23,9 +24,28 @@ func TestRegistryLookupAndOrdering(t *testing.T) {
 	if _, ok := registry.Lookup(JourneyCPEWebPACallback, "gateway", "webpa"); !ok {
 		t.Fatal("callback provider not found")
 	}
-	want := []string{"cpe-webpa-callback/gateway/webpa", "cpe-webpa/gateway/webpa", "cpe-webpa/xb10/webpa", "webhook/event-sink/webpa"}
+	if _, ok := registry.Lookup(JourneyParodusClients, "gateway", "parodus"); !ok {
+		t.Fatal("Parodus client-list provider not found")
+	}
+	want := []string{"cpe-webpa-callback/gateway/webpa", "cpe-webpa/gateway/webpa", "cpe-webpa/xb10/webpa", "parodus-clients/gateway/parodus", "webhook/event-sink/webpa"}
 	if got := registry.Keys(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("keys = %#v, want %#v", got, want)
+	}
+}
+
+func TestParodusClientsProviderContract(t *testing.T) {
+	provider := NewParodusClientsProvider()
+	graph, err := provider.Expected(ExpectedInput{
+		Deployment: plan.Deployment{Name: "edge"},
+		Source:     plan.Service{Name: "gateway", Type: "gateway"},
+		Instance:   plan.Instance{Index: 0},
+		Target:     plan.Service{Name: "parodus", Type: "parodus"},
+	})
+	if err != nil {
+		t.Fatalf("Expected: %v", err)
+	}
+	if graph.Journey != JourneyParodusClients || graph.Target.Service != "parodus" || len(graph.Edges) != 1 || graph.Edges[0].ID != "parodus-client-list" {
+		t.Fatalf("graph = %+v", graph)
 	}
 }
 

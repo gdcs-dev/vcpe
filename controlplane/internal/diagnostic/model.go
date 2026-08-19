@@ -15,6 +15,7 @@ const (
 	CapabilitiesSchema       = "vcpe.dev/diagnostics/v1"
 	JourneyCPEWebPA          = "cpe-webpa"
 	JourneyCPEWebPACallback  = "cpe-webpa-callback"
+	JourneyParodusClients    = "parodus-clients"
 	JourneyWebhook           = "webhook"
 	JourneyWebhookSubscriber = "webhook-subscriber"
 	WebhookActiveDirect      = "direct"
@@ -23,6 +24,7 @@ const (
 	MaxEdges                 = 16
 	MaxEvidencePerEdge       = 8
 	MaxCapabilities          = 16
+	MaxParodusClients        = 64
 	MaxIDLength              = 64
 	MaxLabelLength           = 128
 	MaxMessageLength         = 256
@@ -40,6 +42,7 @@ const (
 
 var (
 	stableIDPattern         = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)
+	clientServicePattern    = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
 	eventDestinationPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._/-]*$`)
 	deviceIdentityPattern   = regexp.MustCompile(`^[a-z][a-z0-9_-]*:[a-z0-9][a-z0-9._-]*$`)
 	registrationIDPattern   = regexp.MustCompile(`^[a-f0-9]{64}$`)
@@ -99,16 +102,18 @@ type Observation struct {
 
 // Result is the complete CPE-to-WebPA diagnostic graph.
 type Result struct {
-	SchemaVersion string           `json:"schemaVersion"`
-	Journey       string           `json:"journey"`
-	Source        EndpointIdentity `json:"source"`
-	Target        EndpointIdentity `json:"target"`
-	Metadata      []Evidence       `json:"metadata,omitempty"`
-	Nodes         []Node           `json:"nodes"`
-	Edges         []Edge           `json:"edges"`
-	Observations  []Observation    `json:"observations"`
-	FirstFailure  string           `json:"firstFailure,omitempty"`
-	ObservedAt    time.Time        `json:"observedAt"`
+	SchemaVersion           string           `json:"schemaVersion"`
+	Journey                 string           `json:"journey"`
+	Source                  EndpointIdentity `json:"source"`
+	Target                  EndpointIdentity `json:"target"`
+	Metadata                []Evidence       `json:"metadata,omitempty"`
+	Nodes                   []Node           `json:"nodes"`
+	Edges                   []Edge           `json:"edges"`
+	Observations            []Observation    `json:"observations"`
+	ParodusClients          *[]string        `json:"parodusClients,omitempty"`
+	ParodusClientsTruncated *bool            `json:"parodusClientsTruncated,omitempty"`
+	FirstFailure            string           `json:"firstFailure,omitempty"`
+	ObservedAt              time.Time        `json:"observedAt"`
 }
 
 // Capabilities is the passive response returned by GET /diagnostics.
@@ -120,12 +125,14 @@ type Capabilities struct {
 // EndpointResponse is the bounded source-local response returned by an active
 // diagnostic route before the control plane merges expected graph metadata.
 type EndpointResponse struct {
-	SchemaVersion string                `json:"schemaVersion"`
-	Journey       string                `json:"journey"`
-	Observations  []Observation         `json:"observations"`
-	Active        *WebhookActiveResult  `json:"active,omitempty"`
-	ActiveEvent   *CPEActiveEventResult `json:"activeEvent,omitempty"`
-	ObservedAt    time.Time             `json:"observedAt"`
+	SchemaVersion           string                `json:"schemaVersion"`
+	Journey                 string                `json:"journey"`
+	Observations            []Observation         `json:"observations"`
+	ParodusClients          *[]string             `json:"parodusClients,omitempty"`
+	ParodusClientsTruncated *bool                 `json:"parodusClientsTruncated,omitempty"`
+	Active                  *WebhookActiveResult  `json:"active,omitempty"`
+	ActiveEvent             *CPEActiveEventResult `json:"activeEvent,omitempty"`
+	ObservedAt              time.Time             `json:"observedAt"`
 }
 
 // Invocation contains the bounded caller-selectable inputs for active journeys.
@@ -197,7 +204,7 @@ func (invocation Invocation) ValidateFor(journey string) error {
 		if invocation.Subscriber != "" || invocation.AllowActiveCallback || invocation.AllowActiveEvent || invocation.Event != "" || invocation.DeviceID != "" || invocation.CorrelationID != "" || invocation.SubscriberIntent != nil || invocation.ActivePhase != "" {
 			return fmt.Errorf("webhook invocation fields are valid only for journey %q", JourneyWebhook)
 		}
-		return validateID("client service", invocation.ClientService)
+		return validateClientService(invocation.ClientService)
 	case JourneyWebhook:
 		if invocation.ClientService != "" || invocation.Subscriber != "" || invocation.AllowActiveEvent || invocation.CorrelationID != "" {
 			return fmt.Errorf("client service is valid only for journey %q", JourneyCPEWebPA)
@@ -233,7 +240,7 @@ func (invocation Invocation) ValidateFor(journey string) error {
 		if !invocation.AllowActiveEvent {
 			return fmt.Errorf("active event consent is required")
 		}
-		if err := validateID("client service", invocation.ClientService); err != nil {
+		if err := validateClientService(invocation.ClientService); err != nil {
 			return err
 		}
 		if err := validateID("subscriber", invocation.Subscriber); err != nil {
@@ -247,6 +254,11 @@ func (invocation Invocation) ValidateFor(journey string) error {
 		}
 		if err := validateCorrelationID(invocation.CorrelationID); err != nil {
 			return err
+		}
+		return nil
+	case JourneyParodusClients:
+		if invocation.ClientService != "" || invocation.Subscriber != "" || invocation.AllowActiveCallback || invocation.AllowActiveEvent || invocation.Event != "" || invocation.DeviceID != "" || invocation.CorrelationID != "" || invocation.SubscriberIntent != nil || invocation.ActivePhase != "" {
+			return fmt.Errorf("Parodus enumeration does not accept invocation fields")
 		}
 		return nil
 	default:
@@ -268,6 +280,9 @@ func (r Result) Validate() error {
 		return err
 	}
 	if err := r.Target.validate("target"); err != nil {
+		return err
+	}
+	if err := validateParodusClientList(r.Journey, r.ParodusClients, r.ParodusClientsTruncated); err != nil {
 		return err
 	}
 	if r.ObservedAt.IsZero() {
@@ -403,6 +418,9 @@ func (r EndpointResponse) Validate() error {
 	if !resultJourney(r.Journey) {
 		return fmt.Errorf("unsupported diagnostic journey %q", r.Journey)
 	}
+	if err := validateParodusClientList(r.Journey, r.ParodusClients, r.ParodusClientsTruncated); err != nil {
+		return err
+	}
 	if r.Active != nil {
 		if r.Journey != JourneyWebhook {
 			return fmt.Errorf("active result is valid only for journey %q", JourneyWebhook)
@@ -512,6 +530,40 @@ func validateID(name, value string) error {
 	return nil
 }
 
+func validateClientService(value string) error {
+	if len(value) == 0 || len(value) > MaxIDLength || !clientServicePattern.MatchString(value) {
+		return fmt.Errorf("client service %q is not a stable identifier", value)
+	}
+	return nil
+}
+
+func validateParodusClientList(journey string, clients *[]string, truncated *bool) error {
+	if journey != JourneyParodusClients {
+		if clients != nil || truncated != nil {
+			return fmt.Errorf("Parodus client list is valid only for journey %q", JourneyParodusClients)
+		}
+		return nil
+	}
+	if clients == nil && truncated == nil {
+		return nil
+	}
+	if clients == nil || truncated == nil {
+		return fmt.Errorf("Parodus client list and truncation state must be present together")
+	}
+	if len(*clients) > MaxParodusClients {
+		return fmt.Errorf("Parodus client list has %d entries: maximum is %d", len(*clients), MaxParodusClients)
+	}
+	for index, client := range *clients {
+		if err := validateClientService(client); err != nil {
+			return fmt.Errorf("Parodus client %d: %w", index, err)
+		}
+		if index > 0 && (*clients)[index-1] > client {
+			return fmt.Errorf("Parodus client list must be sorted")
+		}
+	}
+	return nil
+}
+
 func validateCorrelationID(value string) error {
 	if len(value) != MaxCorrelationIDLength || !registrationIDPattern.MatchString(value) {
 		return fmt.Errorf("correlation ID is invalid")
@@ -520,7 +572,7 @@ func validateCorrelationID(value string) error {
 }
 
 func resultJourney(journey string) bool {
-	return journey == JourneyCPEWebPA || journey == JourneyCPEWebPACallback || journey == JourneyWebhook
+	return journey == JourneyCPEWebPA || journey == JourneyCPEWebPACallback || journey == JourneyParodusClients || journey == JourneyWebhook
 }
 
 func validateOptionalID(name, value string) error {

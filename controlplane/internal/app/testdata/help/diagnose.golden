@@ -1,13 +1,13 @@
-Usage: vcpe diagnose --from <service> --to <webpa|webhook|callback> [flags]
+Usage: vcpe diagnose --from <service> --to <webpa|webhook|callback|parodus> [flags]
 
-Shows a bounded diagnostic graph and its first confirmed failure through persisted loopback endpoints. Use --to webpa with --client-service for CPE diagnostics, --to webhook for registration inspection, or --to callback for one bounded CPE-to-subscriber event after explicit active-event consent.
+Shows a bounded diagnostic graph and its first confirmed failure through persisted loopback endpoints. Use --to webpa with --client-service for CPE diagnostics, --to parodus to list registered clients, --to webhook for registration inspection, or --to callback for one bounded CPE-to-subscriber event after explicit active-event consent.
 
 Required flags:
   --from <service>        Source service name
-  --to <webpa|webhook|callback>  Diagnostic target journey
+  --to <webpa|webhook|callback|parodus>  Diagnostic target journey
 
 Optional flags:
-  --name <deployment>     Deployment containing the source and WebPA services; optional when exactly one deployment is active
+  --name <deployment>     Deployment containing the source and required participants; optional when exactly one deployment is active
   --client-service <name>  Required for --to webpa and --to callback; receive-enabled libparodus service
   --subscriber <service>  Required for --to callback; selected event-sink subscriber
   --allow-active-callback  Generate one direct callback and one synthetic Caduceus event for --to webhook
@@ -21,6 +21,7 @@ Optional flags:
 
 Examples:
   vcpe diagnose --from gateway --to webpa --client-service apparmor-simulator
+  vcpe diagnose --name example --from gateway --to parodus
   vcpe diagnose --name example --from event-sink --to webhook
   vcpe diagnose --name example --from event-sink --to webhook --allow-active-callback --event devices/diagnostic --device-id mac:001122334455
   vcpe diagnose --name example --from gateway --to callback --client-service apparmor-simulator --subscriber event-sink --allow-active-event --event devices/diagnostic --device-id mac:001122334455

@@ -182,7 +182,7 @@ func TestCPEWebPAProbeInvocationOverridesDefaultClient(t *testing.T) {
 		if err := json.NewDecoder(request.Body).Decode(&message); err != nil {
 			t.Fatal(err)
 		}
-		if message.Destination != "mac:001122334455/parodus/service-status/config" {
+		if message.Destination != "mac:001122334455/parodus/service-status/HermesFS" {
 			t.Fatalf("destination = %q", message.Destination)
 		}
 		message.Source, message.Destination = message.Destination, message.Source
@@ -193,9 +193,51 @@ func TestCPEWebPAProbeInvocationOverridesDefaultClient(t *testing.T) {
 		}
 		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(bytes.NewReader(encoded)), Header: http.Header{}}, nil
 	})}
-	response := probe.RunWithInvocation(context.Background(), Invocation{ClientService: "config"})
-	if response.Observations[0].State != StatePassed || response.Observations[0].Evidence[0].Value != "config" {
+	response := probe.RunWithInvocation(context.Background(), Invocation{ClientService: "HermesFS"})
+	if response.Observations[0].State != StatePassed || response.Observations[0].Evidence[0].Value != "HermesFS" {
 		t.Fatalf("application observation = %+v", response.Observations[0])
+	}
+}
+
+func TestCPEWebPAProbeListsParodusClients(t *testing.T) {
+	probe := baseCPEWebPAProbe(t, http.StatusOK, `{"devices":[]}`)
+	probe.HTTPClient = &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		return parodusClientListResponse(t, request, `{"client-list":["apparmor-simulator","config"],"truncated":false}`, false), nil
+	})}
+	response := probe.RunParodusClients(context.Background(), Invocation{})
+	if err := response.Validate(); err != nil {
+		t.Fatalf("response: %v", err)
+	}
+	if response.Observations[0].State != StatePassed || response.ParodusClients == nil || strings.Join(*response.ParodusClients, ",") != "apparmor-simulator,config" || response.ParodusClientsTruncated == nil || *response.ParodusClientsTruncated {
+		t.Fatalf("response = %+v", response)
+	}
+}
+
+func TestCPEWebPAProbeRejectsInvalidParodusClientList(t *testing.T) {
+	tests := []struct {
+		name     string
+		payload  string
+		mismatch bool
+		want     string
+	}{
+		{name: "unsorted", payload: `{"client-list":["config","apparmor-simulator"],"truncated":false}`, want: "parodus-client-list-invalid"},
+		{name: "missing truncation", payload: `{"client-list":[]}`, want: "parodus-client-list-invalid"},
+		{name: "mismatched response", payload: `{"client-list":[],"truncated":false}`, mismatch: true, want: "scytale-response-mismatch"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			probe := baseCPEWebPAProbe(t, http.StatusOK, `{"devices":[]}`)
+			probe.HTTPClient = &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+				return parodusClientListResponse(t, request, test.payload, test.mismatch), nil
+			})}
+			response := probe.RunParodusClients(context.Background(), Invocation{})
+			if err := response.Validate(); err != nil {
+				t.Fatalf("response: %v", err)
+			}
+			if response.Observations[0].State != StateUnknown || response.Observations[0].ReasonID != test.want || response.ParodusClients != nil || response.ParodusClientsTruncated != nil {
+				t.Fatalf("response = %+v", response)
+			}
+		})
 	}
 }
 
@@ -306,6 +348,33 @@ func scytaleResponse(t *testing.T, request *http.Request, status string) *http.R
 		Destination:     requestMessage.Source,
 		TransactionUUID: requestMessage.TransactionUUID,
 		Payload:         []byte(`{"service-status":"` + status + `"}`),
+	}
+	var encoded []byte
+	if err := wrp.NewEncoderBytes(&encoded, wrp.Msgpack).Encode(responseMessage); err != nil {
+		t.Fatalf("encode Scytale response: %v", err)
+	}
+	return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(bytes.NewReader(encoded)), ContentLength: int64(len(encoded)), Header: http.Header{"Content-Type": []string{wrpMsgpackContentType}}}
+}
+
+func parodusClientListResponse(t *testing.T, request *http.Request, payload string, mismatch bool) *http.Response {
+	t.Helper()
+	var requestMessage wrp.Message
+	if err := json.NewDecoder(request.Body).Decode(&requestMessage); err != nil {
+		t.Fatalf("decode Scytale request: %v", err)
+	}
+	if requestMessage.Type != wrp.RetrieveMessageType || requestMessage.Destination != "mac:001122334455/parodus/client-list" {
+		t.Fatalf("Scytale WRP request = %+v", requestMessage)
+	}
+	transactionID := requestMessage.TransactionUUID
+	if mismatch {
+		transactionID = "mismatched"
+	}
+	responseMessage := wrp.Message{
+		Type:            wrp.RetrieveMessageType,
+		Source:          requestMessage.Destination,
+		Destination:     requestMessage.Source,
+		TransactionUUID: transactionID,
+		Payload:         []byte(payload),
 	}
 	var encoded []byte
 	if err := wrp.NewEncoderBytes(&encoded, wrp.Msgpack).Encode(responseMessage); err != nil {

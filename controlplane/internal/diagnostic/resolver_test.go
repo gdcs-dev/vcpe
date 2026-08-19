@@ -26,6 +26,7 @@ func resolverRegistry() *Registry {
 	registry.Register(NewCPEWebPAProvider("gateway"))
 	registry.Register(NewCPEWebPAProvider("xb10"))
 	registry.Register(NewCPEWebPACallbackProvider())
+	registry.Register(NewParodusClientsProvider())
 	registry.Register(NewWebhookProvider())
 	return registry
 }
@@ -41,6 +42,21 @@ func TestResolveSingleReplicaAndEndpoint(t *testing.T) {
 		t.Fatalf("Resolve: %v", err)
 	}
 	if selection.Endpoint != endpoint || selection.Instance.Index != 0 || selection.Target.Name != "webpa" {
+		t.Fatalf("selection = %+v", selection)
+	}
+}
+
+func TestResolveParodusClientsWithoutWebPA(t *testing.T) {
+	store := resolverStore(t, "    - name: gateway\n      type: gateway\n      replicas: 1\n      interfaces: [{role: wan}]\n      image: {repository: gateway}\n")
+	endpoint, err := store.ReserveHealthEndpoint("edge", "gateway", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	selection, err := Resolve(store, resolverRegistry(), ResolveRequest{Deployment: "edge", Source: "gateway", Target: "parodus"})
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if selection.Provider.Journey() != JourneyParodusClients || selection.Endpoint != endpoint || selection.Target.Name != "parodus" || selection.Target.Type != "parodus" || selection.TargetEndpoint != (persist.HealthEndpoint{}) {
 		t.Fatalf("selection = %+v", selection)
 	}
 }

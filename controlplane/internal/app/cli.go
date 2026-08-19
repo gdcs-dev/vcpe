@@ -475,7 +475,7 @@ func validateCommandShape(opts *Options) error {
 		}
 	case "diagnose":
 		if opts.From == "" || opts.To == "" {
-			return fmt.Errorf("diagnose requires --from <service> and --to <webpa|webhook|callback>; run `vcpe diagnose --help` for usage")
+			return fmt.Errorf("diagnose requires --from <service> and --to <webpa|webhook|callback|parodus>; run `vcpe diagnose --help` for usage")
 		}
 		switch opts.To {
 		case "webpa":
@@ -504,8 +504,15 @@ func validateCommandShape(opts *Options) error {
 			if err := (diagnostic.Invocation{ClientService: opts.ClientService, Subscriber: opts.Subscriber, AllowActiveCallback: opts.AllowActiveCallback, AllowActiveEvent: opts.AllowActiveEvent, Event: opts.Event, DeviceID: opts.DeviceID, CorrelationID: strings.Repeat("0", diagnostic.MaxCorrelationIDLength)}).ValidateFor(diagnostic.JourneyCPEWebPACallback); err != nil {
 				return fmt.Errorf("invalid callback diagnose options: %w", err)
 			}
+		case "parodus":
+			if opts.SubscriberReplica != nil {
+				return fmt.Errorf("--subscriber-replica is valid only for --to callback")
+			}
+			if err := (diagnostic.Invocation{ClientService: opts.ClientService, Subscriber: opts.Subscriber, AllowActiveCallback: opts.AllowActiveCallback, AllowActiveEvent: opts.AllowActiveEvent, Event: opts.Event, DeviceID: opts.DeviceID}).ValidateFor(diagnostic.JourneyParodusClients); err != nil {
+				return fmt.Errorf("invalid Parodus diagnose options: %w", err)
+			}
 		default:
-			return fmt.Errorf("diagnose --to must be webpa, webhook, or callback")
+			return fmt.Errorf("diagnose --to must be webpa, webhook, callback, or parodus")
 		}
 	}
 	return nil

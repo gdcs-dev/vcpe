@@ -47,6 +47,14 @@ func Sanitize(result Result) (Result, error) {
 	clean.Nodes = append([]Node(nil), result.Nodes...)
 	clean.Edges = append([]Edge(nil), result.Edges...)
 	clean.Metadata = sanitizeEvidence(result.Metadata)
+	if result.ParodusClients != nil {
+		clients := append([]string(nil), (*result.ParodusClients)...)
+		clean.ParodusClients = &clients
+	}
+	if result.ParodusClientsTruncated != nil {
+		truncated := *result.ParodusClientsTruncated
+		clean.ParodusClientsTruncated = &truncated
+	}
 	clean.Observations = make([]Observation, len(result.Observations))
 	for index, observation := range result.Observations {
 		observation.Message = redact(truncate(observation.Message, MaxMessageLength))

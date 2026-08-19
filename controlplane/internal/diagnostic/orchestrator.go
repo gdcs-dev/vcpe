@@ -61,16 +61,18 @@ func Diagnose(ctx context.Context, store *persist.Store, registry *Registry, cli
 		observedAt = time.Now().UTC()
 	}
 	result := Result{
-		SchemaVersion: SchemaVersion,
-		Journey:       expected.Journey,
-		Source:        expected.Source,
-		Target:        expected.Target,
-		Metadata:      expected.Metadata,
-		Nodes:         expected.Nodes,
-		Edges:         expected.Edges,
-		Observations:  observations,
-		FirstFailure:  firstFailure,
-		ObservedAt:    observedAt,
+		SchemaVersion:           SchemaVersion,
+		Journey:                 expected.Journey,
+		Source:                  expected.Source,
+		Target:                  expected.Target,
+		Metadata:                expected.Metadata,
+		Nodes:                   expected.Nodes,
+		Edges:                   expected.Edges,
+		Observations:            observations,
+		ParodusClients:          endpointResponse.ParodusClients,
+		ParodusClientsTruncated: endpointResponse.ParodusClientsTruncated,
+		FirstFailure:            firstFailure,
+		ObservedAt:              observedAt,
 	}
 	return Sanitize(result)
 }

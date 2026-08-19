@@ -62,6 +62,32 @@ func TestRenderJSONUsesStableSchema(t *testing.T) {
 	}
 }
 
+func TestRenderParodusClientList(t *testing.T) {
+	clients := []string{"apparmor-simulator", "config"}
+	truncated := false
+	result := validResult()
+	result.Journey = JourneyParodusClients
+	result.Target = EndpointIdentity{Deployment: "edge", Service: "parodus", Type: "parodus", Replica: 0}
+	result.Nodes = []Node{{ID: "gateway", Label: "Gateway", Kind: "service"}, {ID: "parodus", Label: "Parodus", Kind: "service"}}
+	result.Edges = []Edge{{ID: "parodus-client-list", From: "gateway", To: "parodus", Label: "list registered clients", BlocksFollowing: true}}
+	result.Observations = []Observation{{EdgeID: "parodus-client-list", State: StatePassed, ObservedAt: result.ObservedAt}}
+	result.ParodusClients = &clients
+	result.ParodusClientsTruncated = &truncated
+	output, err := RenderASCII(result)
+	if err != nil {
+		t.Fatalf("RenderASCII: %v", err)
+	}
+	for _, content := range []string{"Parodus client enumeration: edge/gateway[0] -> parodus", "Registered clients:", "apparmor-simulator", "config", "Truncated: false"} {
+		if !strings.Contains(output, content) {
+			t.Errorf("output missing %q:\n%s", content, output)
+		}
+	}
+	jsonOutput, err := RenderJSON(result)
+	if err != nil || !strings.Contains(jsonOutput, `"parodusClients": [`) || !strings.Contains(jsonOutput, `"parodusClientsTruncated": false`) {
+		t.Fatalf("RenderJSON() = %q, %v", jsonOutput, err)
+	}
+}
+
 func TestRenderWebhookEvidence(t *testing.T) {
 	result := validResult()
 	result.Observations[0].State = StateFailed

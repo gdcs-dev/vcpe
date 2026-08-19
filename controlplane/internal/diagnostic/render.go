@@ -51,6 +51,17 @@ func RenderASCII(result Result) (string, error) {
 	} else {
 		output.WriteString("\nResult: passed\n")
 	}
+	if result.Journey == JourneyParodusClients && result.ParodusClients != nil && result.ParodusClientsTruncated != nil {
+		output.WriteString("\nRegistered clients:\n")
+		if len(*result.ParodusClients) == 0 {
+			output.WriteString("  (none)\n")
+		} else {
+			for _, client := range *result.ParodusClients {
+				fmt.Fprintf(&output, "  %s\n", client)
+			}
+		}
+		fmt.Fprintf(&output, "Truncated: %t\n", *result.ParodusClientsTruncated)
+	}
 	return strings.TrimRight(output.String(), "\n"), nil
 }
 
@@ -60,6 +71,9 @@ func asciiHeading(journey string) string {
 	}
 	if journey == JourneyWebhook {
 		return "Webhook diagnostic"
+	}
+	if journey == JourneyParodusClients {
+		return "Parodus client enumeration"
 	}
 	return "CPE to WebPA diagnostic"
 }
