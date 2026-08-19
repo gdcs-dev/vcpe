@@ -350,6 +350,19 @@ func TestDiagnoseCPECallbackExecutesOneCorrelatedEventAfterPrerequisites(t *test
 	}
 }
 
+func TestDiagnoseRejectsUnsupportedCallbackSourceBeforeHTTP(t *testing.T) {
+	store := resolverStore(t, "    - name: generic\n      type: generic-container\n      replicas: 1\n      interfaces: [{role: wan}]\n      image: {repository: generic}\n    - name: event-sink\n      type: event-sink\n      replicas: 1\n      interfaces: [{role: mgmt}]\n      image: {repository: event-sink}\n    - name: webpa\n      type: webpa\n      replicas: 1\n      image: {repository: webpa}\n")
+	requests := 0
+	client := &Client{HTTPClient: &http.Client{Transport: clientRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		requests++
+		return nil, fmt.Errorf("unexpected diagnostic request")
+	})}}
+	_, err := Diagnose(context.Background(), store, resolverRegistry(), client, ResolveRequest{Deployment: "edge", Source: "generic", Target: "callback", ClientService: "apparmor-simulator", Subscriber: "event-sink", AllowActiveEvent: true, Event: "devices/diagnostic", DeviceID: "mac:001122334455"})
+	if err == nil || !strings.Contains(err.Error(), "unsupported type") || requests != 0 {
+		t.Fatalf("Diagnose error = %v, diagnostic requests = %d", err, requests)
+	}
+}
+
 func TestDiagnoseCPECallbackHTTPIntegrationUsesPersistedLoopback(t *testing.T) {
 	store := resolverStore(t, "    - name: gateway\n      type: gateway\n      replicas: 1\n      interfaces: [{role: wan}]\n      image: {repository: gateway}\n    - name: event-sink\n      type: event-sink\n      replicas: 1\n      interfaces: [{role: mgmt}]\n      image: {repository: event-sink}\n    - name: webpa\n      type: webpa\n      replicas: 1\n      image: {repository: webpa}\n")
 	gatewayEndpoint, _ := store.ReserveHealthEndpoint("edge", "gateway", 0)

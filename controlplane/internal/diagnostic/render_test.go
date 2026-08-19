@@ -300,7 +300,7 @@ func TestRenderCallbackGoldens(t *testing.T) {
 
 func callbackGoldenResult(t *testing.T) Result {
 	t.Helper()
-	graph, err := NewCPEWebPACallbackProvider().Expected(ExpectedInput{
+	graph, err := NewCPEWebPACallbackProvider("gateway").Expected(ExpectedInput{
 		Deployment: plan.Deployment{Name: "edge"},
 		Source:     plan.Service{Name: "gateway", Type: "gateway"},
 		Instance:   plan.Instance{Index: 0},

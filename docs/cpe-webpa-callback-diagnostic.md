@@ -1,6 +1,6 @@
-# Gateway to WebPA Callback Diagnostic
+# CPE to WebPA Callback Diagnostic
 
-The `cpe-webpa-callback` journey proves that one repository-owned Gateway source
+The `cpe-webpa-callback` journey proves that one supported Gateway or XB10 source
 can emit a bounded marker event through the normal Parodus and WebPA pipeline,
 and that `event-sink` receives the matching signed Caduceus callback.
 
@@ -15,21 +15,26 @@ controlplane/bin/vcpe diagnose --name example --from gateway --to callback \
   --client-service apparmor-simulator --subscriber event-sink \
   --allow-active-event --event apparmor/diagnostic \
   --device-id mac:02f9491df122
+
+controlplane/bin/vcpe diagnose --name xb10 --from xb10 --to callback \
+  --client-service apparmor-simulator --subscriber event-sink \
+  --allow-active-event --event devices/diagnostic \
+  --device-id mac:001122334455
 ```
 
-The source must be a Gateway with the repository-owned AppArmor simulator. The
-selected event and device ID must match the `event-sink` subscriber's
+The source must be a Gateway or XB10 with the source-local AppArmor simulator.
+The selected event and device ID must match the `event-sink` subscriber's
 registration. `--allow-active-event` is explicit consent to generate the one
 marker event.
 
 A successful run has the following evidence chain:
 
 ```text
-Gateway simulator -> Parodus -> Talaria -> Caduceus -> event-sink
+CPE simulator -> Parodus -> Talaria -> Caduceus -> event-sink
                               \-> Argus registration -/
 ```
 
-The command first collects passive evidence from the Gateway, WebPA, and
+The command first collects passive evidence from the selected CPE, WebPA, and
 event-sink loopback diagnostic endpoints. It creates a fresh opaque,
 lowercase, 64-hex correlation ID only after those checks pass. That ID joins the
 single source event, Caduceus routing observation, and final callback receipt.
@@ -38,9 +43,9 @@ single source event, Caduceus routing observation, and final callback receipt.
 
 ### 1. Verify Selected Parodus Client
 
-`[gateway application] --PASSED--> [Parodus]  verify selected Parodus client`
+`[selected CPE application] --PASSED--> [Parodus]  verify selected Parodus client`
 
-The Gateway health service confirms `parodus.service` is active, then sends a
+The selected CPE health service confirms `parodus.service` is active, then sends a
 WRP Retrieve through Scytale for:
 
 ```text
@@ -60,15 +65,15 @@ libparodus client as online. It is stronger than a process check alone.
 
 `[Parodus] --PASSED--> [Talaria]  resolve Talaria`
 
-Gateway parses its configured Talaria devices endpoint, normally
+The selected CPE parses its configured Talaria devices endpoint, normally
 `http://talaria:6200/api/v2/devices`, and resolves its hostname through the
-Gateway container's normal resolver. At least one address must be returned.
+source container's normal resolver. At least one address must be returned.
 
 ### 3. Connect to Talaria
 
 `[Talaria] --PASSED--> [Talaria]  connect to Talaria`
 
-Gateway opens and closes a TCP connection to the resolved Talaria host and
+The selected CPE opens and closes a TCP connection to the resolved Talaria host and
 port, normally `6200`. This specifically validates network reachability after
 DNS has succeeded and before HTTP authentication is attempted.
 
@@ -76,7 +81,7 @@ DNS has succeeded and before HTTP authentication is attempted.
 
 `[Talaria] --PASSED--> [Talaria]  authenticate to Talaria`
 
-Gateway sends an authenticated HTTP `GET` to Talaria's devices endpoint using
+The selected CPE sends an authenticated HTTP `GET` to Talaria's devices endpoint using
 its locally configured credentials. A `401` or `403` is a confirmed
 authentication failure. Any `2xx` response passes this stage.
 
@@ -84,8 +89,8 @@ authentication failure. Any `2xx` response passes this stage.
 
 `[Talaria] --PASSED--> [Device registration]  find device registration`
 
-Gateway strictly decodes Talaria's bounded device-list response and requires
-an exact match for the selected device ID. This confirms that the Gateway
+The selected CPE strictly decodes Talaria's bounded device-list response and
+requires an exact match for the selected device ID. This confirms that the CPE
 identity used for the source event is registered with Talaria.
 
 ### 6. Read Subscriber Intent
@@ -156,8 +161,8 @@ ignore.
 `[Parodus] --PASSED--> [Caduceus]  accept one marked event`
 
 After all prerequisite stages pass, the control plane generates the correlation
-ID and posts a bounded request to Gateway healthd. Gateway writes only the
-validated fields to its root-only Unix socket:
+ID and posts a bounded request to the selected CPE health daemon. The CPE writes
+only the validated fields to its root-only Unix socket:
 
 ```text
 /run/apparmor-simulator-diagnostic.sock
@@ -214,8 +219,8 @@ callback and event-sink accepted it.
 ## Result Semantics
 
 `Result: passed` means all fourteen evidence stages passed for one correlation
-ID. It proves a Gateway-owned source event was accepted by Parodus, routed by
-the deployed WebPA configuration, and accepted by event-sink as a signed
+ID. It proves a source-owned CPE event was accepted by Parodus, routed by the
+deployed WebPA configuration, and accepted by event-sink as a signed
 Caduceus callback.
 
 A `failed` edge identifies a confirmed broken boundary. An `unknown` edge means

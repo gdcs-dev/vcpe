@@ -25,7 +25,8 @@ func resolverRegistry() *Registry {
 	registry := NewRegistry()
 	registry.Register(NewCPEWebPAProvider("gateway"))
 	registry.Register(NewCPEWebPAProvider("xb10"))
-	registry.Register(NewCPEWebPACallbackProvider())
+	registry.Register(NewCPEWebPACallbackProvider("gateway"))
+	registry.Register(NewCPEWebPACallbackProvider("xb10"))
 	registry.Register(NewParodusClientsProvider("gateway"))
 	registry.Register(NewParodusClientsProvider("xb10"))
 	registry.Register(NewArgusWebhooksProvider())
@@ -202,26 +203,31 @@ func TestResolveWebhookErrors(t *testing.T) {
 }
 
 func TestResolveCallbackParticipantsAndEndpoints(t *testing.T) {
-	services := "    - name: gateway\n      type: gateway\n      replicas: 1\n      interfaces: [{role: wan}]\n      image: {repository: gateway}\n    - name: event-sink\n      type: event-sink\n      replicas: 2\n      interfaces: [{role: mgmt}]\n      image: {repository: event-sink}\n    - name: webpa\n      type: webpa\n      replicas: 1\n      image: {repository: webpa}\n"
-	store := resolverStore(t, services)
-	gatewayEndpoint, err := store.ReserveHealthEndpoint("edge", "gateway", 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	webpaEndpoint, err := store.ReserveHealthEndpoint("edge", "webpa", 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	subscriberEndpoint, err := store.ReserveHealthEndpoint("edge", "event-sink", 1)
-	if err != nil {
-		t.Fatal(err)
-	}
-	selection, err := Resolve(store, resolverRegistry(), ResolveRequest{Deployment: "edge", Source: "gateway", Target: "callback", Subscriber: "event-sink", SubscriberReplica: intPointer(1)})
-	if err != nil {
-		t.Fatalf("Resolve: %v", err)
-	}
-	if selection.Provider.Journey() != JourneyCPEWebPACallback || selection.Endpoint != gatewayEndpoint || selection.TargetEndpoint != webpaEndpoint || selection.SubscriberEndpoint != subscriberEndpoint || selection.SubscriberInstance.Index != 1 {
-		t.Fatalf("selection = %+v", selection)
+	base := "    - name: gateway\n      type: gateway\n      replicas: 1\n      interfaces: [{role: wan}]\n      image: {repository: gateway}\n    - name: event-sink\n      type: event-sink\n      replicas: 2\n      interfaces: [{role: mgmt}]\n      image: {repository: event-sink}\n    - name: webpa\n      type: webpa\n      replicas: 1\n      image: {repository: webpa}\n"
+	for _, sourceType := range []string{"gateway", "xb10"} {
+		t.Run(sourceType, func(t *testing.T) {
+			services := strings.ReplaceAll(base, "gateway", sourceType)
+			store := resolverStore(t, services)
+			sourceEndpoint, err := store.ReserveHealthEndpoint("edge", sourceType, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			webpaEndpoint, err := store.ReserveHealthEndpoint("edge", "webpa", 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			subscriberEndpoint, err := store.ReserveHealthEndpoint("edge", "event-sink", 1)
+			if err != nil {
+				t.Fatal(err)
+			}
+			selection, err := Resolve(store, resolverRegistry(), ResolveRequest{Deployment: "edge", Source: sourceType, Target: "callback", Subscriber: "event-sink", SubscriberReplica: intPointer(1)})
+			if err != nil {
+				t.Fatalf("Resolve: %v", err)
+			}
+			if selection.Provider.Journey() != JourneyCPEWebPACallback || selection.Source.Type != sourceType || selection.Endpoint != sourceEndpoint || selection.TargetEndpoint != webpaEndpoint || selection.SubscriberEndpoint != subscriberEndpoint || selection.SubscriberInstance.Index != 1 {
+				t.Fatalf("selection = %+v", selection)
+			}
+		})
 	}
 }
 

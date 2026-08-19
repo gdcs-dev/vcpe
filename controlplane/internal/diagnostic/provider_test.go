@@ -12,7 +12,8 @@ func TestRegistryLookupAndOrdering(t *testing.T) {
 	registry := NewRegistry()
 	registry.Register(NewCPEWebPAProvider("xb10"))
 	registry.Register(NewCPEWebPAProvider("gateway"))
-	registry.Register(NewCPEWebPACallbackProvider())
+	registry.Register(NewCPEWebPACallbackProvider("gateway"))
+	registry.Register(NewCPEWebPACallbackProvider("xb10"))
 	registry.Register(NewParodusClientsProvider("gateway"))
 	registry.Register(NewParodusClientsProvider("xb10"))
 	registry.Register(NewArgusWebhooksProvider())
@@ -27,6 +28,9 @@ func TestRegistryLookupAndOrdering(t *testing.T) {
 	if _, ok := registry.Lookup(JourneyCPEWebPACallback, "gateway", "webpa"); !ok {
 		t.Fatal("callback provider not found")
 	}
+	if _, ok := registry.Lookup(JourneyCPEWebPACallback, "xb10", "webpa"); !ok {
+		t.Fatal("XB10 callback provider not found")
+	}
 	if _, ok := registry.Lookup(JourneyParodusClients, "gateway", "parodus"); !ok {
 		t.Fatal("Parodus client-list provider not found")
 	}
@@ -39,7 +43,7 @@ func TestRegistryLookupAndOrdering(t *testing.T) {
 	if _, ok := registry.Lookup(JourneyTalariaDevices, "webpa", "talaria"); !ok {
 		t.Fatal("Talaria device inventory provider not found")
 	}
-	want := []string{"argus-webhooks/webpa/argus", "cpe-webpa-callback/gateway/webpa", "cpe-webpa/gateway/webpa", "cpe-webpa/xb10/webpa", "parodus-clients/gateway/parodus", "parodus-clients/xb10/parodus", "talaria-devices/webpa/talaria", "webhook/event-sink/webpa"}
+	want := []string{"argus-webhooks/webpa/argus", "cpe-webpa-callback/gateway/webpa", "cpe-webpa-callback/xb10/webpa", "cpe-webpa/gateway/webpa", "cpe-webpa/xb10/webpa", "parodus-clients/gateway/parodus", "parodus-clients/xb10/parodus", "talaria-devices/webpa/talaria", "webhook/event-sink/webpa"}
 	if got := registry.Keys(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("keys = %#v, want %#v", got, want)
 	}
@@ -167,30 +171,34 @@ func TestCPEWebPAProviderContract(t *testing.T) {
 }
 
 func TestCPEWebPACallbackProviderContract(t *testing.T) {
-	provider := NewCPEWebPACallbackProvider()
-	graph, err := provider.Expected(ExpectedInput{
-		Deployment: plan.Deployment{Name: "edge"},
-		Source:     plan.Service{Name: "gateway", Type: "gateway"},
-		Instance:   plan.Instance{Index: 0},
-		Target:     plan.Service{Name: "webpa", Type: "webpa"},
-		Subscriber: plan.Service{Name: "event-sink", Type: "event-sink"},
-	})
-	if err != nil {
-		t.Fatalf("Expected: %v", err)
-	}
 	wantIDs := []string{
 		"application-parodus", "talaria-dns", "talaria-transport", "talaria-authentication", "device-registration", "subscriber-intent", "argus-reachability", "argus-authentication", "registration-present", "registration-fresh", "registration-conformant", "active-event-acceptance", "routing-observation", "callback-receipt",
 	}
-	if graph.Journey != JourneyCPEWebPACallback || len(graph.Edges) != len(wantIDs) {
-		t.Fatalf("unexpected callback graph: %+v", graph)
-	}
-	for index, edge := range graph.Edges {
-		if edge.ID != wantIDs[index] || !edge.BlocksFollowing {
-			t.Fatalf("edge %d = %+v, want %q and blocking", index, edge, wantIDs[index])
-		}
-	}
-	if _, err := provider.Expected(ExpectedInput{Source: plan.Service{Type: "xb10"}, Target: plan.Service{Type: "webpa"}, Subscriber: plan.Service{Type: "event-sink"}}); err == nil {
-		t.Fatal("XB10 callback provider unexpectedly supported")
+	for _, sourceType := range []string{"gateway", "xb10"} {
+		t.Run(sourceType, func(t *testing.T) {
+			provider := NewCPEWebPACallbackProvider(sourceType)
+			graph, err := provider.Expected(ExpectedInput{
+				Deployment: plan.Deployment{Name: "edge"},
+				Source:     plan.Service{Name: sourceType, Type: sourceType},
+				Instance:   plan.Instance{Index: 0},
+				Target:     plan.Service{Name: "webpa", Type: "webpa"},
+				Subscriber: plan.Service{Name: "event-sink", Type: "event-sink"},
+			})
+			if err != nil {
+				t.Fatalf("Expected: %v", err)
+			}
+			if graph.Journey != JourneyCPEWebPACallback || graph.Source.Type != sourceType || len(graph.Edges) != len(wantIDs) {
+				t.Fatalf("unexpected callback graph: %+v", graph)
+			}
+			for index, edge := range graph.Edges {
+				if edge.ID != wantIDs[index] || !edge.BlocksFollowing {
+					t.Fatalf("edge %d = %+v, want %q and blocking", index, edge, wantIDs[index])
+				}
+			}
+			if _, err := provider.Expected(ExpectedInput{Source: plan.Service{Type: "unsupported"}, Target: plan.Service{Type: "webpa"}, Subscriber: plan.Service{Type: "event-sink"}}); err == nil {
+				t.Fatal("unsupported callback source unexpectedly accepted")
+			}
+		})
 	}
 }
 

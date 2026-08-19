@@ -84,6 +84,9 @@ RUN echo "src/gz all https://gdcs-dev.github.io/packages/ipk/all" | tee -a /etc/
    && echo "src/gz xb10 https://gdcs-dev.github.io/packages/ipk/xb10" | tee -a /etc/opkg/customfeeds.conf \
    && opkg update
 
+RUN opkg install apparmor-simulator hermesfs
+RUN systemctl enable apparmor-simulator.service hermesfs.service
+
 ENTRYPOINT ["/usr/local/bin/runtime-init-xb10"]
 CMD ["/usr/local/bin/xb10-legacy-entrypoint.sh", "/sbin/init"]
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 CMD ["/usr/local/bin/vcpe-healthd", "--check"]

@@ -83,13 +83,18 @@ controlplane/bin/vcpe diagnose --name example-full --from gateway --to webpa --c
 controlplane/bin/vcpe diagnose --name example-full --from gateway --to webpa --client-service my-test-app --json
 ```
 
-To send one explicit, bounded diagnostic event from a supported Gateway through
-WebPA to an event-sink callback, use:
+To send one explicit, bounded diagnostic event from a supported Gateway or XB10
+source through WebPA to an event-sink callback, use:
 
 ```bash
 controlplane/bin/vcpe diagnose --name example-full --from gateway --to callback \
   --client-service apparmor-simulator --subscriber event-sink \
   --allow-active-event --event apparmor/diagnostic \
+  --device-id mac:001122334455 --json
+
+controlplane/bin/vcpe diagnose --name xb10 --from xb10 --to callback \
+  --client-service apparmor-simulator --subscriber event-sink \
+  --allow-active-event --event devices/diagnostic \
   --device-id mac:001122334455 --json
 ```
 

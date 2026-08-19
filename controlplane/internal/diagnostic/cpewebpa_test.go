@@ -112,6 +112,17 @@ func TestCPECallbackProbeSkipsEventWhenPrerequisiteFails(t *testing.T) {
 	}
 }
 
+func TestCPECallbackProbeUsesOnlyFixedSocketFromEnvironment(t *testing.T) {
+	t.Setenv("VCPE_CPE_ACTIVE_EVENT_SOCKET", cpeDiagnosticSocket)
+	if probe := NewCPECallbackProbeFromEnvironment(time.Second); probe.EmitActiveEvent == nil {
+		t.Fatal("fixed CPE diagnostic socket did not enable active event emitter")
+	}
+	t.Setenv("VCPE_CPE_ACTIVE_EVENT_SOCKET", "/run/other-diagnostic.sock")
+	if probe := NewCPECallbackProbeFromEnvironment(time.Second); probe.EmitActiveEvent != nil {
+		t.Fatal("arbitrary CPE diagnostic socket enabled active event emitter")
+	}
+}
+
 func TestCPEUnixEmitterSendsOnlyBoundedSelection(t *testing.T) {
 	socket, err := os.CreateTemp("/tmp", "vcpe-cpe-*.sock")
 	if err != nil {

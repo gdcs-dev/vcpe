@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-const gatewayDiagnosticSocket = "/run/apparmor-simulator-diagnostic.sock"
+const cpeDiagnosticSocket = "/run/apparmor-simulator-diagnostic.sock"
 
 // CPEActiveEventRequest contains the validated, bounded fields a CPE-owned
 // sender needs to create one reserved diagnostic event.
@@ -31,12 +31,12 @@ type CPECallbackProbe struct {
 }
 
 // NewCPECallbackProbeFromEnvironment enables the sole supported source-owned
-// sender when Gateway supplies its fixed diagnostic socket. Other workloads,
-// including XB10, remain unsupported rather than accepting an arbitrary path.
+// sender only when a CPE workload supplies its fixed diagnostic socket. Other
+// values remain unsupported rather than accepting an arbitrary socket path.
 func NewCPECallbackProbeFromEnvironment(timeout time.Duration) CPECallbackProbe {
 	probe := CPECallbackProbe{CPE: NewCPEWebPAProbeFromEnvironment(timeout)}
-	if os.Getenv("VCPE_CPE_ACTIVE_EVENT_SOCKET") == gatewayDiagnosticSocket {
-		probe.EmitActiveEvent = newCPEUnixEmitter(gatewayDiagnosticSocket)
+	if os.Getenv("VCPE_CPE_ACTIVE_EVENT_SOCKET") == cpeDiagnosticSocket {
+		probe.EmitActiveEvent = newCPEUnixEmitter(cpeDiagnosticSocket)
 	}
 	return probe
 }

@@ -136,6 +136,24 @@ func TestBuildDiagnosticJourneys(t *testing.T) {
 	}
 }
 
+func TestCPECallbackJourneyAdvertisesThroughHealthServer(t *testing.T) {
+	journeys, err := buildDiagnosticJourneys([]string{diagnostic.JourneyCPEWebPA, diagnostic.JourneyCPEWebPACallback, diagnostic.JourneyParodusClients}, time.Second)
+	if err != nil {
+		t.Fatalf("buildDiagnosticJourneys: %v", err)
+	}
+	server := diagnostic.Server{Journeys: journeys}.Handler(nil)
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/diagnostics", nil))
+	var capabilities diagnostic.Capabilities
+	if err := json.NewDecoder(response.Body).Decode(&capabilities); err != nil {
+		t.Fatal(err)
+	}
+	want := strings.Join([]string{diagnostic.JourneyCPEWebPA, diagnostic.JourneyCPEWebPACallback, diagnostic.JourneyParodusClients}, ",")
+	if response.Code != http.StatusOK || strings.Join(capabilities.Journeys, ",") != want {
+		t.Fatalf("status = %d, capabilities = %+v", response.Code, capabilities)
+	}
+}
+
 func TestParodusClientsJourneyRejectsInvocationFields(t *testing.T) {
 	journeys, err := buildDiagnosticJourneys([]string{diagnostic.JourneyParodusClients}, time.Second)
 	if err != nil {

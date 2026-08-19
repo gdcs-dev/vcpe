@@ -26,7 +26,7 @@ func Register() {
 	diagnostic.Register(diagnostic.NewWebhookProvider())
 	gateway.Register()
 	diagnostic.Register(diagnostic.NewCPEWebPAProvider("gateway"))
-	diagnostic.Register(diagnostic.NewCPEWebPACallbackProvider())
+	diagnostic.Register(diagnostic.NewCPEWebPACallbackProvider("gateway"))
 	diagnostic.Register(diagnostic.NewParodusClientsProvider("gateway"))
 	oktopus.Register()
 	webpa.Register()
@@ -34,6 +34,7 @@ func Register() {
 	diagnostic.Register(diagnostic.NewTalariaDevicesProvider())
 	xb10.Register()
 	diagnostic.Register(diagnostic.NewCPEWebPAProvider("xb10"))
+	diagnostic.Register(diagnostic.NewCPEWebPACallbackProvider("xb10"))
 	diagnostic.Register(diagnostic.NewParodusClientsProvider("xb10"))
 	genericcontainer.Register()
 	registered = true

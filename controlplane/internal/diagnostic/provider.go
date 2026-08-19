@@ -288,16 +288,17 @@ func (provider talariaDevicesProvider) Expected(input ExpectedInput) (ExpectedGr
 	}, nil
 }
 
-type cpeWebPACallbackProvider struct{}
+type cpeWebPACallbackProvider struct{ sourceType string }
 
-// NewCPEWebPACallbackProvider creates the bounded Gateway-to-event-sink
-// callback journey. XB10 is intentionally excluded because it has no
-// repository-owned Parodus event source.
-func NewCPEWebPACallbackProvider() Provider { return cpeWebPACallbackProvider{} }
+// NewCPEWebPACallbackProvider creates the bounded CPE-to-event-sink callback
+// journey for one explicitly registered source type.
+func NewCPEWebPACallbackProvider(sourceType string) Provider {
+	return cpeWebPACallbackProvider{sourceType: sourceType}
+}
 
-func (cpeWebPACallbackProvider) Journey() string    { return JourneyCPEWebPACallback }
-func (cpeWebPACallbackProvider) SourceType() string { return "gateway" }
-func (cpeWebPACallbackProvider) TargetType() string { return "webpa" }
+func (cpeWebPACallbackProvider) Journey() string             { return JourneyCPEWebPACallback }
+func (provider cpeWebPACallbackProvider) SourceType() string { return provider.sourceType }
+func (cpeWebPACallbackProvider) TargetType() string          { return "webpa" }
 
 func (provider cpeWebPACallbackProvider) Expected(input ExpectedInput) (ExpectedGraph, error) {
 	if input.Source.Type != provider.SourceType() || input.Target.Type != provider.TargetType() {

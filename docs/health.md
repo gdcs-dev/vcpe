@@ -109,7 +109,7 @@ and credentials used to retrieve its bounded `<device>/parodus/client-list`.
 The result lists at most 64 sorted registered client-service identifiers and
 reports whether Parodus truncated the list. It is an inventory of
 receive-enabled registrations, not an active callback delivery diagnostic;
-Gateway's active callback journey remains a separate capability.
+the Gateway and XB10 active callback journey remains a separate capability.
 
 ### Webhook Registration And Callback Diagnostics
 
@@ -160,11 +160,10 @@ and does not log or process the marker as an ordinary application event.
 ### CPE-To-Subscriber Callback Diagnosis
 
 `--to callback` correlates one bounded, reserved diagnostic event from a
-supported Gateway application through its existing Parodus path, WebPA/Caduceus
-routing, and one selected `event-sink` subscriber receipt. Gateway is the only
-supported source for this active journey; XB10 remains unsupported because vCPE
-does not own a bounded XB10 event sender. The subscriber must be an `event-sink`
-service.
+supported Gateway or XB10 application through its existing Parodus path,
+WebPA/Caduceus routing, and one selected `event-sink` subscriber receipt. Each
+source exposes the fixed root-only AppArmor simulator diagnostic socket; the
+subscriber must be an `event-sink` service.
 
 This journey generates traffic only after explicit consent and all required
 selections are validated before vCPE reads state or invokes a diagnostic
@@ -175,9 +174,14 @@ vcpe diagnose --name example-full --from gateway --to callback \
   --client-service apparmor-simulator --subscriber event-sink \
   --allow-active-event --event apparmor/diagnostic \
   --device-id mac:001122334455 --json
+
+vcpe diagnose --name xb10 --from xb10 --to callback \
+  --client-service apparmor-simulator --subscriber event-sink \
+  --allow-active-event --event devices/diagnostic \
+  --device-id mac:001122334455 --json
 ```
 
-Use `--replica <zero-based-index>` for a multi-replica Gateway and
+Use `--replica <zero-based-index>` for a multi-replica Gateway or XB10 and
 `--subscriber-replica <zero-based-index>` for a multi-replica event-sink. The
 command rejects missing or cross-journey fields, arbitrary callback URLs,
 credentials, event bodies, endpoints, and executable commands. It generates at
