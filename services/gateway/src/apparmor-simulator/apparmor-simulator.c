@@ -17,8 +17,12 @@
 #include <unistd.h>
 #include <errno.h>
 #include <pthread.h>
+#include <ctype.h>
 #include <sys/timerfd.h>
 #include <sys/epoll.h>
+#include <sys/stat.h>
+#include <sys/socket.h>
+#include <sys/un.h>
 
 #include <cJSON.h>
 #include <syslog.h>
@@ -39,6 +43,8 @@
 #define RBUS_COMPONENT       "apparmor-simulator"
 #define RBUS_METHOD          "Device.AppArmor.SimulateEvent()"
 #define MAX_BACKOFF_SEC      60
+#define DIAGNOSTIC_SOCKET    "/run/apparmor-simulator-diagnostic.sock"
+#define MAX_DIAGNOSTIC_REQUEST 512
 
 /* ─── Global state ───────────────────────────────────────────────────────── */
 
@@ -48,6 +54,10 @@ static char             mac_hex[MAC_HEX_LEN];
 static char             device_id[32];    /* "mac:<mac_hex>" */
 static int              event_counter    = 0;
 static pthread_mutex_t  counter_mutex   = PTHREAD_MUTEX_INITIALIZER;
+
+const char* rdk_logger_module_fetch(void) {
+   return "LOG.RDK.APPARMOR_SIMULATOR";
+}
 
 /* ─── 2.1 MAC address reader ─────────────────────────────────────────────── */
 
@@ -172,6 +182,121 @@ static void emit_apparmor_event(int index)
     }
 
     wrp_free_struct(msg);
+}
+
+static int is_stable_id(const char *value, size_t max_len)
+{
+    if (!value || value[0] == '\0' || strlen(value) > max_len || !islower((unsigned char)value[0]) && !isdigit((unsigned char)value[0])) return 0;
+    for (size_t index = 0; value[index]; index++) {
+        if (!islower((unsigned char)value[index]) && !isdigit((unsigned char)value[index]) && value[index] != '.' && value[index] != '_' && value[index] != '-') return 0;
+    }
+    return 1;
+}
+
+static int is_event_destination(const char *value)
+{
+    if (!value || value[0] == '\0' || strlen(value) > 256 || !islower((unsigned char)value[0]) && !isdigit((unsigned char)value[0])) return 0;
+    for (size_t index = 0; value[index]; index++) {
+        if (!islower((unsigned char)value[index]) && !isdigit((unsigned char)value[index]) && value[index] != '.' && value[index] != '_' && value[index] != '-' && value[index] != '/') return 0;
+    }
+    return 1;
+}
+
+static int is_correlation_id(const char *value)
+{
+    if (!value || strlen(value) != 64) return 0;
+    for (size_t index = 0; index < 64; index++) {
+        if (!isdigit((unsigned char)value[index]) && (value[index] < 'a' || value[index] > 'f')) return 0;
+    }
+    return 1;
+}
+
+static int emit_diagnostic_event(const char *event, const char *correlation_id)
+{
+    char destination[320];
+    char source[64];
+    snprintf(destination, sizeof(destination), "event:%s/%s", event, device_id);
+    snprintf(source, sizeof(source), "%s/apparmor-simulator", device_id);
+
+    cJSON *marker = cJSON_CreateObject();
+    if (!marker) {
+        syslog(LOG_ERR, "Failed to allocate diagnostic marker");
+        return -1;
+    }
+    cJSON_AddStringToObject(marker, "vcpe_diagnostic", "cpe-webpa-callback");
+    cJSON_AddStringToObject(marker, "correlation_id", correlation_id);
+    char *payload = cJSON_PrintUnformatted(marker);
+    cJSON_Delete(marker);
+    if (!payload) {
+        syslog(LOG_ERR, "Failed to encode diagnostic marker");
+        return -1;
+    }
+
+    wrp_msg_t *msg = calloc(1, sizeof(wrp_msg_t));
+    if (!msg) {
+        syslog(LOG_ERR, "Failed to allocate diagnostic WRP message");
+        free(payload);
+        return -1;
+    }
+    msg->msg_type = WRP_MSG_TYPE__EVENT;
+    msg->u.event.source = strdup(source);
+    msg->u.event.dest = strdup(destination);
+    msg->u.event.content_type = strdup("application/json");
+    msg->u.event.payload = payload;
+    msg->u.event.payload_size = strlen(payload);
+    int result = libparodus_send(libpd_instance, msg);
+    if (result == 0) {
+        syslog(LOG_INFO, "Accepted diagnostic event: dest=%s", destination);
+    } else {
+        syslog(LOG_ERR, "Rejected diagnostic event: libparodus_send ret=%d dest=%s", result, destination);
+    }
+    wrp_free_struct(msg);
+    return result;
+}
+
+static int setup_diagnostic_socket(void)
+{
+    int fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+    if (fd < 0) return -1;
+    struct sockaddr_un address = { .sun_family = AF_UNIX };
+    strncpy(address.sun_path, DIAGNOSTIC_SOCKET, sizeof(address.sun_path) - 1);
+    unlink(DIAGNOSTIC_SOCKET);
+    if (bind(fd, (struct sockaddr *)&address, sizeof(address)) != 0 || chmod(DIAGNOSTIC_SOCKET, 0600) != 0 || listen(fd, 4) != 0) {
+        close(fd);
+        unlink(DIAGNOSTIC_SOCKET);
+        return -1;
+    }
+    return fd;
+}
+
+static void handle_diagnostic_request(int listen_fd)
+{
+    int fd = accept(listen_fd, NULL, NULL);
+    if (fd < 0) return;
+    char body[MAX_DIAGNOSTIC_REQUEST + 1] = {0};
+    ssize_t length = read(fd, body, MAX_DIAGNOSTIC_REQUEST);
+    int accepted = 0;
+    if (length > 0 && length < MAX_DIAGNOSTIC_REQUEST) {
+        cJSON *request = cJSON_ParseWithLength(body, (size_t)length);
+        if (request && cJSON_IsObject(request) && cJSON_GetArraySize(request) == 4) {
+            cJSON *client = cJSON_GetObjectItemCaseSensitive(request, "clientService");
+            cJSON *event = cJSON_GetObjectItemCaseSensitive(request, "event");
+            cJSON *device = cJSON_GetObjectItemCaseSensitive(request, "deviceId");
+            cJSON *correlation = cJSON_GetObjectItemCaseSensitive(request, "correlationId");
+            if (cJSON_IsString(client) && cJSON_IsString(event) && cJSON_IsString(device) && cJSON_IsString(correlation) &&
+                is_stable_id(client->valuestring, 64) && strcmp(client->valuestring, "apparmor-simulator") == 0 &&
+                is_event_destination(event->valuestring) && strcmp(device->valuestring, device_id) == 0 &&
+                is_correlation_id(correlation->valuestring)) {
+                accepted = emit_diagnostic_event(event->valuestring, correlation->valuestring) == 0;
+            }
+        }
+        cJSON_Delete(request);
+    }
+    if (!accepted) {
+        syslog(LOG_WARNING, "Rejected diagnostic event request");
+    }
+    (void)write(fd, accepted ? "accepted\n" : "rejected\n", accepted ? 9 : 9);
+    close(fd);
 }
 
 /* ─── 2.4 RBUS method handler ────────────────────────────────────────────── */
@@ -339,10 +464,18 @@ int main(void)
     struct epoll_event ev = { .events = EPOLLIN, .data.fd = tfd };
     epoll_ctl(efd, EPOLL_CTL_ADD, tfd, &ev);
 
+    int diagnostic_fd = setup_diagnostic_socket();
+    if (diagnostic_fd < 0) {
+        syslog(LOG_ERR, "Failed to create diagnostic event socket: %s", strerror(errno));
+    } else {
+        ev.data.fd = diagnostic_fd;
+        epoll_ctl(efd, EPOLL_CTL_ADD, diagnostic_fd, &ev);
+    }
+
     syslog(LOG_INFO, "Event loop started (interval=%ds)", interval_sec);
 
     /* Main event loop */
-    struct epoll_event events[1];
+    struct epoll_event events[2];
     while (1) {
         int n = epoll_wait(efd, events, 1, -1);
         if (n < 0) {
@@ -350,7 +483,9 @@ int main(void)
             syslog(LOG_ERR, "epoll_wait error: %s", strerror(errno));
             break;
         }
-        if (n > 0 && (events[0].events & EPOLLIN)) {
+        if (n > 0 && events[0].data.fd == diagnostic_fd && (events[0].events & EPOLLIN)) {
+            handle_diagnostic_request(diagnostic_fd);
+        } else if (n > 0 && (events[0].events & EPOLLIN)) {
             uint64_t expirations = 0;
             read(tfd, &expirations, sizeof(expirations));
 
@@ -365,6 +500,10 @@ int main(void)
     }
 
     /* Cleanup (not reached in normal operation) */
+    if (diagnostic_fd >= 0) {
+        close(diagnostic_fd);
+        unlink(DIAGNOSTIC_SOCKET);
+    }
     if (rbus_handle) rbus_close(rbus_handle);
     return 0;
 }

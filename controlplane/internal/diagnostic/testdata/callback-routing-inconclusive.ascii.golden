@@ -1,0 +1,20 @@
+CPE to callback diagnostic: edge/gateway[0] -> webpa
+
+[gateway application] --PASSED--> [Parodus]  verify selected Parodus client
+[Parodus] --PASSED--> [Talaria]  resolve Talaria
+[Talaria] --PASSED--> [Talaria]  connect to Talaria
+[Talaria] --PASSED--> [Talaria]  authenticate to Talaria
+[Talaria] --PASSED--> [Device registration]  find device registration
+[event-sink subscriber] --PASSED--> [Registration intent]  read subscriber intent
+[Registration intent] --PASSED--> [Argus]  reach Argus
+[Argus] --PASSED--> [Argus]  authenticate to Argus
+[Argus] --PASSED--> [Webhook registration]  find one registration
+[Webhook registration] --PASSED--> [Webhook registration]  verify registration freshness
+[Webhook registration] --PASSED--> [Callback receipt]  validate event and device matcher
+[Parodus] --PASSED--> [Caduceus]  accept one marked event
+[Caduceus] --UNKNOWN--> [Caduceus]  observe routing selection
+[Caduceus] --SKIPPED--> [Callback receipt]  record matching callback receipt
+
+Inconclusive: routing-observation - Caduceus routing observation was unavailable
+Reason: routing-observation-unavailable
+Remediation: check-routing-observation

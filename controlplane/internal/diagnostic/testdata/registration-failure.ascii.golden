@@ -1,0 +1,17 @@
+Webhook diagnostic: edge/event-sink[0] -> webpa
+
+[event-sink subscriber] --PASSED--> [Registration intent]  read registration intent
+[Registration intent] --PASSED--> [Argus]  reach Argus
+[Argus] --PASSED--> [Argus]  authenticate to Argus
+[Argus] --FAILED--> [Webhook registration]  find one registration
+[Webhook registration] --SKIPPED--> [Webhook registration]  verify registration freshness
+[Webhook registration] --SKIPPED--> [Callback endpoint]  compare registration intent
+[Callback endpoint] --SKIPPED--> [Callback endpoint]  resolve callback endpoint
+[Callback endpoint] --SKIPPED--> [Callback endpoint]  connect to callback endpoint
+[Callback endpoint] --SKIPPED--> [Callback endpoint]  validate callback signature and acceptance
+[Caduceus] --SKIPPED--> [Caduceus]  accept synthetic event
+[Caduceus] --SKIPPED--> [event-sink subscriber]  receive Caduceus callback
+
+First failure: registration-present - no matching webhook registration was found
+Reason: registration-missing
+Remediation: register-webhook

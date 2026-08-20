@@ -29,7 +29,8 @@ RUN systemctl mask \
    ethwan-static-apply.service \
    ethwan-static-capture.service \
    coredump-upload.service \
-   minidump-on-bootup-upload.service
+   minidump-on-bootup-upload.service \
+   var.mount
 
 RUN mkdir -p /data_bak /data_bak /nvram/secure/oemdata
 
@@ -43,6 +44,7 @@ RUN echo 'MODEL_NAME=SG417DBCT' >> /etc/device.properties
 
 RUN echo 'PS1="[\u@xb10-dev \W]\\$ "' >> /home/root/.bashrc
 
+COPY container/usp_factory_reset.conf /etc/usp-pa/usp_factory_reset.conf
 COPY container/platforms/${TARGETOS}-${TARGETARCH}/runtime-init-xb10 /usr/local/bin/runtime-init-xb10
 COPY container/platforms/${TARGETOS}-${TARGETARCH}/vcpe-healthd /usr/local/bin/vcpe-healthd
 COPY container/vcpe-healthd.service /etc/systemd/system/vcpe-healthd.service
@@ -78,6 +80,13 @@ RUN sed -i 's|https://webpa.rdkcentral.com:8080|http://talaria:6200|g' /etc/part
    && sed -i 's/#$GeneralPurposeFirewallRuleCount=1/$GeneralPurposeFirewallRuleCount=1/g' /etc/utopia/system_defaults \
    && sed -i 's/#$GeneralPurposeFirewallRule_1=-A INPUT -i eth0 -j ACCEPT/$GeneralPurposeFirewallRule_1=-I INPUT -i vcpe-health0 -j ACCEPT/g' /etc/utopia/system_defaults
 
+RUN echo "src/gz all https://gdcs-dev.github.io/packages/ipk/all" | tee -a /etc/opkg/customfeeds.conf \
+   && echo "src/gz cortexa53 https://gdcs-dev.github.io/packages/ipk/cortexa53" | tee -a /etc/opkg/customfeeds.conf \
+   && echo "src/gz xb10 https://gdcs-dev.github.io/packages/ipk/xb10" | tee -a /etc/opkg/customfeeds.conf \
+   && opkg update
+
+RUN opkg install apparmor-simulator hermesfs
+RUN systemctl enable apparmor-simulator.service hermesfs.service
 
 ENTRYPOINT ["/usr/local/bin/runtime-init-xb10"]
 CMD ["/usr/local/bin/xb10-legacy-entrypoint.sh", "/sbin/init"]

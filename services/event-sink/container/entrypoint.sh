@@ -20,4 +20,5 @@ fi
 
 exec /usr/local/bin/vcpe-healthd \
 	--command /usr/local/bin/event-sink-health-probe \
+	--diagnostic-subscriber-url http://127.0.0.1:8080 \
 	--run '/usr/local/bin/event-sink'

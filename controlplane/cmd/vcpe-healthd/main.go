@@ -6,15 +6,19 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
+	"github.com/gdcs-dev/vcpe/controlplane/internal/diagnostic"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/health"
 )
 
@@ -47,6 +51,9 @@ func main() {
 	flag.Var(&probes, "probe", "named readiness probe in name=command form; may be repeated")
 	var httpProbes httpProbeFlags
 	flag.Var(&httpProbes, "http-probe", "named HTTP readiness probe in name=url[|status] form; may be repeated")
+	var diagnosticJourneys probeFlags
+	flag.Var(&diagnosticJourneys, "diagnostic", "supported active diagnostic journey; may be repeated")
+	subscriberDiagnosticURL := flag.String("diagnostic-subscriber-url", "", "optional loopback webhook subscriber diagnostic endpoint")
 	flag.Parse()
 	if *check {
 		ctx, cancel := context.WithTimeout(context.Background(), *timeout)
@@ -82,18 +89,29 @@ func main() {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	if err := serve(ctx, *listen, probe, *run); err != nil {
+	journeys, err := buildDiagnosticJourneys(diagnosticJourneys, *timeout)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
+	}
+	passiveRoutes, err := buildPassiveDiagnosticRoutes(*subscriberDiagnosticURL, *timeout, diagnosticJourneys)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
+	}
+	if err := serve(ctx, *listen, probe, *run, journeys, passiveRoutes); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 }
 
-func serve(ctx context.Context, listen string, probe health.Probe, workload string) error {
+func serve(ctx context.Context, listen string, probe health.Probe, workload string, journeys map[string]diagnostic.JourneyHandler, passiveRoutes map[string]http.Handler) error {
 	listener, err := net.Listen("tcp", listen)
 	if err != nil {
 		return err
 	}
-	server := &http.Server{Handler: health.Server{Probe: probe}.Handler()}
+	handler := diagnostic.Server{Journeys: journeys, PassiveRoutes: passiveRoutes}.Handler(health.Server{Probe: probe}.Handler())
+	server := &http.Server{Handler: handler}
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- server.Serve(listener) }()
 
@@ -135,6 +153,144 @@ func serve(ctx context.Context, listen string, probe health.Probe, workload stri
 		<-workloadErr
 		return server.Shutdown(context.Background())
 	}
+}
+
+func buildPassiveDiagnosticRoutes(rawURL string, timeout time.Duration, journeys []string) (map[string]http.Handler, error) {
+	routes := make(map[string]http.Handler, 2)
+	if strings.TrimSpace(rawURL) != "" {
+		proxy, err := newSubscriberDiagnosticProxy(rawURL, timeout)
+		if err != nil {
+			return nil, err
+		}
+		routes[diagnostic.JourneyWebhookSubscriber] = proxy
+	}
+	for _, journey := range journeys {
+		if journey != diagnostic.JourneyCPEWebPACallback {
+			continue
+		}
+		probe, err := diagnostic.NewCaduceusRoutingProbeFromEnvironment(timeout)
+		if err != nil {
+			return nil, err
+		}
+		routes[diagnostic.JourneyCPEWebPACallback] = probe.Handler()
+		break
+	}
+	if len(routes) == 0 {
+		return nil, nil
+	}
+	return routes, nil
+}
+
+type subscriberDiagnosticProxy struct {
+	endpoint *url.URL
+	client   *http.Client
+}
+
+func newSubscriberDiagnosticProxy(rawURL string, timeout time.Duration) (http.Handler, error) {
+	endpoint, err := url.Parse(rawURL)
+	if err != nil || endpoint.Scheme != "http" || endpoint.Hostname() != "127.0.0.1" || endpoint.Port() == "" || endpoint.User != nil || endpoint.Path != "" || endpoint.RawQuery != "" || endpoint.Fragment != "" {
+		return nil, fmt.Errorf("invalid webhook subscriber diagnostic endpoint")
+	}
+	port, err := strconv.Atoi(endpoint.Port())
+	if err != nil || port < 1 || port > 65535 {
+		return nil, fmt.Errorf("invalid webhook subscriber diagnostic endpoint")
+	}
+	if timeout <= 0 {
+		timeout = 2 * time.Second
+	}
+	return subscriberDiagnosticProxy{
+		endpoint: endpoint,
+		client: &http.Client{
+			Timeout: timeout,
+			CheckRedirect: func(*http.Request, []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+		},
+	}, nil
+}
+
+func (proxy subscriberDiagnosticProxy) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodGet {
+		writer.Header().Set("Allow", http.MethodGet)
+		http.Error(writer, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	maximum, ok := subscriberDiagnosticMaximum(request.URL.Path)
+	if !ok {
+		http.NotFound(writer, request)
+		return
+	}
+	endpoint := *proxy.endpoint
+	endpoint.Path = request.URL.Path
+	upstreamRequest, err := http.NewRequestWithContext(request.Context(), http.MethodGet, endpoint.String(), nil)
+	if err != nil {
+		http.Error(writer, "subscriber diagnostic endpoint unavailable", http.StatusBadGateway)
+		return
+	}
+	response, err := proxy.client.Do(upstreamRequest)
+	if err != nil {
+		http.Error(writer, "subscriber diagnostic endpoint unavailable", http.StatusBadGateway)
+		return
+	}
+	defer response.Body.Close()
+	if response.ContentLength > maximum {
+		http.Error(writer, "subscriber diagnostic response exceeds limit", http.StatusBadGateway)
+		return
+	}
+	body, err := io.ReadAll(io.LimitReader(response.Body, maximum+1))
+	if err != nil || int64(len(body)) > maximum {
+		http.Error(writer, "subscriber diagnostic response exceeds limit", http.StatusBadGateway)
+		return
+	}
+	if contentType := response.Header.Get("Content-Type"); contentType != "" {
+		writer.Header().Set("Content-Type", contentType)
+	}
+	writer.WriteHeader(response.StatusCode)
+	_, _ = writer.Write(body)
+}
+
+func subscriberDiagnosticMaximum(path string) (int64, bool) {
+	switch {
+	case path == "/diagnostics/webhook-subscriber/intent":
+		return diagnostic.MaxWebhookIntentBodySize, true
+	case strings.HasPrefix(path, "/diagnostics/webhook-subscriber/receipts/") && strings.TrimPrefix(path, "/diagnostics/webhook-subscriber/receipts/") != "" && !strings.Contains(strings.TrimPrefix(path, "/diagnostics/webhook-subscriber/receipts/"), "/"):
+		return diagnostic.MaxInvocationBodySize, true
+	default:
+		return 0, false
+	}
+}
+
+func buildDiagnosticJourneys(values []string, timeout time.Duration) (map[string]diagnostic.JourneyHandler, error) {
+	journeys := make(map[string]diagnostic.JourneyHandler, len(values))
+	for _, value := range values {
+		if value != diagnostic.JourneyCPEWebPA && value != diagnostic.JourneyCPEWebPACallback && value != diagnostic.JourneyParodusClients && value != diagnostic.JourneyArgusWebhooks && value != diagnostic.JourneyTalariaDevices && value != diagnostic.JourneyWebhook {
+			return nil, fmt.Errorf("unsupported diagnostic journey %q", value)
+		}
+		if _, duplicate := journeys[value]; duplicate {
+			return nil, fmt.Errorf("duplicate diagnostic journey %q", value)
+		}
+		switch value {
+		case diagnostic.JourneyCPEWebPA:
+			probe := diagnostic.NewCPEWebPAProbeFromEnvironment(timeout)
+			journeys[value] = probe.RunWithInvocation
+		case diagnostic.JourneyCPEWebPACallback:
+			probe := diagnostic.NewCPECallbackProbeFromEnvironment(timeout)
+			journeys[value] = probe.RunWithInvocation
+		case diagnostic.JourneyParodusClients:
+			probe := diagnostic.NewCPEWebPAProbeFromEnvironment(timeout)
+			journeys[value] = probe.RunParodusClients
+		case diagnostic.JourneyWebhook:
+			probe := diagnostic.NewWebhookProbeFromEnvironment(timeout)
+			journeys[value] = probe.RunWithInvocation
+		case diagnostic.JourneyArgusWebhooks:
+			probe := diagnostic.NewWebhookProbeFromEnvironment(timeout)
+			journeys[value] = probe.RunInventory
+		case diagnostic.JourneyTalariaDevices:
+			probe := diagnostic.NewCPEWebPAProbeFromEnvironment(timeout)
+			journeys[value] = probe.RunTalariaDevices
+		}
+	}
+	return journeys, nil
 }
 
 func commandProbe(command string, timeout time.Duration) health.Probe {

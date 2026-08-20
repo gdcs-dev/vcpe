@@ -71,6 +71,7 @@ servers:
         - development
 supportedServices:
   - config
+  - parodus
 targetURL: http://127.0.0.1:6300/api/v3
 touchstone:
   defaultNamespace: xmidt

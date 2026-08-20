@@ -1,0 +1,18 @@
+Webhook diagnostic: edge/event-sink[0] -> webpa
+
+[event-sink subscriber] --PASSED--> [Registration intent]  read registration intent
+[Registration intent] --PASSED--> [Argus]  reach Argus
+[Argus] --PASSED--> [Argus]  authenticate to Argus
+[Argus] --PASSED--> [Webhook registration]  find one registration
+[Webhook registration] --PASSED--> [Webhook registration]  verify registration freshness
+[Webhook registration] --PASSED--> [Callback endpoint]  compare registration intent
+[Callback endpoint] --PASSED--> [Callback endpoint]  resolve callback endpoint
+[Callback endpoint] --PASSED--> [Callback endpoint]  connect to callback endpoint
+[Callback endpoint] --PASSED--> [Callback endpoint]  validate callback signature and acceptance
+[Caduceus] --PASSED--> [Caduceus]  accept synthetic event
+[Caduceus] --FAILED--> [event-sink subscriber]  receive Caduceus callback
+
+First failure: caduceus-receipt - Caduceus accepted the event but no callback receipt was recorded
+Reason: caduceus-receipt-missing
+Remediation: check-caduceus-delivery
+Evidence: correlation-state=missing

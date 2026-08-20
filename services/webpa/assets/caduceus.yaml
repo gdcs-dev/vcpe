@@ -5,6 +5,10 @@ authHeader:
   - dXNlcjpwYXNz
 authToken: dXNlcjpwYXNz
 build: 0.11.0
+diagnostic:
+  enabled: true
+  maxRecords: 32
+  recordTTL: 30s
 flavor: mint
 fqdn: webpa
 health:

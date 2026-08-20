@@ -1,0 +1,29 @@
+Usage: vcpe diagnose --from <service> --to <webpa|webhook|webhooks|devices|callback|parodus> [flags]
+
+Shows a bounded diagnostic graph and its first confirmed failure through persisted loopback endpoints. Use --to webpa with --client-service for a selected CPE diagnosis; --to devices with WebPA as --from passively inventories Talaria's current connected-device sessions, exposing operator-visible IDs, queue depth, counters, connection time, and uptime. An empty device list is valid and the inventory is limited to 64 sessions. Use --to parodus to list registered clients, --to webhooks to inventory authoritative Argus registrations, --to webhook for one subscriber registration inspection, or --to callback for one bounded CPE-to-subscriber event after explicit active-event consent.
+
+Required flags:
+  --from <service>        Source service name
+  --to <webpa|webhook|webhooks|devices|callback|parodus>  Diagnostic target journey
+
+Optional flags:
+  --name <deployment>     Deployment containing the source and required participants; optional when exactly one deployment is active
+  --client-service <name>  Required for --to webpa and --to callback; receive-enabled libparodus service
+  --subscriber <service>  Required for --to callback; selected event-sink subscriber
+  --allow-active-callback  Generate one direct callback and one synthetic Caduceus event for --to webhook
+  --allow-active-event    Required for --to callback; permit one bounded CPE-generated diagnostic event
+  --event <destination>   Required with active webhook diagnosis; representative event destination
+  --device-id <identity>  Required with active webhook diagnosis; representative device identity
+  --replica <index>       Zero-based source replica index; required when replicas exceed one
+  --subscriber-replica <index>  Selected subscriber replica for --to callback when replicas exceed one
+  --state-root <path>     Override the default state root directory
+  --json                  Emit the vcpe.dev/diagnostic/v1 graph
+
+Examples:
+  vcpe diagnose --from gateway --to webpa --client-service apparmor-simulator
+  vcpe diagnose --name example --from gateway --to parodus
+  vcpe diagnose --name example --from webpa --to webhooks
+  vcpe diag --name example --from webpa --to devices
+  vcpe diagnose --name example --from event-sink --to webhook
+  vcpe diagnose --name example --from event-sink --to webhook --allow-active-callback --event devices/diagnostic --device-id mac:02f9491df122
+  vcpe diagnose --name example --from gateway --to callback --client-service apparmor-simulator --subscriber event-sink --allow-active-event --event devices/diagnostic --device-id mac:02f9491df122

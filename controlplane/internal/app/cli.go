@@ -13,8 +13,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
+	"github.com/gdcs-dev/vcpe/controlplane/internal/diagnostic"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/manifest"
 )
 
@@ -31,8 +33,23 @@ type Options struct {
 	ConfigPath    string
 
 	// Name selects a target deployment (metadata.name) for down/destroy/logs/
-	// status/service commands.
-	Name string
+	// status/service/diagnose commands. Down, status, and diagnose select the
+	// sole active deployment when this is omitted.
+	Name                string
+	From                string
+	To                  string
+	ClientService       string
+	Subscriber          string
+	AllowActiveCallback bool
+	AllowActiveEvent    bool
+	Event               string
+	DeviceID            string
+	// Replica selects a zero-based source replica for diagnose. Nil means the
+	// flag was omitted and permits automatic selection of a single replica.
+	Replica *int
+	// SubscriberReplica selects the zero-based event-sink replica for callback
+	// diagnostics. Nil means automatic selection of a single replica.
+	SubscriberReplica *int
 
 	AllowDisruptive bool
 	NoCache         bool
@@ -56,6 +73,8 @@ var topLevelCommands = map[string]struct{}{
 	"manifest": {},
 	"service":  {},
 	"status":   {},
+	"diagnose": {},
+	"diag":     {},
 	"logs":     {},
 	"config":   {},
 	"state":    {},
@@ -103,6 +122,7 @@ func extractHelpCommand(args []string) (string, bool) {
 	aliasMap := map[string]string{
 		"apply":   "up",
 		"destroy": "down",
+		"diag":    "diagnose",
 	}
 	for i := 0; i < len(args); i++ {
 		a := args[i]
@@ -237,6 +257,9 @@ func parseArgs(_ string, args []string) (Options, error) {
 	if _, ok := topLevelCommands[command]; !ok {
 		return Options{}, fmt.Errorf("unknown command %q", command)
 	}
+	if command == "diag" {
+		command = "diagnose"
+	}
 
 	opts.Command = command
 	positional := []string{}
@@ -267,6 +290,74 @@ func parseArgs(_ string, args []string) (Options, error) {
 				return Options{}, err
 			}
 			opts.Name = val
+			i = next
+		case arg == "--from":
+			val, next, err := takeValue(rest, i, "--from")
+			if err != nil {
+				return Options{}, err
+			}
+			opts.From = val
+			i = next
+		case arg == "--to":
+			val, next, err := takeValue(rest, i, "--to")
+			if err != nil {
+				return Options{}, err
+			}
+			opts.To = val
+			i = next
+		case arg == "--client-service":
+			val, next, err := takeValue(rest, i, "--client-service")
+			if err != nil {
+				return Options{}, err
+			}
+			opts.ClientService = val
+			i = next
+		case arg == "--subscriber":
+			val, next, err := takeValue(rest, i, "--subscriber")
+			if err != nil {
+				return Options{}, err
+			}
+			opts.Subscriber = val
+			i = next
+		case arg == "--allow-active-callback":
+			opts.AllowActiveCallback = true
+		case arg == "--allow-active-event":
+			opts.AllowActiveEvent = true
+		case arg == "--event":
+			val, next, err := takeValue(rest, i, "--event")
+			if err != nil {
+				return Options{}, err
+			}
+			opts.Event = val
+			i = next
+		case arg == "--device-id":
+			val, next, err := takeValue(rest, i, "--device-id")
+			if err != nil {
+				return Options{}, err
+			}
+			opts.DeviceID = val
+			i = next
+		case arg == "--replica":
+			val, next, err := takeValue(rest, i, "--replica")
+			if err != nil {
+				return Options{}, err
+			}
+			replica, err := strconv.Atoi(val)
+			if err != nil || replica < 0 {
+				return Options{}, fmt.Errorf("--replica must be a non-negative integer")
+			}
+			opts.Replica = &replica
+			i = next
+		case arg == "--subscriber-replica":
+			val, next, err := takeValue(rest, i, "--subscriber-replica")
+			if err != nil {
+				return Options{}, err
+			}
+			replica, err := strconv.Atoi(val)
+			if err != nil || replica < 0 {
+				return Options{}, fmt.Errorf("--subscriber-replica must be a non-negative integer")
+			}
+			opts.SubscriberReplica = &replica
 			i = next
 		case arg == "--state-root":
 			val, next, err := takeValue(rest, i, "--state-root")
@@ -386,6 +477,61 @@ func validateCommandShape(opts *Options) error {
 		// deployment or lists names when multiple exist.
 		if opts.Command == "destroy" && !opts.Force {
 			return fmt.Errorf("destroy requires --force to confirm teardown; run `vcpe down --help` for usage")
+		}
+	case "diagnose":
+		if opts.From == "" || opts.To == "" {
+			return fmt.Errorf("diagnose requires --from <service> and --to <webpa|webhook|webhooks|devices|callback|parodus>; run `vcpe diagnose --help` for usage")
+		}
+		switch opts.To {
+		case "webpa":
+			if opts.ClientService == "" {
+				return fmt.Errorf("diagnose --to webpa requires --client-service <name>")
+			}
+			if err := (diagnostic.Invocation{ClientService: opts.ClientService}).ValidateFor(diagnostic.JourneyCPEWebPA); err != nil {
+				return fmt.Errorf("invalid --client-service: %w", err)
+			}
+			if err := (diagnostic.Invocation{ClientService: opts.ClientService, AllowActiveCallback: opts.AllowActiveCallback, Event: opts.Event, DeviceID: opts.DeviceID}).ValidateFor(diagnostic.JourneyCPEWebPA); err != nil {
+				return fmt.Errorf("invalid webpa diagnose options: %w", err)
+			}
+		case "webhook":
+			if opts.ClientService != "" {
+				return fmt.Errorf("--client-service is valid only for --to webpa")
+			}
+			if err := (diagnostic.Invocation{AllowActiveCallback: opts.AllowActiveCallback, Event: opts.Event, DeviceID: opts.DeviceID}).ValidateFor(diagnostic.JourneyWebhook); err != nil {
+				return fmt.Errorf("invalid webhook diagnose options: %w", err)
+			}
+		case "callback":
+			if opts.Subscriber == "" {
+				return fmt.Errorf("diagnose --to callback requires --subscriber <service>")
+			}
+			// The source invocation requires an opaque correlation ID, but the
+			// orchestrator generates it only after passive prerequisites pass.
+			if err := (diagnostic.Invocation{ClientService: opts.ClientService, Subscriber: opts.Subscriber, AllowActiveCallback: opts.AllowActiveCallback, AllowActiveEvent: opts.AllowActiveEvent, Event: opts.Event, DeviceID: opts.DeviceID, CorrelationID: strings.Repeat("0", diagnostic.MaxCorrelationIDLength)}).ValidateFor(diagnostic.JourneyCPEWebPACallback); err != nil {
+				return fmt.Errorf("invalid callback diagnose options: %w", err)
+			}
+		case "parodus":
+			if opts.SubscriberReplica != nil {
+				return fmt.Errorf("--subscriber-replica is valid only for --to callback")
+			}
+			if err := (diagnostic.Invocation{ClientService: opts.ClientService, Subscriber: opts.Subscriber, AllowActiveCallback: opts.AllowActiveCallback, AllowActiveEvent: opts.AllowActiveEvent, Event: opts.Event, DeviceID: opts.DeviceID}).ValidateFor(diagnostic.JourneyParodusClients); err != nil {
+				return fmt.Errorf("invalid Parodus diagnose options: %w", err)
+			}
+		case "webhooks":
+			if opts.SubscriberReplica != nil {
+				return fmt.Errorf("--subscriber-replica is valid only for --to callback")
+			}
+			if err := (diagnostic.Invocation{ClientService: opts.ClientService, Subscriber: opts.Subscriber, AllowActiveCallback: opts.AllowActiveCallback, AllowActiveEvent: opts.AllowActiveEvent, Event: opts.Event, DeviceID: opts.DeviceID}).ValidateFor(diagnostic.JourneyArgusWebhooks); err != nil {
+				return fmt.Errorf("invalid Argus webhook inventory options: %w", err)
+			}
+		case "devices":
+			if opts.SubscriberReplica != nil {
+				return fmt.Errorf("--subscriber-replica is valid only for --to callback")
+			}
+			if err := (diagnostic.Invocation{ClientService: opts.ClientService, Subscriber: opts.Subscriber, AllowActiveCallback: opts.AllowActiveCallback, AllowActiveEvent: opts.AllowActiveEvent, Event: opts.Event, DeviceID: opts.DeviceID}).ValidateFor(diagnostic.JourneyTalariaDevices); err != nil {
+				return fmt.Errorf("invalid Talaria device inventory options: %w", err)
+			}
+		default:
+			return fmt.Errorf("diagnose --to must be webpa, webhook, webhooks, devices, callback, or parodus")
 		}
 	}
 	return nil

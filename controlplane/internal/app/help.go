@@ -97,6 +97,36 @@ var commandHelp = map[string]CommandHelp{
 			"vcpe status --json",
 		},
 	},
+	"diagnose": {
+		Synopsis:    "Diagnose CPE, Talaria, Parodus, Argus webhook, or callback paths",
+		Description: "Shows a bounded diagnostic graph and its first confirmed failure through persisted loopback endpoints. Use --to webpa with --client-service for a selected CPE diagnosis; --to devices with WebPA as --from passively inventories Talaria's current connected-device sessions, exposing operator-visible IDs, queue depth, counters, connection time, and uptime. An empty device list is valid and the inventory is limited to 64 sessions. Use --to parodus to list registered clients, --to webhooks to inventory authoritative Argus registrations, --to webhook for one subscriber registration inspection, or --to callback for one bounded CPE-to-subscriber event after explicit active-event consent.",
+		RequiredFlags: []FlagHelp{
+			{Name: "--from", Arg: "<service>", Description: "Source service name"},
+			{Name: "--to", Arg: "<webpa|webhook|webhooks|devices|callback|parodus>", Description: "Diagnostic target journey"},
+		},
+		OptionalFlags: []FlagHelp{
+			{Name: "--name", Arg: "<deployment>", Description: "Deployment containing the source and required participants; optional when exactly one deployment is active"},
+			{Name: "--client-service", Arg: "<name>", Description: "Required for --to webpa and --to callback; receive-enabled libparodus service"},
+			{Name: "--subscriber", Arg: "<service>", Description: "Required for --to callback; selected event-sink subscriber"},
+			{Name: "--allow-active-callback", Description: "Generate one direct callback and one synthetic Caduceus event for --to webhook"},
+			{Name: "--allow-active-event", Description: "Required for --to callback; permit one bounded CPE-generated diagnostic event"},
+			{Name: "--event", Arg: "<destination>", Description: "Required with active webhook diagnosis; representative event destination"},
+			{Name: "--device-id", Arg: "<identity>", Description: "Required with active webhook diagnosis; representative device identity"},
+			{Name: "--replica", Arg: "<index>", Description: "Zero-based source replica index; required when replicas exceed one"},
+			{Name: "--subscriber-replica", Arg: "<index>", Description: "Selected subscriber replica for --to callback when replicas exceed one"},
+			{Name: "--state-root", Arg: "<path>", Description: "Override the default state root directory"},
+			{Name: "--json", Description: "Emit the vcpe.dev/diagnostic/v1 graph"},
+		},
+		Examples: []string{
+			"vcpe diag --from gateway --to parodus",
+			"vcpe diag --from webpa --to webhooks",
+			"vcpe diag --from webpa --to devices",
+			"vcpe diag --from gateway --to webpa --client-service apparmor-simulator",
+			"vcpe diag --from event-sink --to webhook",
+			"vcpe diag --from event-sink --to webhook --allow-active-callback --event devices/diagnostic --device-id mac:02f9491df122",
+			"vcpe diag --from gateway --to callback --client-service apparmor-simulator --subscriber event-sink --allow-active-event --event devices/diagnostic --device-id mac:02f9491df122",
+		},
+	},
 	"logs": {
 		Synopsis:      "Show operation timeline and deployment logs",
 		Description:   "Surfaces the recent operation timeline. With --name, includes per-deployment log context from the container runtime.",
@@ -199,7 +229,7 @@ func GlobalHelp() string {
 	const synopsisCol = 10
 	// Developer commands (build, push, release) are registered via init() in
 	// developer_commands.go and prepended to the order here.
-	combined := append(developerCommandOrder, "up", "plan", "down", "list", "manifest", "service", "status", "logs", "config", "state", "version")
+	combined := append(developerCommandOrder, "up", "plan", "down", "list", "manifest", "service", "status", "diagnose", "logs", "config", "state", "version")
 	order := append([]string{"init"}, combined...)
 	for _, cmd := range order {
 		h := commandHelp[cmd]
@@ -212,6 +242,7 @@ func GlobalHelp() string {
 	b.WriteString("\nAliases:\n")
 	b.WriteString("  apply    alias for up\n")
 	b.WriteString("  destroy  alias for down (also requires --force)\n")
+	b.WriteString("  diag     alias for diagnose\n")
 
 	b.WriteString("\nGlobal flags:\n")
 	b.WriteString("  --state-root <path>  Override state root directory\n")
@@ -230,6 +261,8 @@ func HelpFor(command string) string {
 		return "apply is an alias for up — run `vcpe up --help` for usage\n"
 	case "destroy":
 		return "destroy is an alias for down (also requires --force) — run `vcpe down --help` for usage\n"
+	case "diag":
+		return "diag is an alias for diagnose — run `vcpe diagnose --help` for usage\n"
 	}
 
 	h, ok := commandHelp[command]

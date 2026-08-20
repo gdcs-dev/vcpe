@@ -19,9 +19,9 @@ spec:
   networks:
     - role: mgmt
       ipv4:
-        cidr: 10.10.10.0/24
-        gateway: 10.10.10.1
-        pool: { start: 10.10.10.10, end: 10.10.10.250 }
+        cidr: 10.10.20.0/24
+        gateway: 10.10.20.1
+        pool: { start: 10.10.20.10, end: 10.10.20.250 }
     - role: wan
       nat: true
       firewall: true
@@ -94,6 +94,35 @@ spec:
         - { role: mgmt }
       dependsOn:
         - bng
+    # ── Event Sink ────────────────────────────────────────────────────────────
+    # Generic XMiDT webhook consumer. Registers a Caduceus webhook via Argus
+    # and logs all matching WRP events as structured JSON to stdout.
+    # Default filter: apparmor/.* (captures AppArmor simulator events).
+    # Override WEBHOOK_EVENTS_REGEX to capture any other event type.
+    - name: event-sink
+      type: event-sink
+      replicas: 1
+      image:
+        repository: ghcr.io/gdcs-dev/event-sink
+        tag: dev
+        pullPolicy: build-if-missing
+        buildContext: services/event-sink
+        containerfile: services/event-sink/Containerfile
+      interfaces:
+        - { role: mgmt }
+      config:
+        env:
+          # Must match webpa's baked-in dev Argus credentials
+          # (services/webpa/assets/argus.yaml authx.inbound.basic).
+          ARGUS_URL: "http://argus:6600"
+          ARGUS_BASIC_AUTH: "dXNlcjpwYXNz"
+          WEBHOOK_URL: "http://event-sink:8080/webhook"
+          WEBHOOK_EVENTS_REGEX: ".*"
+          WEBHOOK_DEVICE_MATCHER: ".*"
+          WEBHOOK_SECRET: "vcpe-dev-webhook-secret"
+          LISTEN_ADDR: ":8080"
+      dependsOn:
+        - bng
     # ── XB10 ─────────────────────────────────────────────────────────────────
     # RDK-B gateway simulator. Gets a DHCP lease from BNG on WAN (erouter0),
     # bridges LAN ports for attached clients.
@@ -122,19 +151,3 @@ spec:
         - /mnt/docker_disk/shared/downloads:/home/root/shared/downloads:rw
       dependsOn:
         - bng
-    - name: client
-      type: generic-container
-      replicas: 1
-      image:
-        repository: docker.io/library/alpine
-        tag: "3.19"
-        pullPolicy: always-pull
-      interfaces:
-        - role: lan-p1
-          defaultRoute: true
-      config:
-        env:
-          VCPE_INIT_NAMESERVER_FROM_ROUTE: "1"
-        command: ["sleep", "infinity"]
-      dependsOn:
-        - xb10
