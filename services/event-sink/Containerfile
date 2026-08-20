@@ -9,7 +9,11 @@ ENV GODEBUG=asyncpreemptoff=1
 
 WORKDIR /src
 COPY go.mod go.sum* ./
-RUN go mod download
+RUN for attempt in 1 2 3; do \
+         go mod download && exit 0; \
+         if [ "$attempt" -lt 3 ]; then sleep "$attempt"; fi; \
+      done; \
+      exit 1
 
 COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /event-sink ./cmd/event-sink
