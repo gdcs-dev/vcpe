@@ -104,7 +104,9 @@ func generateCompose(input render.Input, inst plan.Instance) string {
 	svc, networks := servicetemplate.BuildComposeService(input, inst, alwaysPinAttachment)
 	svc["privileged"] = true
 	svc["cap_add"] = []string{"NET_ADMIN", "NET_RAW"}
-	svc["volumes"] = append([]string{"./runtime/mongo:/var/lib/mongodb", "./runtime/nats:/var/lib/nats/jetstream"}, input.Service.Volumes...)
+	if len(input.Service.Volumes) > 0 {
+		svc["volumes"] = input.Service.Volumes
+	}
 	ports := append([]string(nil), input.Service.Ports...)
 	if len(ports) > 0 {
 		svc["ports"] = ports

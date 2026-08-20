@@ -1,11 +1,9 @@
 apiVersion: vcpe.dev/v1
 kind: Deployment
 metadata:
-  name: example-full
+  name: usp
   labels:
-    scenario: example-full
-  annotations:
-    description: "Full vCPE lab — BNG, WebPA, Gateway, event-sink, and Alpine client over a bridge WAN network."
+    scenario: usp
 spec:
   maxReplicasPerService: 3
   maxActiveDeployments: 10
@@ -18,16 +16,12 @@ spec:
   #        |                              GATEWAY wan (DHCP client, erouter0)
   #   cm-bridge   (10.7.201.0/24)  ── BNG eth2 (DHCP server)
   #        |                              GATEWAY cm
-  #   lan-p1-bridge -- GATEWAY (eth0)
-  #   lan-p2-bridge -- GATEWAY (eth1)
-  #   lan-p3-bridge -- GATEWAY (eth2)
-  #   lan-p4-bridge -- GATEWAY (eth3)
   networks:
     - role: mgmt
       ipv4:
-        cidr: 10.10.10.0/24
-        gateway: 10.10.10.1
-        pool: { start: 10.10.10.10, end: 10.10.10.250 }
+        cidr: 10.10.20.0/24
+        gateway: 10.10.20.1
+        pool: { start: 10.10.20.10, end: 10.10.20.250 }
     - role: wan
       nat: true
       firewall: true
@@ -60,8 +54,8 @@ spec:
       replicas: 1
       image:
         repository: ghcr.io/gdcs-dev/bng
-        tag: v0.3.1
-        pullPolicy: always-pull
+        tag: dev
+        pullPolicy: build-if-missing
         buildContext: services/bng
       interfaces:
         - { role: mgmt, device: mgmt0 }
@@ -92,40 +86,12 @@ spec:
       replicas: 1
       image:
         repository: ghcr.io/gdcs-dev/webpa
-        tag: v0.3.1
-        pullPolicy: always-pull
+        tag: dev
+        pullPolicy: build-if-missing
         buildContext: services/webpa
+        containerfile: services/webpa/Containerfile
       interfaces:
         - { role: mgmt }
-      dependsOn:
-        - bng
-    # ── GATEWAY ─────────────────────────────────────────────────────────────────
-    # Cable-modem / CPE simulator. Gets a DHCP lease from BNG on WAN (erouter0),
-    # bridges LAN ports for attached clients. LAN gateway IP is statically
-    # configured via the lan.ipv4 option.
-    - name: gateway
-      type: gateway
-      replicas: 1
-      image:
-        repository: ghcr.io/gdcs-dev/gateway
-        tag: v0.3.1
-        pullPolicy: always-pull
-        buildContext: services/gateway
-      interfaces:
-        - { role: wan, device: erouter0, addressing: dhcp, defaultRoute: true }
-        - { role: cm, device: wan0, addressing: dhcp }
-        - { role: lan-p1, device: eth0, bridge: brlan0 }
-        - { role: lan-p2, device: eth1, bridge: brlan0 }
-        - { role: lan-p3, device: eth2, bridge: brlan0 }
-        - { role: lan-p4, device: eth3, bridge: brlan0 }
-      bridges:
-        - name: brlan0
-          ipv4: 10.0.0.1/24
-          dhcpStart: 10.0.0.100
-          dhcpEnd: 10.0.0.200
-      config:
-        env:
-          LAN_DNS: "10.0.0.1"
       dependsOn:
         - bng
     # ── Event Sink ────────────────────────────────────────────────────────────
@@ -138,8 +104,8 @@ spec:
       replicas: 1
       image:
         repository: ghcr.io/gdcs-dev/event-sink
-        tag: v0.3.1
-        pullPolicy: always-pull
+        tag: dev
+        pullPolicy: build-if-missing
         buildContext: services/event-sink
         containerfile: services/event-sink/Containerfile
       interfaces:
@@ -148,35 +114,62 @@ spec:
         env:
           # Must match webpa's baked-in dev Argus credentials
           # (services/webpa/assets/argus.yaml authx.inbound.basic).
+          ARGUS_URL: "http://argus:6600"
           ARGUS_BASIC_AUTH: "dXNlcjpwYXNz"
+          WEBHOOK_URL: "http://event-sink:8080/webhook"
+          WEBHOOK_EVENTS_REGEX: ".*"
+          WEBHOOK_DEVICE_MATCHER: ".*"
           WEBHOOK_SECRET: "vcpe-dev-webhook-secret"
+          LISTEN_ADDR: ":8080"
       dependsOn:
         - bng
+    # 80/tcp, 1883/tcp, 8000-8001/tcp, 8080-8081/tcp, 8883/tcp, 61613/tcp
     - name: oktopus
       type: oktopus
       replicas: 1
       image:
         repository: "ghcr.io/gdcs-dev/oktopus"
-        tag: v0.3.1
-        pullPolicy: always-pull
+        tag: dev
+        pullPolicy: build-if-missing
         buildContext: services/oktopus
+        containerfile: services/oktopus/Containerfile
       interfaces:
         - role: mgmt
+      ports:
+        - "48000:80"
+      config:
+        adminEmail: admin@vcpe.local
+        adminPassword: changeme
+        natsUser: oktopususer
+        natsPassword: oktopuspw
+
       dependsOn:
         - bng
-    - name: client
-      type: generic-container
+    # ── XB10 ─────────────────────────────────────────────────────────────────
+    # RDK-B gateway simulator. Gets a DHCP lease from BNG on WAN (erouter0),
+    # bridges LAN ports for attached clients.
+    - name: xb10
+      type: xb10
       replicas: 1
       image:
-        repository: docker.io/library/alpine
-        tag: "3.19"
-        pullPolicy: always-pull
+        repository: ghcr.io/gdcs-dev/xb10
+        tag: dev
+        pullPolicy: build-if-missing
+        buildContext: services/xb10
+        containerfile: services/xb10/Containerfile
+        platforms: [linux/arm64]
       interfaces:
-        - role: lan-p1
-          defaultRoute: true
+        - { role: wan, device: cm0 }
+        - { role: cm, device: wan0 }
+        - { role: lan-p1, device: eth0 }
+        - { role: lan-p2, device: eth1 }
+        - { role: lan-p3, device: eth2 }
+        - { role: lan-p4, device: eth3 }
       config:
         env:
-          VCPE_INIT_NAMESERVER_FROM_ROUTE: "1"
-        command: ["sleep", "infinity"]
+          LAN_DNS: "10.0.0.1"
+      volumes:
+        - /mnt/docker_disk/shared/xb10-dev:/home/root/xb10-dev:rw
+        - /mnt/docker_disk/shared/downloads:/home/root/shared/downloads:rw
       dependsOn:
-        - gateway
+        - bng

@@ -165,8 +165,8 @@ RUN cd /opt/frontend && npm install --omit=dev
 # ---------------------------------------------------------------------------
 # nginx config
 # ---------------------------------------------------------------------------
-COPY nginx-main.conf /etc/nginx/nginx.conf
-COPY nginx.conf      /etc/nginx/sites-available/oktopus
+COPY container/nginx-main.conf /etc/nginx/nginx.conf
+COPY container/nginx.conf      /etc/nginx/sites-available/oktopus
 RUN rm -f /etc/nginx/sites-enabled/default && \
    ln -s /etc/nginx/sites-available/oktopus /etc/nginx/sites-enabled/oktopus
 
@@ -174,7 +174,7 @@ RUN rm -f /etc/nginx/sites-enabled/default && \
 # NATS config (no TLS by default; mount your own /etc/nats/ to enable TLS)
 # ---------------------------------------------------------------------------
 RUN mkdir -p /etc/nats
-COPY nats.cfg /etc/nats/nats.cfg
+COPY container/nats.cfg /etc/nats/nats.cfg
 
 # ---------------------------------------------------------------------------
 # systemd unit files (copied from the cloned source)
@@ -197,7 +197,7 @@ COPY --from=source /src/deploy/standalone/systemd/admin-seed.service    /lib/sys
 # Environment file — rendered by vcpe at deploy time; defaults baked in.
 # ---------------------------------------------------------------------------
 RUN mkdir -p /etc/oktopus
-COPY oktopus.env /etc/oktopus/oktopus.env
+COPY container/oktopus.env /etc/oktopus/oktopus.env
 
 # Systemd drop-in: load /etc/oktopus/oktopus.env for every service.
 RUN mkdir -p /etc/systemd/system/oktopus-env.conf.d
@@ -233,7 +233,7 @@ RUN systemctl enable \
 #   1883  — MQTT MTP (plain)
 #   8883  — MQTT MTP (TLS)
 #   4222  — NATS client (internal; expose only if external NATS clients needed)
-EXPOSE 80 8080 8081 8000 8001 61613 1883 8883
+# EXPOSE 80 8080 8081 8000 8001 61613 1883 8883
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 CMD ["/usr/local/bin/vcpe-healthd", "--check"]
 CMD ["/sbin/init"]

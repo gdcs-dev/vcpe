@@ -127,7 +127,7 @@ spec:
           WEBHOOK_SECRET: "vcpe-dev-webhook-secret"
           LISTEN_ADDR: ":8080"
       dependsOn:
-        - bng        
+        - bng
     # ── GATEWAY ─────────────────────────────────────────────────────────────────
     # Cable-modem / CPE simulator. Gets a DHCP lease from BNG on WAN (erouter0),
     # bridges LAN ports for attached clients. LAN gateway IP is statically

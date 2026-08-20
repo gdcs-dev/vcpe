@@ -118,10 +118,10 @@ var commandHelp = map[string]CommandHelp{
 			{Name: "--json", Description: "Emit the vcpe.dev/diagnostic/v1 graph"},
 		},
 		Examples: []string{
-			"vcpe diag --from gateway --to webpa --client-service apparmor-simulator",
 			"vcpe diag --from gateway --to parodus",
 			"vcpe diag --from webpa --to webhooks",
 			"vcpe diag --from webpa --to devices",
+			"vcpe diag --from gateway --to webpa --client-service apparmor-simulator",
 			"vcpe diag --from event-sink --to webhook",
 			"vcpe diag --from event-sink --to webhook --allow-active-callback --event devices/diagnostic --device-id mac:02f9491df122",
 			"vcpe diag --from gateway --to callback --client-service apparmor-simulator --subscriber event-sink --allow-active-event --event devices/diagnostic --device-id mac:02f9491df122",

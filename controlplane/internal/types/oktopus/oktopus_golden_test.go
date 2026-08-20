@@ -85,6 +85,39 @@ func TestOktopusStaticAddressingPinsIPv4(t *testing.T) {
 	}
 }
 
+func TestOktopusComposeVolumesAreManifestDriven(t *testing.T) {
+	oktopus.Register()
+	st, _ := typeregistry.Lookup("oktopus")
+
+	dep := plan.Deployment{Name: "edge", Networks: []plan.Network{{Role: "mgmt", Bridge: "edge-mgmt"}}}
+	svc := plan.Service{
+		Name: "oktopus", Type: "oktopus", Image: manifest.Image{Repository: "ghcr.io/gdcs-dev/oktopus", Tag: "dev"},
+		Volumes: []string{"./state:/var/lib/oktopus"},
+		Instances: []plan.Instance{{Interfaces: []plan.Interface{
+			{Role: "mgmt", Network: "edge-mgmt", MAC: "02:00:00:00:00:01", IPv4: "10.0.0.2"},
+		}}},
+	}
+
+	result, err := st.Renderer().Render(context.Background(), render.Input{Deployment: dep, Service: svc, HealthPorts: map[int]int{0: 47000}})
+	if err != nil {
+		t.Fatalf("render oktopus: %v", err)
+	}
+	var compose string
+	for _, artifact := range result.Artifacts {
+		if artifact.Key == "compose.yaml" {
+			compose = artifact.Content
+		}
+	}
+	if !strings.Contains(compose, "- ./state:/var/lib/oktopus") {
+		t.Fatalf("compose.yaml missing manifest volume:\n%s", compose)
+	}
+	for _, implicitVolume := range []string{"./runtime/mongo:/var/lib/mongodb", "./runtime/nats:/var/lib/nats/jetstream"} {
+		if strings.Contains(compose, implicitVolume) {
+			t.Errorf("compose.yaml contains implicit volume %q:\n%s", implicitVolume, compose)
+		}
+	}
+}
+
 // TestOktopusComposeAliasOnlyFirstInstance verifies the bare "oktopus" mgmt
 // alias is registered once, on the first instance/replica only.
 func TestOktopusComposeAliasOnlyFirstInstance(t *testing.T) {

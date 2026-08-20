@@ -128,8 +128,6 @@ spec:
           LAN_DNS: "10.0.0.1"
       dependsOn:
         - bng
-
-
     # ── Event Sink ────────────────────────────────────────────────────────────
     # Generic XMiDT webhook consumer. Registers a Caduceus webhook via Argus
     # and logs all matching WRP events as structured JSON to stdout.

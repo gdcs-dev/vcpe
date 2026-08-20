@@ -44,6 +44,7 @@ RUN echo 'MODEL_NAME=SG417DBCT' >> /etc/device.properties
 
 RUN echo 'PS1="[\u@xb10-dev \W]\\$ "' >> /home/root/.bashrc
 
+COPY container/usp_factory_reset.conf /etc/usp-pa/usp_factory_reset.conf
 COPY container/platforms/${TARGETOS}-${TARGETARCH}/runtime-init-xb10 /usr/local/bin/runtime-init-xb10
 COPY container/platforms/${TARGETOS}-${TARGETARCH}/vcpe-healthd /usr/local/bin/vcpe-healthd
 COPY container/vcpe-healthd.service /etc/systemd/system/vcpe-healthd.service

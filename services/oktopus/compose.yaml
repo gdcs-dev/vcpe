@@ -32,11 +32,6 @@ services:
       - NET_RAW
     env_file:
       - compose.env
-    volumes:
-      # Persist MongoDB data across restarts.
-      - ./runtime/mongo:/var/lib/mongodb
-      # Persist NATS JetStream data.
-      - ./runtime/nats:/var/lib/nats/jetstream
     networks:
       mgmt:
         mac_address: ${IFACE_MGMT_MAC}
