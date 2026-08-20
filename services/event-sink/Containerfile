@@ -1,8 +1,7 @@
 ##############################################################################
 # Stage 1: Build
 ##############################################################################
-#FROM golang:1.22-alpine AS builder
-FROM golang:latest AS builder
+FROM golang:1.26 AS builder
 
 # Go's async goroutine preemption (SIGURG) crashes QEMU user-mode emulation
 # ("uncaught target signal 11") when cross-building for a non-native arch.
@@ -10,7 +9,11 @@ ENV GODEBUG=asyncpreemptoff=1
 
 WORKDIR /src
 COPY go.mod go.sum* ./
-RUN go mod download
+RUN for attempt in 1 2 3; do \
+         go mod download && exit 0; \
+         if [ "$attempt" -lt 3 ]; then sleep "$attempt"; fi; \
+      done; \
+      exit 1
 
 COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /event-sink ./cmd/event-sink

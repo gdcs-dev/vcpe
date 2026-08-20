@@ -7,7 +7,7 @@ RUN echo "deb [trusted=yes] https://gdcs-dev.github.io/debian stable main" | tee
 
 RUN apt-get update && \
    DEBIAN_FRONTEND=noninteractive apt-get -y install \
-   rbus parodus libparodus-dev librbus-dev wrp-c-dev libnanomsg-dev libcimplog-dev && \
+   rbus parodus libparodus-dev librbus-dev wrp-c-dev libnanomsg-dev libcimplog-dev librdk-logger-dev && \
    rm -rf /var/lib/apt/lists/*
 
 COPY src/apparmor-simulator /opt/vcpe/apparmor-simulator
@@ -27,7 +27,7 @@ RUN echo "deb [trusted=yes] https://gdcs-dev.github.io/debian stable main" | tee
 
 RUN apt-get update && \
    DEBIAN_FRONTEND=noninteractive apt-get -y install \
-   rbus parodus rbus-elements telemetry utopia webcfg parodus2rbus \
+   rbus parodus rbus-elements telemetry utopia webcfg parodus2rbus hermesfs \
    iptables net-tools dnsutils dnsmasq systemd-sysv iputils-ping syslog-ng jq netplan.io \
    isc-dhcp-client \
    libcjson1 libmsgpackc2 curl liblog4c3t64 libjansson4 libspdlog-dev && \
@@ -43,6 +43,7 @@ RUN systemctl enable parodus2rbus
 RUN systemctl enable rbus
 RUN systemctl enable apparmor-simulator
 RUN systemctl enable rbus-elements
+RUN systemctl enable hermesfs
 COPY --chmod=644 container/syscfg.service /usr/lib/systemd/system/
 COPY --chmod=755 container/syscfg_init.sh /usr/local/bin/
 RUN systemctl enable syscfg
