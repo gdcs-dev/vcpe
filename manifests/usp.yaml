@@ -167,8 +167,5 @@ spec:
           config:
             env:
                 LAN_DNS: "10.0.0.1"
-          volumes:
-            - /mnt/docker_disk/shared/xb10-dev:/home/root/xb10-dev:rw
-            - /mnt/docker_disk/shared/downloads:/home/root/shared/downloads:rw
           dependsOn:
             - bng
