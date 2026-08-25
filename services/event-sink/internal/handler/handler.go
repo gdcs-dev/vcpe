@@ -81,13 +81,14 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Caduceus delivers the WRP payload as the HTTP body and the WRP metadata
-	// (source, destination, content type, etc.) as X-Xmidt-*/X-Webpa-* headers.
-	// Reconstruct the message from headers first; if that yields no source/dest
-	// (some Caduceus configs send the whole WRP as a msgpack body), fall back to
-	// decoding the body as a WRP message.
+	// Caduceus delivers the WRP payload as the HTTP body and its metadata as
+	// headers. Its X-Webpa-Event value is the WRP destination without `event:`;
+	// X-Webpa-Device-Name is only the device identity.
 	var msg wrp.Message
 	_ = wrphttp.SetMessageFromHeaders(r.Header, &msg)
+	if event := r.Header.Get("X-Webpa-Event"); event != "" {
+		msg.Destination = "event:" + strings.TrimPrefix(event, "event:")
+	}
 	msg.Payload = body
 
 	if msg.Source == "" && msg.Destination == "" {

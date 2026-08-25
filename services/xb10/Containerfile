@@ -85,8 +85,11 @@ RUN echo "src/gz all https://gdcs-dev.github.io/packages/ipk/all" | tee -a /etc/
    && echo "src/gz xb10 https://gdcs-dev.github.io/packages/ipk/xb10" | tee -a /etc/opkg/customfeeds.conf \
    && opkg update
 
-RUN opkg install apparmor-simulator hermesfs
-RUN systemctl enable apparmor-simulator.service hermesfs.service
+RUN opkg install hermesfs
+RUN systemctl enable hermesfs.service
+
+RUN printf '#!/bin/sh\nmkdir -p /root/.rustup-tmp\nexport TMPDIR=/root/.rustup-tmp\ncurl --proto '\''=https'\'' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y\nprintf '\''[net]\\ngit-fetch-with-cli = true\\n'\'' > $HOME/.cargo/config.toml\n' > /usr/bin/install-rust.sh && \
+   chmod +x /usr/bin/install-rust.sh
 
 ENTRYPOINT ["/usr/local/bin/runtime-init-xb10"]
 CMD ["/usr/local/bin/xb10-legacy-entrypoint.sh", "/sbin/init"]

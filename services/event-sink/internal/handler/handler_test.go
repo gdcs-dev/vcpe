@@ -145,7 +145,8 @@ func TestHandler_DiagnosticCallbacksAreNotNormalEvents(t *testing.T) {
 	normalRequest.Header.Set("X-Webpa-Signature", makeSignature("test-secret", normalBody))
 	normalRequest.Header.Set("X-Xmidt-Message-Type", "4")
 	normalRequest.Header.Set("X-Xmidt-Source", "mac:aabbccddeeff/apparmor-simulator")
-	normalRequest.Header.Set("X-Webpa-Device-Name", "event:apparmor/denied/mac:aabbccddeeff")
+	normalRequest.Header.Set("X-Webpa-Device-Name", "mac:aabbccddeeff")
+	normalRequest.Header.Set("X-Webpa-Event", "apparmor/denied/mac:aabbccddeeff")
 	normalResponse := httptest.NewRecorder()
 	h.ServeHTTP(normalResponse, normalRequest)
 	if normalResponse.Code != http.StatusOK {
@@ -235,7 +236,8 @@ func TestHandler_RejectsOversizedCallbackWithoutLoggingPayload(t *testing.T) {
 }
 
 func TestHandler_HeaderBasedEvent(t *testing.T) {
-	h := New("test-secret", slog.Default())
+	var logs bytes.Buffer
+	h := New("test-secret", slog.New(slog.NewJSONHandler(&logs, nil)))
 
 	// Caduceus delivers payload as body + WRP metadata as headers.
 	body := []byte(`{"apparmor":"DENIED","simulated":true}`)
@@ -245,13 +247,17 @@ func TestHandler_HeaderBasedEvent(t *testing.T) {
 	req.Header.Set("X-Webpa-Signature", sig)
 	req.Header.Set("X-Xmidt-Message-Type", "4") // SimpleEvent
 	req.Header.Set("X-Xmidt-Source", "mac:aabbccddeeff/apparmor-simulator")
-	req.Header.Set("X-Webpa-Device-Name", "event:apparmor/denied/mac:aabbccddeeff")
+	req.Header.Set("X-Webpa-Device-Name", "mac:aabbccddeeff")
+	req.Header.Set("X-Webpa-Event", "apparmor/denied/mac:aabbccddeeff")
 	rr := httptest.NewRecorder()
 
 	h.ServeHTTP(rr, req)
 
 	if rr.Code != http.StatusOK {
 		t.Errorf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(logs.String(), `"dest":"event:apparmor/denied/mac:aabbccddeeff"`) {
+		t.Fatalf("event destination was not reconstructed: %s", logs.String())
 	}
 }
 

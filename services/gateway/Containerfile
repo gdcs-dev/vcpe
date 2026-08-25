@@ -1,20 +1,3 @@
-FROM docker.io/library/ubuntu:24.04 AS apparmor-builder
-
-RUN apt-get update && \
-   DEBIAN_FRONTEND=noninteractive apt-get -y install ca-certificates build-essential cmake libcjson-dev
-
-RUN echo "deb [trusted=yes] https://gdcs-dev.github.io/debian stable main" | tee /etc/apt/sources.list.d/custom-packages.list
-
-RUN apt-get update && \
-   DEBIAN_FRONTEND=noninteractive apt-get -y install \
-   rbus parodus libparodus-dev librbus-dev wrp-c-dev libnanomsg-dev libcimplog-dev librdk-logger-dev && \
-   rm -rf /var/lib/apt/lists/*
-
-COPY src/apparmor-simulator /opt/vcpe/apparmor-simulator
-RUN cmake -S /opt/vcpe/apparmor-simulator -B /tmp/apparmor-simulator -DCMAKE_INSTALL_PREFIX=/usr/local && \
-   cmake --build /tmp/apparmor-simulator && \
-   cmake --install /tmp/apparmor-simulator
-
 FROM docker.io/library/ubuntu:24.04
 
 ARG TARGETOS
@@ -36,18 +19,14 @@ RUN apt-get update && \
 COPY --chmod=600 container/50-cloud-init.yaml /etc/netplan/
 COPY --chmod=644 container/device.properties /etc/
 COPY --chmod=644 container/output.json /opt/
-COPY --from=apparmor-builder /usr/local/bin/apparmor-simulator /usr/local/bin/apparmor-simulator
-COPY --chmod=644 container/apparmor-simulator.service /etc/systemd/system/apparmor-simulator.service
 RUN systemctl enable parodus
 RUN systemctl enable parodus2rbus
 RUN systemctl enable rbus
-RUN systemctl enable apparmor-simulator
 RUN systemctl enable rbus-elements
 RUN systemctl enable hermesfs
 COPY --chmod=644 container/syscfg.service /usr/lib/systemd/system/
 COPY --chmod=755 container/syscfg_init.sh /usr/local/bin/
 RUN systemctl enable syscfg
-#COPY --chmod=644 container/telemetry2_0.service /usr/lib/systemd/system/
 RUN mkdir -p /nvram
 RUN systemctl enable telemetry2_0
 
@@ -62,6 +41,9 @@ RUN chmod +x /usr/local/bin/runtime-init-gateway /usr/local/bin/vcpe-healthd /us
 RUN systemctl enable vcpe-healthd.service
 RUN systemctl disable dnsmasq
 RUN systemctl mask systemd-networkd-wait-online
+
+RUN printf '#!/bin/sh\nmkdir -p /root/.rustup-tmp\nexport TMPDIR=/root/.rustup-tmp\ncurl --proto '\''=https'\'' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y\nprintf '\''[net]\\ngit-fetch-with-cli = true\\n'\'' > $HOME/.cargo/config.toml\n' > /usr/bin/install-rust.sh && \
+   chmod +x /usr/bin/install-rust.sh
 
 ENTRYPOINT ["/usr/local/bin/runtime-init-gateway"]
 CMD ["/usr/local/bin/gateway-entrypoint.sh"]
