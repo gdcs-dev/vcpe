@@ -1,9 +1,9 @@
 apiVersion: vcpe.dev/v1
 kind: Deployment
 metadata:
-  name: xb10
-  labels:
-    scenario: xb10
+    name: xb10
+    labels:
+        scenario: xb10
 spec:
     maxReplicasPerService: 3
     maxActiveDeployments: 10
@@ -54,7 +54,7 @@ spec:
           replicas: 1
           image:
             repository: ghcr.io/gdcs-dev/bng
-            tag: v0.3.3
+            tag: v0.3.4
             pullPolicy: always-pull
             buildContext: services/bng
           interfaces:
@@ -86,7 +86,7 @@ spec:
           replicas: 1
           image:
             repository: ghcr.io/gdcs-dev/webpa
-            tag: v0.3.3
+            tag: v0.3.4
             pullPolicy: always-pull
             buildContext: services/webpa
             containerfile: services/webpa/Containerfile
@@ -104,7 +104,7 @@ spec:
           replicas: 1
           image:
             repository: ghcr.io/gdcs-dev/event-sink
-            tag: v0.3.3
+            tag: v0.3.4
             pullPolicy: always-pull
             buildContext: services/event-sink
             containerfile: services/event-sink/Containerfile
@@ -131,7 +131,7 @@ spec:
           replicas: 1
           image:
             repository: ghcr.io/gdcs-dev/xb10
-            tag: v0.3.3
+            tag: v0.3.4
             pullPolicy: always-pull
             buildContext: services/xb10
             containerfile: services/xb10/Containerfile
