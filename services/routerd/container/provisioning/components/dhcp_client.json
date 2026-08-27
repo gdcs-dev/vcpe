@@ -1,0 +1,21 @@
+{
+  "descriptor": {
+    "component_id": "dhcp_client",
+    "component_version": "0.1.0",
+    "provides_contracts": [],
+    "requires_contracts": [
+      {"id": "net.routerd.config",      "major": 1},
+      {"id": "net.routerd.state-event", "major": 1},
+      {"id": "net.routerd.intent",      "major": 1}
+    ],
+    "owns_resource_kinds":    ["DhcpClient"],
+    "watches_resource_kinds": ["Interface"],
+    "provides_capabilities":  [],
+    "requires_platform_capabilities": ["daemon.udhcpc"],
+    "commands":    [],
+    "event_types": ["lease_changed"]
+  },
+  "schemas": {
+    "DhcpClient": {"type": "object"}
+  }
+}

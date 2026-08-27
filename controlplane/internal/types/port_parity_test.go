@@ -16,7 +16,7 @@ import (
 
 func TestRendererArtifactInventory(t *testing.T) {
 	types.Register()
-	for _, typeName := range []string{"bng", "event-sink", "gateway", "generic-container", "oktopus", "webpa", "xb10"} {
+	for _, typeName := range []string{"bng", "event-sink", "gateway", "generic-container", "oktopus", "routerd", "webpa", "xb10"} {
 		t.Run(typeName, func(t *testing.T) {
 			registered, ok := typeregistry.Lookup(typeName)
 			if !ok {
@@ -97,7 +97,7 @@ func artifactKeys(artifacts map[string]string) []string {
 
 func TestRenderersPreserveManifestPorts(t *testing.T) {
 	types.Register()
-	for _, typeName := range []string{"bng", "event-sink", "gateway", "generic-container", "oktopus", "webpa", "xb10"} {
+	for _, typeName := range []string{"bng", "event-sink", "gateway", "generic-container", "oktopus", "routerd", "webpa", "xb10"} {
 		t.Run(typeName, func(t *testing.T) {
 			registered, ok := typeregistry.Lookup(typeName)
 			if !ok {
@@ -150,6 +150,7 @@ func TestRendererComposeSemantics(t *testing.T) {
 		{typeName: "gateway", pinsMAC: true, externalName: "edge-mgmt", containerName: "edge-service-%d", hostname: "service-%d"},
 		{typeName: "generic-container", externalName: "${IFACE_MGMT_NETWORK}", containerName: "${DEPLOYMENT_NAME}-${SERVICE_NAME}-%d", hostname: "${SERVICE_NAME}-%d"},
 		{typeName: "oktopus", healthPublished: true, pinsIPv4: true, pinsMAC: true, externalName: "edge-mgmt", containerName: "edge-service-%d", hostname: "service-%d"},
+		{typeName: "routerd", healthPublished: true, pinsIPv4: true, pinsMAC: true, externalName: "edge-mgmt", containerName: "edge-service-%d", hostname: "service-%d"},
 		{typeName: "webpa", healthPublished: true, pinsIPv4: true, pinsMAC: true, externalName: "edge-mgmt", containerName: "edge-service-%d", hostname: "service-%d"},
 		{typeName: "xb10", healthPublished: true, pinsMAC: true, externalName: "edge-mgmt", containerName: "edge-service-%d", hostname: "service-%d"},
 	}

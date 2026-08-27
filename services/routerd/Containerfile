@@ -1,9 +1,15 @@
-FROM docker.io/library/rust:1-slim
+FROM docker.io/library/ubuntu:24.04
 
 ARG TARGETOS
 ARG TARGETARCH
 
 ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get upgrade -y && \
+   DEBIAN_FRONTEND=noninteractive apt-get -y install ca-certificates
+
+RUN echo "deb [trusted=yes] https://gdcs-dev.github.io/debian stable main" | tee /etc/apt/sources.list.d/custom-packages.list
+
 
 # Match routerd/Dockerfile.test: thin Rust dev image with the runtime tooling
 # routerd's controllers need (netlink, ping, ps/net-tools, dnsutils, udhcpc,
@@ -20,6 +26,7 @@ RUN apt-get update \
    busybox \
    dnsmasq \
    ca-certificates \
+   routerd \
    && rm -rf /var/lib/apt/lists/*
 
 COPY container/platforms/${TARGETOS}-${TARGETARCH}/runtime-init-routerd /usr/local/bin/runtime-init-routerd
@@ -27,15 +34,17 @@ COPY container/platforms/${TARGETOS}-${TARGETARCH}/vcpe-healthd /usr/local/bin/v
 COPY container/entrypoint.sh /usr/local/bin/routerd-legacy-entrypoint.sh
 COPY container/health-probe.sh /usr/local/bin/routerd-health-probe
 COPY container/healthcheck.sh /usr/local/bin/healthcheck.sh
-COPY container/render-config.sh /usr/local/bin/render-config.sh
+# Static composition-root descriptor (deployment.json/components/profiles.json/
+# identity.json): which routerd components run in-process. This is fixed by
+# the binary, not the manifest, so it ships baked into the image rather than
+# being rendered per-deployment; the manifest-rendered desired-state config
+# (etc/routerd/config.json) is mounted separately at runtime alongside it.
+COPY container/provisioning/ /etc/routerd/
 
 RUN chmod +x /usr/local/bin/runtime-init-routerd /usr/local/bin/vcpe-healthd \
               /usr/local/bin/routerd-legacy-entrypoint.sh \
               /usr/local/bin/routerd-health-probe \
-              /usr/local/bin/healthcheck.sh \
-              /usr/local/bin/render-config.sh \
-   && mkdir -p /var/lib/routerd /run/routerd /etc/routerd \
-   && chmod 0700 /run/routerd
+              /usr/local/bin/healthcheck.sh
 
 ENTRYPOINT ["/usr/local/bin/runtime-init-routerd"]
 CMD ["/usr/local/bin/routerd-legacy-entrypoint.sh"]

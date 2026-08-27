@@ -1,0 +1,17 @@
+{
+  "descriptor": {
+    "component_id": "state-event",
+    "component_version": "0.1.0",
+    "provides_contracts": [
+      {"id": "net.routerd.state-event", "major": 1}
+    ],
+    "requires_contracts":             [],
+    "owns_resource_kinds":            [],
+    "watches_resource_kinds":         [],
+    "provides_capabilities":          [],
+    "requires_platform_capabilities": [],
+    "commands":    [],
+    "event_types": []
+  },
+  "schemas": {}
+}

@@ -1,0 +1,22 @@
+{
+  "descriptor": {
+    "component_id": "l3",
+    "component_version": "0.1.0",
+    "provides_contracts": [],
+    "requires_contracts": [
+      {"id": "net.routerd.config",      "major": 1},
+      {"id": "net.routerd.state-event", "major": 1},
+      {"id": "net.routerd.intent",      "major": 1}
+    ],
+    "owns_resource_kinds":    ["IpAddress", "Route"],
+    "watches_resource_kinds": ["Interface", "Bridge"],
+    "provides_capabilities":  [],
+    "requires_platform_capabilities": [],
+    "commands":    [],
+    "event_types": ["drift_detected"]
+  },
+  "schemas": {
+    "IpAddress": {"type": "object"},
+    "Route":     {"type": "object"}
+  }
+}

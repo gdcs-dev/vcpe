@@ -1,0 +1,4 @@
+{
+  "deployment_id": "vcpe",
+  "platform_capabilities": ["daemon.udhcpc"]
+}

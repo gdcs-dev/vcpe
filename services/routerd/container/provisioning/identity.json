@@ -1,0 +1,21 @@
+{
+  "identities": [
+    {
+      "uid": 0,
+      "principal_id": "admin",
+      "scopes": [
+        "ConfigRead", "ConfigWrite",
+        "StateRead", "StatePublish",
+        "CapabilityRead", "Operate",
+        {"IntentRead": "Interface"}, {"IntentRead": "Bridge"},
+        {"IntentRead": "IpAddress"}, {"IntentRead": "Route"},
+        {"IntentRead": "DhcpClient"}, {"IntentRead": "WanPolicy"},
+        {"IntentWrite": "DhcpClient"}, {"IntentWrite": "IpAddress"},
+        {"IntentWrite": "Route"}
+      ]
+    }
+  ],
+  "principal_components": {
+    "admin": "admin"
+  }
+}

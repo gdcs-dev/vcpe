@@ -1,7 +1,4 @@
-## Purpose
-Define the end-to-end contract for manifest-driven interface device naming, replacing hard-coded interface names in renderers and container entrypoints with values sourced from the manifest.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Interface device names are manifest-driven end-to-end
 The system SHALL use the `Interface.device` field from the manifest as the container-internal interface name for all service types that perform MAC-based interface renaming. The control plane SHALL emit `IFACE_<ROLE>_DEVICE` and `IFACE_<ROLE>_MAC` env vars as the canonical contract for interface identity. Container entrypoints for BNG, Gateway, XB10, and `routerd` SHALL rename interfaces by building a target table from `IFACE_*_MAC` and `IFACE_*_DEVICE` env vars, with no hard-coded target names.

@@ -1,0 +1,8 @@
+{
+  "foundation": ["config", "state-event", "capability", "operation", "intent"],
+  "l2":         ["l2"],
+  "l3":         ["l3"],
+  "dhcp_client": ["dhcp_client"],
+  "wan":        ["wan"],
+  "core":       ["l2", "l3", "dhcp_client"]
+}

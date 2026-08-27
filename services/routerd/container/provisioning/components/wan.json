@@ -1,0 +1,63 @@
+{
+  "descriptor": {
+    "component_id": "wan",
+    "component_version": "0.1.0",
+    "provides_contracts": [],
+    "requires_contracts": [
+      {"id": "net.routerd.config",      "major": 1},
+      {"id": "net.routerd.state-event", "major": 1},
+      {"id": "net.routerd.intent",      "major": 1}
+    ],
+    "owns_resource_kinds":    ["WanPolicy"],
+    "watches_resource_kinds": ["Interface", "DhcpClient"],
+    "provides_capabilities":  [],
+    "requires_platform_capabilities": [],
+    "commands":    [],
+    "event_types": [],
+    "produces_intent_kinds": ["DhcpClient", "IpAddress", "Route"]
+  },
+  "schemas": {
+    "WanPolicy": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "WanPolicySpec",
+      "type": "object",
+      "properties": {
+        "interface_ref": {"$ref": "#/$defs/ResourceRef"},
+        "priority": {"type": "integer", "format": "uint32", "minimum": 1},
+        "source": {"$ref": "#/$defs/WanSource"}
+      },
+      "required": ["interface_ref", "source", "priority"],
+      "$defs": {
+        "ResourceId": {"type": "string"},
+        "ResourceKind": {"type": "string"},
+        "ResourceRef": {
+          "type": "object",
+          "properties": {
+            "id": {"$ref": "#/$defs/ResourceId"},
+            "kind": {"$ref": "#/$defs/ResourceKind"}
+          },
+          "required": ["kind", "id"]
+        },
+        "WanSource": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "address": {"type": "string", "format": "ip"},
+                "gateway": {"type": "string", "format": "ip"},
+                "kind": {"type": "string", "const": "static"},
+                "prefix_len": {"type": "integer", "format": "uint8", "maximum": 255, "minimum": 0}
+              },
+              "required": ["kind", "address", "prefix_len", "gateway"]
+            },
+            {
+              "type": "object",
+              "properties": {"kind": {"type": "string", "const": "dhcp"}},
+              "required": ["kind"]
+            }
+          ]
+        }
+      }
+    }
+  }
+}
