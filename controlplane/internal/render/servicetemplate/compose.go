@@ -56,7 +56,48 @@ func BuildComposeService(input render.Input, instance plan.Instance, attach Netw
 		"env_file":       []string{fmt.Sprintf("instances/%d/compose.env", instance.Index+1)},
 		"networks":       svcNets,
 	}
+	if dns := managementDNS(input, instance); len(dns) > 0 {
+		svc["dns"] = dns
+	}
 	return svc, externalNetworks
+}
+
+func managementDNS(input render.Input, instance plan.Instance) []string {
+	if input.Service.Type == "bng" {
+		return nil
+	}
+
+	managementNetwork := ""
+	aardvarkAddress := ""
+	for _, iface := range instance.Interfaces {
+		if iface.Role != "mgmt" {
+			continue
+		}
+		network := input.Deployment.Network(iface.Role)
+		if network == nil || network.IPAMDriver == "none" || network.IPv4 == nil || network.IPv4.Gateway == "" {
+			return nil
+		}
+		managementNetwork = iface.Network
+		aardvarkAddress = network.IPv4.Gateway
+		break
+	}
+	if managementNetwork == "" {
+		return nil
+	}
+
+	for _, service := range input.Deployment.Services {
+		if service.Type != "bng" {
+			continue
+		}
+		for _, bngInstance := range service.Instances {
+			for _, iface := range bngInstance.Interfaces {
+				if iface.Role == "mgmt" && iface.Network == managementNetwork && iface.IPv4 != "" {
+					return []string{iface.IPv4, aardvarkAddress}
+				}
+			}
+		}
+	}
+	return nil
 }
 
 // AttachHealthPublication publishes an instance's own standard health

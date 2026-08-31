@@ -53,6 +53,8 @@ logs-webpa:
 
 release-gate:
 	cd controlplane && go test ./...
+	bash services/bng/assets/dhcpd-notify_test.sh
+	bash tests/smoke/cross-network-device-dns.sh
 
 build-extension:
 	cd extensions/vcpe-visual-editor && npm install && npm run build && npm run package

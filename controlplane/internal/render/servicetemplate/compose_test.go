@@ -82,6 +82,97 @@ func TestBuildComposeServiceStandardFields(t *testing.T) {
 	}
 }
 
+func TestBuildComposeServiceUsesBNGThenAardvarkForManagementDNS(t *testing.T) {
+	mgmt := plan.Network{Role: "mgmt", Bridge: "edge-mgmt", IPv4: &plan.Family{Gateway: "10.10.10.1"}}
+	bngService := plan.Service{
+		Name: "bng", Type: "bng",
+		Instances: []plan.Instance{{Interfaces: []plan.Interface{{Role: "mgmt", Network: "edge-mgmt", IPv4: "10.10.10.10"}}}},
+	}
+	service := plan.Service{Name: "webpa", Type: "webpa", Image: manifest.Image{Repository: "example/webpa"}}
+	input := render.Input{
+		Deployment: plan.Deployment{Name: "edge", Networks: []plan.Network{mgmt}, Services: []plan.Service{bngService, service}},
+		Service:    service,
+	}
+	instance := plan.Instance{Interfaces: []plan.Interface{{Role: "mgmt", Network: "edge-mgmt", IPv4: "10.10.10.11"}}}
+
+	svc, _ := servicetemplate.BuildComposeService(input, instance, servicetemplate.DefaultAttachment)
+	dns, ok := svc["dns"].([]string)
+	if !ok || len(dns) != 2 || dns[0] != "10.10.10.10" || dns[1] != "10.10.10.1" {
+		t.Fatalf("dns = %#v, want [10.10.10.10 10.10.10.1]", svc["dns"])
+	}
+}
+
+func TestBuildComposeServiceDoesNotOverrideBNGResolver(t *testing.T) {
+	mgmt := plan.Network{Role: "mgmt", Bridge: "edge-mgmt", IPv4: &plan.Family{Gateway: "10.10.10.1"}}
+	bngService := plan.Service{
+		Name: "bng", Type: "bng", Image: manifest.Image{Repository: "example/bng"},
+		Instances: []plan.Instance{{Interfaces: []plan.Interface{{Role: "mgmt", Network: "edge-mgmt", IPv4: "10.10.10.10"}}}},
+	}
+	input := render.Input{Deployment: plan.Deployment{Name: "edge", Networks: []plan.Network{mgmt}, Services: []plan.Service{bngService}}, Service: bngService}
+
+	svc, _ := servicetemplate.BuildComposeService(input, bngService.Instances[0], servicetemplate.DefaultAttachment)
+	if _, ok := svc["dns"]; ok {
+		t.Fatalf("BNG must retain Podman/Aardvark resolver, got dns %#v", svc["dns"])
+	}
+}
+
+func TestBuildComposeServiceWithoutBNGLeavesResolverUnchanged(t *testing.T) {
+	service := plan.Service{Name: "webpa", Type: "webpa", Image: manifest.Image{Repository: "example/webpa"}}
+	input := render.Input{
+		Deployment: plan.Deployment{Name: "edge", Networks: []plan.Network{{Role: "mgmt", Bridge: "edge-mgmt", IPv4: &plan.Family{Gateway: "10.10.10.1"}}}, Services: []plan.Service{service}},
+		Service:    service,
+	}
+	instance := plan.Instance{Interfaces: []plan.Interface{{Role: "mgmt", Network: "edge-mgmt", IPv4: "10.10.10.11"}}}
+
+	svc, _ := servicetemplate.BuildComposeService(input, instance, servicetemplate.DefaultAttachment)
+	if _, ok := svc["dns"]; ok {
+		t.Fatalf("deployment without BNG must retain Podman resolver, got dns %#v", svc["dns"])
+	}
+}
+
+func TestBuildComposeServiceRequiresSameManagedManagementNetwork(t *testing.T) {
+	tests := []struct {
+		name             string
+		network          plan.Network
+		serviceInterface plan.Interface
+		bngInterface     plan.Interface
+	}{
+		{
+			name:             "different network",
+			network:          plan.Network{Role: "mgmt", Bridge: "edge-mgmt", IPv4: &plan.Family{Gateway: "10.10.10.1"}},
+			serviceInterface: plan.Interface{Role: "mgmt", Network: "edge-mgmt"},
+			bngInterface:     plan.Interface{Role: "mgmt", Network: "other-mgmt", IPv4: "10.20.20.10"},
+		},
+		{
+			name:             "unmanaged management network",
+			network:          plan.Network{Role: "mgmt", Bridge: "edge-mgmt", IPAMDriver: "none", IPv4: &plan.Family{Gateway: "10.10.10.1"}},
+			serviceInterface: plan.Interface{Role: "mgmt", Network: "edge-mgmt"},
+			bngInterface:     plan.Interface{Role: "mgmt", Network: "edge-mgmt", IPv4: "10.10.10.10"},
+		},
+		{
+			name:             "non-management role",
+			network:          plan.Network{Role: "admin", Bridge: "edge-admin", IPv4: &plan.Family{Gateway: "10.10.10.1"}},
+			serviceInterface: plan.Interface{Role: "admin", Network: "edge-admin"},
+			bngInterface:     plan.Interface{Role: "admin", Network: "edge-admin", IPv4: "10.10.10.10"},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			bngService := plan.Service{Name: "bng", Type: "bng", Instances: []plan.Instance{{Interfaces: []plan.Interface{test.bngInterface}}}}
+			service := plan.Service{Name: "webpa", Type: "webpa", Image: manifest.Image{Repository: "example/webpa"}}
+			input := render.Input{
+				Deployment: plan.Deployment{Name: "edge", Networks: []plan.Network{test.network}, Services: []plan.Service{bngService, service}},
+				Service:    service,
+			}
+			svc, _ := servicetemplate.BuildComposeService(input, plan.Instance{Interfaces: []plan.Interface{test.serviceInterface}}, servicetemplate.DefaultAttachment)
+			if _, ok := svc["dns"]; ok {
+				t.Fatalf("ineligible topology must retain Podman resolver, got dns %#v", svc["dns"])
+			}
+		})
+	}
+}
+
 func TestAttachHealthPublicationNoOpWhenHealthPortZero(t *testing.T) {
 	topNets, svcNets, svc := map[string]any{}, map[string]any{}, map[string]any{}
 	input := render.Input{Deployment: plan.Deployment{Name: "edge"}}

@@ -6,6 +6,7 @@ package webpa
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 
@@ -72,12 +73,66 @@ func renderInstance(_ context.Context, input render.Input, cfg Config) (render.R
 	instance := input.Service.Instances[0]
 	env := render.IfaceEnv(input.Deployment, input.Service, instance)
 	env = append(env, render.SortedEnv(cfg.Env)...)
+	if router, cidrs := bngRoutes(input.Deployment, instance); router != "" && len(cidrs) > 0 {
+		env = append(env,
+			"BNG_ROUTER_IPV4="+router,
+			"BNG_ROUTED_IPV4_CIDRS="+strings.Join(cidrs, " "),
+		)
+	}
 	return render.Result{
 		Artifacts: []render.Artifact{
 			{Key: "compose.env", Content: strings.Join(env, "\n") + "\n"},
 			{Key: "compose.yaml", Content: renderWebPACompose(input, instance)},
 		},
 	}, nil
+}
+
+func bngRoutes(deployment plan.Deployment, instance plan.Instance) (string, []string) {
+	managementNetwork := ""
+	for _, iface := range instance.Interfaces {
+		if iface.Role == "mgmt" && iface.ManagedNetwork {
+			managementNetwork = iface.Network
+			break
+		}
+	}
+	if managementNetwork == "" {
+		return "", nil
+	}
+
+	for _, service := range deployment.Services {
+		if service.Type != "bng" {
+			continue
+		}
+		for _, bngInstance := range service.Instances {
+			router := ""
+			for _, iface := range bngInstance.Interfaces {
+				if iface.Role == "mgmt" && iface.Network == managementNetwork && iface.IPv4 != "" {
+					router = iface.IPv4
+					break
+				}
+			}
+			if router == "" {
+				continue
+			}
+
+			seen := map[string]bool{}
+			var cidrs []string
+			for _, iface := range bngInstance.Interfaces {
+				if iface.Network == managementNetwork {
+					continue
+				}
+				network := deployment.Network(iface.Role)
+				if network == nil || network.IPv4 == nil || network.IPv4.CIDR == "" || seen[network.IPv4.CIDR] {
+					continue
+				}
+				seen[network.IPv4.CIDR] = true
+				cidrs = append(cidrs, network.IPv4.CIDR)
+			}
+			sort.Strings(cidrs)
+			return router, cidrs
+		}
+	}
+	return "", nil
 }
 
 // renderWebPACompose generates a compose.yaml that wires up every interface

@@ -14,6 +14,12 @@ if [[ "${IFACE_MGMT_ADDRESSING:-dhcp}" != "static" && -z "${IFACE_MGMT_NETWORK_M
 	dhclient -v eth0
 fi
 
+if [[ -n "${BNG_ROUTER_IPV4:-}" ]]; then
+	for cidr in ${BNG_ROUTED_IPV4_CIDRS:-}; do
+		ip route replace "$cidr" via "$BNG_ROUTER_IPV4" dev "${IFACE_MGMT_DEVICE:-eth0}"
+	done
+fi
+
 exec /usr/local/bin/vcpe-healthd \
 	--probe "talaria=/usr/local/bin/webpa-health-probe talaria" \
 	--probe "scytale=/usr/local/bin/webpa-health-probe scytale" \

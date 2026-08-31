@@ -232,6 +232,26 @@ func TestBNGDnsmasqResolvesWebPAByInstanceAlias(t *testing.T) {
 			t.Fatalf("expected dnsmasq.conf to contain %q, got:\n%s", want, conf)
 		}
 	}
+	for _, want := range []string{
+		"addn-hosts=/etc/dnsmasq.management.hosts",
+		"addn-hosts=/etc/dnsmasq.dhcp.hosts",
+	} {
+		if !strings.Contains(conf, want) {
+			t.Fatalf("expected dnsmasq.conf to contain %q, got:\n%s", want, conf)
+		}
+	}
+	if strings.Contains(conf, "addn-hosts=/etc/dnsmasq.hosts") || strings.Contains(conf, "dnsmasq.dynamic.hosts") {
+		t.Fatalf("dnsmasq.conf must not serve the management seed or removed shared dynamic file:\n%s", conf)
+	}
+	for _, key := range []string{"etc/dnsmasq.management.hosts", "etc/dnsmasq.dhcp.hosts"} {
+		content, ok := artifact(result, key)
+		if !ok || content != "" {
+			t.Fatalf("expected empty separately-owned artifact %q, got present=%t content=%q", key, ok, content)
+		}
+	}
+	if _, ok := artifact(result, "etc/dnsmasq.dynamic.hosts"); ok {
+		t.Fatal("removed shared dynamic hosts artifact must not be rendered")
+	}
 	if strings.Contains(conf, ",webpa\n") {
 		t.Fatalf("dnsmasq.conf cname targets should not use the bare service name, got:\n%s", conf)
 	}
@@ -259,5 +279,112 @@ func TestBNGRendersWithDHCPAddressingOnItsOwnServerRole(t *testing.T) {
 	}
 	if _, err := st.Renderer().Render(context.Background(), render.Input{Deployment: dep, Service: svc}); err != nil {
 		t.Fatalf("expected bng to render even with addressing: dhcp on its own DHCP-server role, got %v", err)
+	}
+}
+
+func TestBNGRendersDHCPLeaseCallbacksAndPlannedAliases(t *testing.T) {
+	bng.Register()
+	st, _ := typeregistry.Lookup("bng")
+	var config yaml.Node
+	if err := yaml.Unmarshal([]byte(`
+access:
+  - role: wan
+    dhcp4:
+      subnet: 10.7.200.0/24
+      ranges: [{start: 10.7.200.100, end: 10.7.200.200}]
+  - role: cm
+    dhcp4:
+      subnet: 10.7.201.0/24
+      ranges: [{start: 10.7.201.100, end: 10.7.201.200}]
+`), &config); err != nil {
+		t.Fatal(err)
+	}
+	config = *config.Content[0]
+
+	bngService := plan.Service{
+		Name:   "bng",
+		Type:   "bng",
+		Image:  manifest.Image{Repository: "x/bng"},
+		Config: config,
+		Instances: []plan.Instance{{Interfaces: []plan.Interface{
+			{Role: "mgmt", Network: "edge-mgmt", MAC: "02:00:00:00:00:01", IPv4: "10.10.10.10"},
+			{Role: "wan", Network: "edge-wan", MAC: "02:00:00:00:00:02", IPv4: "10.7.200.1"},
+			{Role: "cm", Network: "edge-cm", MAC: "02:00:00:00:00:03", IPv4: "10.7.201.1"},
+		}}},
+	}
+	xb10Service := plan.Service{
+		Name: "xb10", Type: "xb10", Replicas: 2,
+		Instances: []plan.Instance{
+			{Index: 0, Interfaces: []plan.Interface{
+				{Role: "wan", Network: "edge-wan", MAC: "02:00:00:00:10:01", DefaultRoute: true},
+				{Role: "cm", Network: "edge-cm", MAC: "02:00:00:00:10:02"},
+				{Role: "lan", Network: "edge-lan", MAC: "02:00:00:00:10:03"},
+			}},
+			{Index: 1, Interfaces: []plan.Interface{
+				{Role: "wan", Network: "edge-wan", MAC: "02:00:00:00:20:01", DefaultRoute: true},
+				{Role: "cm", Network: "edge-cm", MAC: "02:00:00:00:20:02"},
+			}},
+		},
+	}
+	dep := plan.Deployment{
+		Name: "edge",
+		Networks: []plan.Network{
+			{Role: "mgmt", Bridge: "edge-mgmt"},
+			{Role: "wan", Bridge: "edge-wan", IPAMDriver: "none"},
+			{Role: "cm", Bridge: "edge-cm", IPAMDriver: "none"},
+			{Role: "lan", Bridge: "edge-lan", IPAMDriver: "none"},
+		},
+		Services: []plan.Service{bngService, xb10Service},
+	}
+
+	result, err := st.Renderer().Render(context.Background(), render.Input{Deployment: dep, Service: bngService})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	dhcpd, _ := artifact(result, "etc/dhcp/dhcpd.conf")
+	for _, want := range []string{"on commit", "on release", "on expiry", "/etc/dhcpd-notify.sh"} {
+		if !strings.Contains(dhcpd, want) {
+			t.Errorf("dhcpd.conf missing %q:\n%s", want, dhcpd)
+		}
+	}
+	mapping, ok := artifact(result, "etc/dnsmasq.dhcp-hosts.map")
+	if !ok {
+		t.Fatal("expected DHCP identity map")
+	}
+	for _, want := range []string{
+		"02:00:00:00:10:01 xb10 xb10-1 xb10-1-wan",
+		"02:00:00:00:10:02 xb10-1-cm",
+		"02:00:00:00:20:01 xb10-2 xb10-2-wan",
+		"02:00:00:00:20:02 xb10-2-cm",
+	} {
+		if !strings.Contains(mapping, want+"\n") {
+			t.Errorf("identity map missing %q:\n%s", want, mapping)
+		}
+	}
+	if strings.Contains(mapping, "02:00:00:00:10:03") {
+		t.Errorf("identity map published interface outside BNG DHCP access roles:\n%s", mapping)
+	}
+}
+
+func TestBNGRejectsDuplicateGeneratedDHCPAlias(t *testing.T) {
+	bng.Register()
+	st, _ := typeregistry.Lookup("bng")
+	bngService := plan.Service{
+		Name: "bng", Type: "bng", Image: manifest.Image{Repository: "x/bng"}, Config: bngConfigNode(t),
+		Instances: []plan.Instance{{Interfaces: []plan.Interface{{Role: "wan", Network: "edge-wan", Device: "wan0", MAC: "02:00:00:00:00:01", IPv4: "10.200.0.1"}}}},
+	}
+	dep := plan.Deployment{
+		Name:     "edge",
+		Networks: []plan.Network{{Role: "wan", Bridge: "edge-wan", IPAMDriver: "none"}},
+		Services: []plan.Service{
+			bngService,
+			{Name: "device", Type: "gateway", Instances: []plan.Instance{{Index: 0, Interfaces: []plan.Interface{{Role: "wan", MAC: "02:00:00:00:10:01"}}}}},
+			{Name: "device-1", Type: "gateway", Instances: []plan.Instance{{Index: 0, Interfaces: []plan.Interface{{Role: "wan", MAC: "02:00:00:00:20:01"}}}}},
+		},
+	}
+
+	_, err := st.Renderer().Render(context.Background(), render.Input{Deployment: dep, Service: bngService})
+	if err == nil || !strings.Contains(err.Error(), "duplicate DHCP DNS alias") || !strings.Contains(err.Error(), "device-1") {
+		t.Fatalf("expected contextual duplicate alias error, got %v", err)
 	}
 }

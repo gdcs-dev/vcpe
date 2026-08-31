@@ -111,6 +111,67 @@ func TestWebPADefaultAddressingIsDHCP(t *testing.T) {
 	}
 }
 
+func TestWebPARendersRoutesToBNGConnectedNetworks(t *testing.T) {
+	webpa.Register()
+	st, _ := typeregistry.Lookup("webpa")
+
+	mgmt := plan.Network{Role: "mgmt", Bridge: "edge-mgmt", IPv4: &plan.Family{CIDR: "10.10.10.0/24", Gateway: "10.10.10.1"}}
+	wan := plan.Network{Role: "wan", Bridge: "edge-wan", IPAMDriver: "none", IPv4: &plan.Family{CIDR: "10.7.200.0/24"}}
+	cm := plan.Network{Role: "cm", Bridge: "edge-cm", IPAMDriver: "none", IPv4: &plan.Family{CIDR: "10.7.201.0/24"}}
+	bngService := plan.Service{
+		Name: "bng", Type: "bng",
+		Instances: []plan.Instance{{Interfaces: []plan.Interface{
+			{Role: "mgmt", Network: "edge-mgmt", IPv4: "10.10.10.10"},
+			{Role: "wan", Network: "edge-wan", IPv4: "10.7.200.1"},
+			{Role: "cm", Network: "edge-cm", IPv4: "10.7.201.1"},
+		}}},
+	}
+	service := plan.Service{
+		Name: "webpa", Type: "webpa", Image: manifest.Image{Repository: "example/webpa"},
+		Instances: []plan.Instance{{Interfaces: []plan.Interface{{Role: "mgmt", Network: "edge-mgmt", Device: "eth0", IPv4: "10.10.10.11", ManagedNetwork: true}}}},
+	}
+	input := render.Input{Deployment: plan.Deployment{Name: "edge", Networks: []plan.Network{mgmt, wan, cm}, Services: []plan.Service{bngService, service}}, Service: service}
+
+	result, err := st.Renderer().Render(context.Background(), input)
+	if err != nil {
+		t.Fatalf("render webpa: %v", err)
+	}
+	env := ""
+	for _, artifact := range result.Artifacts {
+		if artifact.Key == "compose.env" {
+			env = artifact.Content
+		}
+	}
+	for _, want := range []string{
+		"BNG_ROUTER_IPV4=10.10.10.10",
+		"BNG_ROUTED_IPV4_CIDRS=10.7.200.0/24 10.7.201.0/24",
+	} {
+		if !strings.Contains(env, want) {
+			t.Errorf("compose.env missing %q:\n%s", want, env)
+		}
+	}
+}
+
+func TestWebPAWithoutEligibleBNGRendersNoRoutes(t *testing.T) {
+	webpa.Register()
+	st, _ := typeregistry.Lookup("webpa")
+	service := plan.Service{
+		Name: "webpa", Type: "webpa", Image: manifest.Image{Repository: "example/webpa"},
+		Instances: []plan.Instance{{Interfaces: []plan.Interface{{Role: "mgmt", Network: "edge-mgmt", Device: "eth0", IPv4: "10.10.10.11", ManagedNetwork: true}}}},
+	}
+	input := render.Input{Deployment: plan.Deployment{Name: "edge", Networks: []plan.Network{{Role: "mgmt", Bridge: "edge-mgmt", IPv4: &plan.Family{CIDR: "10.10.10.0/24"}}, {Role: "wan", Bridge: "edge-wan", IPv4: &plan.Family{CIDR: "10.7.200.0/24"}}}, Services: []plan.Service{service}}, Service: service}
+
+	result, err := st.Renderer().Render(context.Background(), input)
+	if err != nil {
+		t.Fatalf("render webpa: %v", err)
+	}
+	for _, artifact := range result.Artifacts {
+		if artifact.Key == "compose.env" && strings.Contains(artifact.Content, "BNG_ROUTE") {
+			t.Fatalf("deployment without an eligible BNG must not render routes:\n%s", artifact.Content)
+		}
+	}
+}
+
 func TestWebPARejectsConfig(t *testing.T) {
 	webpa.Register()
 	st, _ := typeregistry.Lookup("webpa")

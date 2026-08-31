@@ -109,7 +109,10 @@ apply_runtime_config() {
     cp /runtime-config/etc/dhcp/dhcpd6.conf /etc/dhcp/dhcpd6.conf
     cp /runtime-config/etc/dnsmasq.conf /etc/dnsmasq.conf
     cp /runtime-config/etc/dnsmasq.hosts /etc/dnsmasq.hosts
-    cp /runtime-config/etc/dnsmasq.dynamic.hosts /etc/dnsmasq.dynamic.hosts
+    cp /runtime-config/etc/dnsmasq.management.hosts /etc/dnsmasq.management.hosts
+    if [[ ! -f /etc/dnsmasq.dhcp.hosts ]]; then
+        cp /runtime-config/etc/dnsmasq.dhcp.hosts /etc/dnsmasq.dhcp.hosts
+    fi
     cp /runtime-config/etc/dnsmasq.dhcp-hosts.map /etc/dnsmasq.dhcp-hosts.map
     cp /runtime-config/etc/dnsmasq.dhcp-subnets.map /etc/dnsmasq.dhcp-subnets.map
     cp /runtime-config/etc/service-interfaces.env /etc/service-interfaces.env
@@ -127,8 +130,8 @@ apply_runtime_config() {
 
     # Before dnsmasq overwrites resolv.conf, resolve each peer hostname from
     # dnsmasq.hosts via Podman's aardvark-dns (which knows each container's
-    # actual runtime IP). Write the resolved entries to dnsmasq.dynamic.hosts
-    # and clear the static file so dnsmasq never serves stale planned IPs.
+    # actual runtime IP). Write only the management-owned records; DHCP lease
+    # callbacks own dnsmasq.dhcp.hosts independently.
     # Peers that depend on BNG (e.g. webpa) start after it, so their aardvark
     # alias may not exist yet on the first attempt; retry briefly.
     resolve_peer_ip() {
@@ -145,7 +148,7 @@ apply_runtime_config() {
         done
         return 1
     }
-    : > /etc/dnsmasq.dynamic.hosts
+    : > /etc/dnsmasq.management.hosts
     while IFS= read -r line || [[ -n "$line" ]]; do
         [[ -z "$line" || "$line" == '#'* ]] && continue
         first_hostname=$(printf '%s' "$line" | awk '{print $2}')
@@ -153,10 +156,9 @@ apply_runtime_config() {
         actual_ip=$(resolve_peer_ip "$first_hostname" || true)
         if [[ -n "$actual_ip" ]]; then
             rest=$(printf '%s' "$line" | cut -d' ' -f2-)
-            printf '%s %s\n' "$actual_ip" "$rest" >> /etc/dnsmasq.dynamic.hosts
+            printf '%s %s\n' "$actual_ip" "$rest" >> /etc/dnsmasq.management.hosts
         fi
     done < /etc/dnsmasq.hosts
-    : > /etc/dnsmasq.hosts
 
     cat >/etc/resolv.conf <<'EOF'
 nameserver 127.0.0.1

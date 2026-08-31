@@ -7,6 +7,8 @@ device:
     idlePeriod: 2m
     maxDevices: 100
     pingPeriod: 1m
+    wrpSourceCheck:
+      type: enforce
     upgrader:
       handshakeTimeout: 10s
   outbound:
