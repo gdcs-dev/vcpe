@@ -148,7 +148,7 @@ func renderXB10Compose(input render.Input, inst plan.Instance) string {
 		svc["ports"] = ports
 	}
 	svcNets, _ := svc["networks"].(map[string]any)
-	servicetemplate.AttachHealthPublication(input, inst, input.HealthPorts[inst.Index], topNets, svcNets, svc)
+	servicetemplate.AttachHealthPublication(input, inst, input.HealthPorts[inst.Index], 9878, topNets, svcNets, svc)
 	instanceName := fmt.Sprintf("%s-%d", input.Service.Name, inst.Index+1)
 	doc := map[string]any{
 		"services": map[string]any{instanceName: svc},

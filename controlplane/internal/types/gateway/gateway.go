@@ -241,7 +241,7 @@ func renderGatewayCompose(input render.Input, inst plan.Instance) string {
 	instanceName := fmt.Sprintf("%s-%d", input.Service.Name, inst.Index+1)
 	services := map[string]any{instanceName: svc}
 	svcNets, _ := svc["networks"].(map[string]any)
-	servicetemplate.AttachHealthPublication(input, inst, input.HealthPorts[inst.Index], topNets, svcNets, svc)
+	servicetemplate.AttachHealthPublication(input, inst, input.HealthPorts[inst.Index], 9878, topNets, svcNets, svc)
 	doc := map[string]any{
 		"services": services,
 		"networks": topNets,

@@ -10,6 +10,8 @@ import (
 	"github.com/gdcs-dev/vcpe/controlplane/internal/types/genericcontainer"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/types/oktopus"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/types/routerd"
+	"github.com/gdcs-dev/vcpe/controlplane/internal/types/telemetrygateway"
+	"github.com/gdcs-dev/vcpe/controlplane/internal/types/webconfig"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/types/webpa"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/types/xb10"
 )
@@ -24,12 +26,14 @@ func Register() {
 	}
 	bng.Register()
 	eventsink.Register()
-	diagnostic.Register(diagnostic.NewWebhookProvider())
+	diagnostic.Register(diagnostic.NewWebhookProvider("event-sink", true))
+	diagnostic.Register(diagnostic.NewWebhookProvider("telemetry-gateway", false))
 	gateway.Register()
 	diagnostic.Register(diagnostic.NewCPEWebPAProvider("gateway"))
 	diagnostic.Register(diagnostic.NewCPEWebPACallbackProvider("gateway"))
 	diagnostic.Register(diagnostic.NewParodusClientsProvider("gateway"))
 	oktopus.Register()
+	webconfig.Register()
 	webpa.Register()
 	diagnostic.Register(diagnostic.NewArgusWebhooksProvider())
 	diagnostic.Register(diagnostic.NewTalariaDevicesProvider())
@@ -39,5 +43,6 @@ func Register() {
 	diagnostic.Register(diagnostic.NewParodusClientsProvider("xb10"))
 	genericcontainer.Register()
 	routerd.Register()
+	telemetrygateway.Register()
 	registered = true
 }

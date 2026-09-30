@@ -217,6 +217,7 @@ func validateArtifactKey(key string) error {
 type composeDocument struct {
 	Services map[string]yaml.Node `yaml:"services,omitempty"`
 	Networks map[string]yaml.Node `yaml:"networks,omitempty"`
+	Volumes  map[string]yaml.Node `yaml:"volumes,omitempty"`
 }
 
 func parseCompose(content string) (composeDocument, error) {
@@ -230,7 +231,7 @@ func parseCompose(content string) (composeDocument, error) {
 	for position := 0; position < len(root.Content[0].Content); position += 2 {
 		key := root.Content[0].Content[position]
 		value := root.Content[0].Content[position+1]
-		if (key.Value == "services" || key.Value == "networks") && value.Kind != yaml.MappingNode {
+		if (key.Value == "services" || key.Value == "networks" || key.Value == "volumes") && value.Kind != yaml.MappingNode {
 			return composeDocument{}, fmt.Errorf("parse compose.yaml: %s must be a mapping", key.Value)
 		}
 	}
@@ -249,7 +250,7 @@ func (document *composeDocument) merge(fragment composeDocument) error {
 	if err := mergeComposeSection(&document.Networks, fragment.Networks, "network"); err != nil {
 		return err
 	}
-	return nil
+	return mergeComposeSection(&document.Volumes, fragment.Volumes, "volume")
 }
 
 func mergeComposeSection(destination *map[string]yaml.Node, source map[string]yaml.Node, kind string) error {

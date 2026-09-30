@@ -6,6 +6,8 @@ package image
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
 
 	"github.com/gdcs-dev/vcpe/controlplane/internal/imageref"
@@ -110,6 +112,9 @@ func (m *Manager) Build(ctx context.Context, doc manifest.Document) (Summary, er
 
 func (m *Manager) BuildWithOptions(ctx context.Context, doc manifest.Document, opts BuildOptions) (Summary, error) {
 	services := selectedServices(doc)
+	if err := validateBuildContexts(services); err != nil {
+		return Summary{}, err
+	}
 	summary := Summary{Actions: make([]Action, 0, len(services))}
 	for _, service := range services {
 		imageRef := imageReference(service.Image)
@@ -163,6 +168,9 @@ func (m *Manager) BuildWithOptions(ctx context.Context, doc manifest.Document, o
 
 func (m *Manager) EnsureForApply(ctx context.Context, doc manifest.Document) (Summary, error) {
 	services := selectedServices(doc)
+	if err := validateBuildContexts(services); err != nil {
+		return Summary{}, err
+	}
 	summary := Summary{Actions: make([]Action, 0, len(services))}
 	for _, service := range services {
 		policy := resolvePolicy(service)
@@ -199,6 +207,21 @@ func (m *Manager) EnsureForApply(ctx context.Context, doc manifest.Document) (Su
 		})
 	}
 	return summary, nil
+}
+
+func validateBuildContexts(services []manifest.Service) error {
+	for _, service := range services {
+		if service.Type != "telemetry-gateway" || service.Image.BuildContext == "" {
+			continue
+		}
+		contextPath := service.Image.BuildContext
+		for _, marker := range []string{"Containerfile", "go.mod"} {
+			if _, err := os.Stat(filepath.Join(contextPath, marker)); err != nil {
+				return fmt.Errorf("service %q build context %q is not an initialized telemetry-gateway submodule; run git submodule update --init --recursive services/telemetry-gateway", service.Name, contextPath)
+			}
+		}
+	}
+	return nil
 }
 
 func selectedServices(doc manifest.Document) []manifest.Service {

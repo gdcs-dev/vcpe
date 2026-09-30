@@ -87,6 +87,12 @@ type ServiceType interface {
 	ValidateInterfaces(interfaces []manifest.Interface) error
 }
 
+// ReplicaValidator optionally constrains the active replica count for a
+// service type whose topology cannot be replicated safely.
+type ReplicaValidator interface {
+	ValidateReplicas(replicas int) error
+}
+
 var (
 	mu       sync.RWMutex
 	registry = map[string]ServiceType{}

@@ -85,6 +85,24 @@ func TestBuiltInMetadata(t *testing.T) {
 			renderer:     "routerd-renderer",
 		},
 		{
+			name:         "telemetry-gateway",
+			health:       typeregistry.HealthBehavior{Mode: typeregistry.HealthModeCurated, ContainerPort: 8080},
+			imagePolicy:  "build",
+			description:  "Embedded telemetry gateway with local PostgreSQL and observability services",
+			defaultImage: "ghcr.io/gdcs-dev/telemetry-gateway",
+			roles:        []typeregistry.RoleRequirement{{Role: "mgmt", Required: true}},
+			renderer:     "telemetry-gateway-renderer",
+		},
+		{
+			name:         "webconfig",
+			health:       typeregistry.HealthBehavior{Mode: typeregistry.HealthModeCurated, ContainerPort: 9878},
+			imagePolicy:  "build",
+			description:  "Development-only WebConfig server for Gateway webcfg clients",
+			defaultImage: "ghcr.io/gdcs-dev/webconfig",
+			roles:        []typeregistry.RoleRequirement{{Role: "mgmt", Required: true}},
+			renderer:     "webconfig-renderer",
+		},
+		{
 			name:         "webpa",
 			health:       typeregistry.HealthBehavior{Mode: typeregistry.HealthModeCurated, ContainerPort: 9878},
 			imagePolicy:  "build",
@@ -150,7 +168,7 @@ func TestRegistryCompleteness(t *testing.T) {
 	}
 
 	// The v1 type set is locked in decisions.md.
-	want := map[string]bool{"bng": false, "gateway": false, "webpa": false, "generic-container": false}
+	want := map[string]bool{"bng": false, "gateway": false, "webconfig": false, "webpa": false, "generic-container": false}
 	for _, name := range registered {
 		if _, ok := want[name]; ok {
 			want[name] = true

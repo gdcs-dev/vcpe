@@ -31,7 +31,8 @@ func resolverRegistry() *Registry {
 	registry.Register(NewParodusClientsProvider("xb10"))
 	registry.Register(NewArgusWebhooksProvider())
 	registry.Register(NewTalariaDevicesProvider())
-	registry.Register(NewWebhookProvider())
+	registry.Register(NewWebhookProvider("event-sink", true))
+	registry.Register(NewWebhookProvider("telemetry-gateway", false))
 	return registry
 }
 
@@ -166,6 +167,26 @@ func TestResolveWebhookParticipantsAndEndpoints(t *testing.T) {
 		t.Fatalf("Resolve: %v", err)
 	}
 	if selection.Provider.Journey() != JourneyWebhook || selection.Endpoint != subscriberEndpoint || selection.TargetEndpoint != webpaEndpoint {
+		t.Fatalf("selection = %+v", selection)
+	}
+}
+
+func TestResolveTelemetryWebhookParticipantsAndEndpoints(t *testing.T) {
+	services := "    - name: telemetry\n      type: telemetry-gateway\n      replicas: 1\n      interfaces: [{role: mgmt}]\n      image: {repository: telemetry-gateway}\n    - name: webpa\n      type: webpa\n      replicas: 1\n      image: {repository: webpa}\n"
+	store := resolverStore(t, services)
+	subscriberEndpoint, err := store.ReserveHealthEndpoint("edge", "telemetry", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	webpaEndpoint, err := store.ReserveHealthEndpoint("edge", "webpa", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	selection, err := Resolve(store, resolverRegistry(), ResolveRequest{Deployment: "edge", Source: "telemetry", Target: "webhook"})
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if selection.Source.Type != "telemetry-gateway" || selection.Endpoint != subscriberEndpoint || selection.TargetEndpoint != webpaEndpoint {
 		t.Fatalf("selection = %+v", selection)
 	}
 }

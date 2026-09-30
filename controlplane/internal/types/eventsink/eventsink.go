@@ -97,12 +97,8 @@ func renderInstance(_ context.Context, input render.Input, cfg Config) (render.R
 	// Only the first instance claims the alias, matching the
 	// firstInstanceAlias convention used elsewhere (bng.go) to avoid
 	// ambiguity across replicas.
-	if instance.Index == 0 {
-		if mgmt, ok := svcNets["mgmt"].(map[string]any); ok {
-			mgmt["aliases"] = []string{"event-sink"}
-		}
-	}
-	servicetemplate.AttachHealthPublication(input, instance, input.HealthPorts[instance.Index], networks, svcNets, svc)
+	servicetemplate.AddFirstInstanceNetworkAliases(instance, svcNets, "mgmt", []string{"event-sink"})
+	servicetemplate.AttachHealthPublication(input, instance, input.HealthPorts[instance.Index], 9878, networks, svcNets, svc)
 	services := map[string]any{instanceName: svc}
 	compose, err := yaml.Marshal(map[string]any{"services": services, "networks": networks})
 	if err != nil {

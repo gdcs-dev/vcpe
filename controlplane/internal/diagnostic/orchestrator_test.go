@@ -252,6 +252,31 @@ func TestDiagnoseWebhookPassivelyCollectsBothParticipants(t *testing.T) {
 	}
 }
 
+func TestDiagnoseRejectsTelemetryActiveCallbackBeforeHTTP(t *testing.T) {
+	store := resolverStore(t, "    - name: telemetry\n      type: telemetry-gateway\n      replicas: 1\n      interfaces: [{role: mgmt}]\n      image: {repository: telemetry-gateway}\n    - name: webpa\n      type: webpa\n      replicas: 1\n      image: {repository: webpa}\n")
+	if _, err := store.ReserveHealthEndpoint("edge", "telemetry", 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ReserveHealthEndpoint("edge", "webpa", 0); err != nil {
+		t.Fatal(err)
+	}
+	requests := 0
+	client := &Client{HTTPClient: &http.Client{Transport: clientRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		requests++
+		return nil, fmt.Errorf("unexpected participant request")
+	})}}
+	_, err := Diagnose(context.Background(), store, resolverRegistry(), client, ResolveRequest{
+		Deployment: "edge", Source: "telemetry", Target: "webhook",
+		AllowActiveCallback: true, Event: "devices/diagnostic", DeviceID: "mac:001122334455",
+	})
+	if err == nil || !strings.Contains(err.Error(), "telemetry-gateway supports passive webhook diagnosis only") {
+		t.Fatalf("Diagnose error = %v", err)
+	}
+	if requests != 0 {
+		t.Fatalf("participant requests = %d, want 0", requests)
+	}
+}
+
 func TestDiagnoseCPECallbackExecutesOneCorrelatedEventAfterPrerequisites(t *testing.T) {
 	store := resolverStore(t, "    - name: gateway\n      type: gateway\n      replicas: 1\n      interfaces: [{role: wan}]\n      image: {repository: gateway}\n    - name: event-sink\n      type: event-sink\n      replicas: 1\n      interfaces: [{role: mgmt}]\n      image: {repository: event-sink}\n    - name: webpa\n      type: webpa\n      replicas: 1\n      image: {repository: webpa}\n")
 	gatewayEndpoint, err := store.ReserveHealthEndpoint("edge", "gateway", 0)

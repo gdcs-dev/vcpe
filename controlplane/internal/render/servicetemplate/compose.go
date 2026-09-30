@@ -68,7 +68,6 @@ func managementDNS(input render.Input, instance plan.Instance) []string {
 	}
 
 	managementNetwork := ""
-	aardvarkAddress := ""
 	for _, iface := range instance.Interfaces {
 		if iface.Role != "mgmt" {
 			continue
@@ -78,7 +77,6 @@ func managementDNS(input render.Input, instance plan.Instance) []string {
 			return nil
 		}
 		managementNetwork = iface.Network
-		aardvarkAddress = network.IPv4.Gateway
 		break
 	}
 	if managementNetwork == "" {
@@ -92,12 +90,25 @@ func managementDNS(input render.Input, instance plan.Instance) []string {
 		for _, bngInstance := range service.Instances {
 			for _, iface := range bngInstance.Interfaces {
 				if iface.Role == "mgmt" && iface.Network == managementNetwork && iface.IPv4 != "" {
-					return []string{iface.IPv4, aardvarkAddress}
+					return []string{iface.IPv4}
 				}
 			}
 		}
 	}
 	return nil
+}
+
+// AddFirstInstanceNetworkAliases assigns aliases to the first replica's named
+// network attachment when that attachment exists.
+func AddFirstInstanceNetworkAliases(instance plan.Instance, serviceNetworks map[string]any, network string, aliases []string) {
+	if instance.Index != 0 || len(aliases) == 0 {
+		return
+	}
+	attachment, ok := serviceNetworks[network].(map[string]any)
+	if !ok {
+		return
+	}
+	attachment["aliases"] = append([]string(nil), aliases...)
 }
 
 // AttachHealthPublication publishes an instance's own standard health
@@ -107,12 +118,12 @@ func managementDNS(input render.Input, instance plan.Instance) []string {
 // private `aa-health` network so Podman can still forward the host port. It
 // creates no separate transport proxy service. It is a no-op when healthPort
 // is 0.
-func AttachHealthPublication(input render.Input, instance plan.Instance, healthPort int, topNets, svcNets, svc map[string]any) {
+func AttachHealthPublication(input render.Input, instance plan.Instance, healthPort, containerPort int, topNets, svcNets, svc map[string]any) {
 	if healthPort == 0 {
 		return
 	}
 	ports, _ := svc["ports"].([]string)
-	svc["ports"] = append(ports, fmt.Sprintf("127.0.0.1:%d:9878", healthPort))
+	svc["ports"] = append(ports, fmt.Sprintf("127.0.0.1:%d:%d", healthPort, containerPort))
 	for _, iface := range instance.Interfaces {
 		if isManaged(input.Deployment, iface.Role) {
 			return

@@ -40,6 +40,47 @@ func TestStatusOutputModes(t *testing.T) {
 		}
 	}
 }
+func TestDiagnoseTelemetryActiveCallbackFailsBeforeHTTP(t *testing.T) {
+	stateRoot := t.TempDir()
+	store, err := persist.Open(stateRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := []byte("apiVersion: vcpe.dev/v1\nkind: Deployment\nmetadata: {name: edge}\nspec:\n  networks:\n    - role: mgmt\n      ipv4: {cidr: 10.0.0.0/24}\n  services:\n    - name: telemetry\n      type: telemetry-gateway\n      replicas: 1\n      interfaces: [{role: mgmt}]\n      image: {repository: telemetry-gateway}\n    - name: webpa\n      type: webpa\n      replicas: 1\n      image: {repository: webpa}\n")
+	if err := store.SaveDesiredSnapshot("edge", snapshot); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ReserveHealthEndpoint("edge", "telemetry", 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ReserveHealthEndpoint("edge", "webpa", 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	requests := 0
+	previousFactory := newDiagnosticClient
+	newDiagnosticClient = func(time.Duration) *diagnostic.Client {
+		return &diagnostic.Client{HTTPClient: &http.Client{Transport: diagnosticRoundTripFunc(func(*http.Request) (*http.Response, error) {
+			requests++
+			return nil, fmt.Errorf("unexpected participant request")
+		})}}
+	}
+	t.Cleanup(func() { newDiagnosticClient = previousFactory })
+
+	_, err = executeLocal(Options{
+		Command: "diagnose", Name: "edge", From: "telemetry", To: "webhook", StateRoot: stateRoot,
+		AllowActiveCallback: true, Event: "devices/diagnostic", DeviceID: "mac:001122334455",
+	})
+	if err == nil || !strings.Contains(err.Error(), "telemetry-gateway supports passive webhook diagnosis only") {
+		t.Fatalf("diagnose error = %v", err)
+	}
+	if requests != 0 {
+		t.Fatalf("participant requests = %d, want 0", requests)
+	}
+}
 
 func TestNamedStatusCollectsPersistedHealthOverHTTP(t *testing.T) {
 	stateRoot := t.TempDir()
@@ -891,7 +932,7 @@ func TestServiceTypesJSON(t *testing.T) {
 	if err != nil {
 		t.Fatalf("service types --json: %v", err)
 	}
-	for _, want := range []string{`"types"`, `"name"`, `"description"`, `"defaultPullPolicy"`, `"defaultImage"`, `"expectedRoles"`, `"bng"`} {
+	for _, want := range []string{`"types"`, `"name"`, `"description"`, `"defaultPullPolicy"`, `"defaultImage"`, `"expectedRoles"`, `"bng"`, `"telemetry-gateway"`, `"ghcr.io/gdcs-dev/telemetry-gateway"`} {
 		if !strings.Contains(resp.Message, want) {
 			t.Errorf("expected %q in service types JSON, got:\n%s", want, resp.Message)
 		}

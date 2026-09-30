@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,6 +12,7 @@ import (
 	"github.com/gdcs-dev/vcpe/controlplane/internal/compose"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/persist"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/plan"
+	"github.com/gdcs-dev/vcpe/controlplane/internal/types"
 )
 
 // --- stubs ---
@@ -31,12 +33,14 @@ func (r *recordingNetworkProvisioner) RemoveNetwork(_ context.Context, name stri
 }
 
 type recordingComposeRunner struct {
-	upCalls   []string
-	downCalls []string
+	upCalls    []string
+	downCalls  []string
+	upRequests []compose.Request
 }
 
 func (r *recordingComposeRunner) Up(_ context.Context, req compose.Request) (compose.OperationRecord, error) {
 	r.upCalls = append(r.upCalls, req.ProjectName)
+	r.upRequests = append(r.upRequests, req)
 	return compose.OperationRecord{}, nil
 }
 
@@ -140,6 +144,52 @@ func TestLifecycleStagesCuratedEnvFile(t *testing.T) {
 		t.Errorf("expected compose up for edge-bng, got %v", cmpStub.upCalls)
 	}
 	_ = netStub // network provisioning verified in separate test
+}
+
+func TestTelemetryGatewayLifecycleUsesOperationArtifacts(t *testing.T) {
+	stateRoot := t.TempDir()
+	opID := "op-telemetry-001"
+	repoRoot := makeRepoRoot(t, "telemetry-gateway")
+	_, composeStub := stubLifecycle(t)
+	types.Register()
+
+	submoduleCompose := filepath.Join(repoRoot, "services", "telemetry-gateway", "compose.yaml")
+	originalCompose, err := os.ReadFile(submoduleCompose)
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifactDirectory := filepath.Dir(writeArtifactEnv(t, stateRoot, opID, "telemetry-gateway"))
+	generatedCompose := filepath.Join(artifactDirectory, "compose.yaml")
+	if err := os.WriteFile(generatedCompose, []byte("services:\n  telemetry-gateway-1:\n    image: test:latest\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	deployment := plan.Deployment{
+		Name:     "edge",
+		Networks: []plan.Network{{Role: "mgmt", Bridge: "edge-mgmt"}},
+		Services: []plan.Service{{
+			Name: "telemetry-gateway", Type: "telemetry-gateway", Replicas: 1,
+			Instances: []plan.Instance{{Index: 0, Interfaces: []plan.Interface{{Role: "mgmt", Network: "edge-mgmt"}}}},
+		}},
+	}
+	if err := applyComposeLifecycle(context.Background(), stateRoot, opID, deployment); err != nil {
+		t.Fatalf("applyComposeLifecycle: %v", err)
+	}
+	if len(composeStub.upRequests) != 1 || composeStub.upRequests[0].ComposeFile != generatedCompose {
+		t.Fatalf("compose requests = %#v, want operation artifact %q", composeStub.upRequests, generatedCompose)
+	}
+	currentCompose, err := os.ReadFile(submoduleCompose)
+	if err != nil || string(currentCompose) != string(originalCompose) {
+		t.Fatalf("submodule compose changed: error=%v content=%q", err, currentCompose)
+	}
+	for _, generatedPath := range []string{
+		filepath.Join(repoRoot, "services", "telemetry-gateway", "compose.env"),
+		filepath.Join(repoRoot, "services", "telemetry-gateway", "runtime"),
+	} {
+		if _, err := os.Stat(generatedPath); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("generated submodule path exists: %s", generatedPath)
+		}
+	}
 }
 
 // TestLifecycleEnsuresPodmanNetworksBeforeCompose verifies that all Podman

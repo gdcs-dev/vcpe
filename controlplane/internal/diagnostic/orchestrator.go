@@ -20,6 +20,12 @@ func Diagnose(ctx context.Context, store *persist.Store, registry *Registry, cli
 	if err != nil {
 		return Result{}, err
 	}
+	if request.Target == "webhook" && request.AllowActiveCallback {
+		capability, ok := selection.Provider.(interface{ SupportsActiveCallback() bool })
+		if !ok || !capability.SupportsActiveCallback() {
+			return Result{}, fmt.Errorf("%s supports passive webhook diagnosis only", selection.Source.Type)
+		}
+	}
 	expected, err := selection.Provider.Expected(ExpectedInput{Deployment: selection.Deployment, Source: selection.Source, Instance: selection.Instance, Target: selection.Target, Subscriber: selection.Subscriber})
 	if err != nil {
 		return Result{}, err

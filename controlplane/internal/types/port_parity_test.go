@@ -16,7 +16,7 @@ import (
 
 func TestRendererArtifactInventory(t *testing.T) {
 	types.Register()
-	for _, typeName := range []string{"bng", "event-sink", "gateway", "generic-container", "oktopus", "routerd", "webpa", "xb10"} {
+	for _, typeName := range []string{"bng", "event-sink", "gateway", "generic-container", "oktopus", "routerd", "telemetry-gateway", "webpa", "xb10"} {
 		t.Run(typeName, func(t *testing.T) {
 			registered, ok := typeregistry.Lookup(typeName)
 			if !ok {
@@ -97,7 +97,7 @@ func artifactKeys(artifacts map[string]string) []string {
 
 func TestRenderersPreserveManifestPorts(t *testing.T) {
 	types.Register()
-	for _, typeName := range []string{"bng", "event-sink", "gateway", "generic-container", "oktopus", "routerd", "webpa", "xb10"} {
+	for _, typeName := range []string{"bng", "event-sink", "gateway", "generic-container", "oktopus", "routerd", "telemetry-gateway", "webpa", "xb10"} {
 		t.Run(typeName, func(t *testing.T) {
 			registered, ok := typeregistry.Lookup(typeName)
 			if !ok {
@@ -137,22 +137,23 @@ func TestRenderersPreserveManifestPorts(t *testing.T) {
 func TestRendererComposeSemantics(t *testing.T) {
 	types.Register()
 	tests := []struct {
-		typeName        string
-		healthPublished bool
-		pinsIPv4        bool
-		pinsMAC         bool
-		externalName    string
-		containerName   string
-		hostname        string
+		typeName            string
+		healthContainerPort int
+		pinsIPv4            bool
+		pinsMAC             bool
+		externalName        string
+		containerName       string
+		hostname            string
 	}{
-		{typeName: "bng", healthPublished: true, pinsIPv4: true, pinsMAC: true, externalName: "edge-mgmt", containerName: "edge-service-%d", hostname: "service-%d"},
-		{typeName: "event-sink", healthPublished: true, pinsIPv4: true, pinsMAC: true, externalName: "edge-mgmt", containerName: "edge-service-%d", hostname: "service-%d"},
+		{typeName: "bng", healthContainerPort: 9878, pinsIPv4: true, pinsMAC: true, externalName: "edge-mgmt", containerName: "edge-service-%d", hostname: "service-%d"},
+		{typeName: "event-sink", healthContainerPort: 9878, pinsIPv4: true, pinsMAC: true, externalName: "edge-mgmt", containerName: "edge-service-%d", hostname: "service-%d"},
 		{typeName: "gateway", pinsMAC: true, externalName: "edge-mgmt", containerName: "edge-service-%d", hostname: "service-%d"},
 		{typeName: "generic-container", externalName: "${IFACE_MGMT_NETWORK}", containerName: "${DEPLOYMENT_NAME}-${SERVICE_NAME}-%d", hostname: "${SERVICE_NAME}-%d"},
-		{typeName: "oktopus", healthPublished: true, pinsIPv4: true, pinsMAC: true, externalName: "edge-mgmt", containerName: "edge-service-%d", hostname: "service-%d"},
-		{typeName: "routerd", healthPublished: true, pinsIPv4: true, pinsMAC: true, externalName: "edge-mgmt", containerName: "edge-service-%d", hostname: "service-%d"},
-		{typeName: "webpa", healthPublished: true, pinsIPv4: true, pinsMAC: true, externalName: "edge-mgmt", containerName: "edge-service-%d", hostname: "service-%d"},
-		{typeName: "xb10", healthPublished: true, pinsMAC: true, externalName: "edge-mgmt", containerName: "edge-service-%d", hostname: "service-%d"},
+		{typeName: "oktopus", healthContainerPort: 9878, pinsIPv4: true, pinsMAC: true, externalName: "edge-mgmt", containerName: "edge-service-%d", hostname: "service-%d"},
+		{typeName: "routerd", healthContainerPort: 9878, pinsIPv4: true, pinsMAC: true, externalName: "edge-mgmt", containerName: "edge-service-%d", hostname: "service-%d"},
+		{typeName: "telemetry-gateway", healthContainerPort: 8080, pinsIPv4: true, pinsMAC: true, externalName: "edge-mgmt", containerName: "edge-service-%d", hostname: "service-%d"},
+		{typeName: "webpa", healthContainerPort: 9878, pinsIPv4: true, pinsMAC: true, externalName: "edge-mgmt", containerName: "edge-service-%d", hostname: "service-%d"},
+		{typeName: "xb10", healthContainerPort: 9878, pinsMAC: true, externalName: "edge-mgmt", containerName: "edge-service-%d", hostname: "service-%d"},
 	}
 	for _, testCase := range tests {
 		t.Run(testCase.typeName, func(t *testing.T) {
@@ -205,7 +206,7 @@ func TestRendererComposeSemantics(t *testing.T) {
 				if _, ok := attachment["ipv4_address"]; ok != testCase.pinsIPv4 {
 					t.Errorf("ipv4_address present = %t, want %t", ok, testCase.pinsIPv4)
 				}
-				if testCase.healthPublished && !containsComposeValue(workload["ports"], fmt.Sprintf("127.0.0.1:%d:9878", 46999+index)) {
+				if testCase.healthContainerPort != 0 && !containsComposeValue(workload["ports"], fmt.Sprintf("127.0.0.1:%d:%d", 46999+index, testCase.healthContainerPort)) {
 					t.Errorf("ports = %#v, want health publication for replica %d", workload["ports"], index)
 				}
 			}

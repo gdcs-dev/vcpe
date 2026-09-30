@@ -18,12 +18,16 @@ func TestRegistryLookupAndOrdering(t *testing.T) {
 	registry.Register(NewParodusClientsProvider("xb10"))
 	registry.Register(NewArgusWebhooksProvider())
 	registry.Register(NewTalariaDevicesProvider())
-	registry.Register(NewWebhookProvider())
+	registry.Register(NewWebhookProvider("event-sink", true))
+	registry.Register(NewWebhookProvider("telemetry-gateway", false))
 	if _, ok := registry.Lookup(JourneyCPEWebPA, "gateway", "webpa"); !ok {
 		t.Fatal("gateway provider not found")
 	}
 	if _, ok := registry.Lookup(JourneyWebhook, "event-sink", "webpa"); !ok {
 		t.Fatal("webhook provider not found")
+	}
+	if _, ok := registry.Lookup(JourneyWebhook, "telemetry-gateway", "webpa"); !ok {
+		t.Fatal("telemetry webhook provider not found")
 	}
 	if _, ok := registry.Lookup(JourneyCPEWebPACallback, "gateway", "webpa"); !ok {
 		t.Fatal("callback provider not found")
@@ -43,7 +47,7 @@ func TestRegistryLookupAndOrdering(t *testing.T) {
 	if _, ok := registry.Lookup(JourneyTalariaDevices, "webpa", "talaria"); !ok {
 		t.Fatal("Talaria device inventory provider not found")
 	}
-	want := []string{"argus-webhooks/webpa/argus", "cpe-webpa-callback/gateway/webpa", "cpe-webpa-callback/xb10/webpa", "cpe-webpa/gateway/webpa", "cpe-webpa/xb10/webpa", "parodus-clients/gateway/parodus", "parodus-clients/xb10/parodus", "talaria-devices/webpa/talaria", "webhook/event-sink/webpa"}
+	want := []string{"argus-webhooks/webpa/argus", "cpe-webpa-callback/gateway/webpa", "cpe-webpa-callback/xb10/webpa", "cpe-webpa/gateway/webpa", "cpe-webpa/xb10/webpa", "parodus-clients/gateway/parodus", "parodus-clients/xb10/parodus", "talaria-devices/webpa/talaria", "webhook/event-sink/webpa", "webhook/telemetry-gateway/webpa"}
 	if got := registry.Keys(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("keys = %#v, want %#v", got, want)
 	}
@@ -105,7 +109,7 @@ func TestTalariaDevicesProviderContract(t *testing.T) {
 }
 
 func TestWebhookProviderContract(t *testing.T) {
-	provider := NewWebhookProvider()
+	provider := NewWebhookProvider("event-sink", true)
 	graph, err := provider.Expected(ExpectedInput{
 		Deployment: plan.Deployment{Name: "edge"},
 		Source:     plan.Service{Name: "events", Type: "event-sink"},
@@ -128,6 +132,26 @@ func TestWebhookProviderContract(t *testing.T) {
 	}
 	if graph.Journey != JourneyWebhook || graph.Source.Replica != 1 || graph.Target.Type != "webpa" {
 		t.Fatalf("unexpected graph identities: %+v", graph)
+	}
+}
+
+func TestTelemetryWebhookProviderContract(t *testing.T) {
+	provider := NewWebhookProvider("telemetry-gateway", false)
+	graph, err := provider.Expected(ExpectedInput{
+		Deployment: plan.Deployment{Name: "edge"},
+		Source:     plan.Service{Name: "telemetry", Type: "telemetry-gateway"},
+		Instance:   plan.Instance{Index: 0},
+		Target:     plan.Service{Name: "webpa", Type: "webpa"},
+	})
+	if err != nil {
+		t.Fatalf("Expected: %v", err)
+	}
+	capability, ok := provider.(interface{ SupportsActiveCallback() bool })
+	if !ok || capability.SupportsActiveCallback() {
+		t.Fatalf("telemetry provider active capability = %#v", provider)
+	}
+	if graph.Source.Type != "telemetry-gateway" || graph.Journey != JourneyWebhook || len(graph.Edges) != 11 {
+		t.Fatalf("graph = %+v", graph)
 	}
 }
 

@@ -271,7 +271,7 @@ func (a *Adapter) BuildImage(ctx context.Context, req image.BuildRequest) error 
 	// When building a multi-arch manifest list, remove any existing image or
 	// manifest with the same tag first. podman build --manifest fails if the
 	// name already exists as a regular (single-arch) image.
-	if len(req.Platforms) > 0 && len(req.Tags) > 0 {
+	if len(req.Platforms) > 1 && len(req.Tags) > 0 {
 		exec.CommandContext(ctx, "podman", "manifest", "rm", req.Tags[0]).Run() //nolint:errcheck
 		exec.CommandContext(ctx, "podman", "rmi", "--force", req.Tags[0]).Run() //nolint:errcheck
 	}
@@ -345,11 +345,14 @@ func buildImageArgs(req image.BuildRequest) ([]string, error) {
 		return nil, fmt.Errorf("build context is required")
 	}
 	var args []string
-	if len(req.Platforms) > 0 {
+	if len(req.Platforms) > 1 {
 		// Multi-arch: podman build only accepts a single --manifest name.
 		args = []string{"build", "--platform", strings.Join(req.Platforms, ","), "--manifest", req.Tags[0]}
 	} else {
 		args = []string{"build"}
+		if len(req.Platforms) == 1 {
+			args = append(args, "--platform", req.Platforms[0])
+		}
 		for _, t := range req.Tags {
 			args = append(args, "-t", t)
 		}

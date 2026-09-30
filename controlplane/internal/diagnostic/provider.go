@@ -342,14 +342,20 @@ func (provider cpeWebPACallbackProvider) Expected(input ExpectedInput) (Expected
 	}, nil
 }
 
-type webhookProvider struct{}
+type webhookProvider struct {
+	sourceType    string
+	activeCapable bool
+}
 
-// NewWebhookProvider creates the event-sink to WebPA webhook diagnostic provider.
-func NewWebhookProvider() Provider { return webhookProvider{} }
+// NewWebhookProvider creates a subscriber-to-WebPA webhook diagnostic provider.
+func NewWebhookProvider(sourceType string, activeCapable bool) Provider {
+	return webhookProvider{sourceType: sourceType, activeCapable: activeCapable}
+}
 
-func (webhookProvider) Journey() string    { return JourneyWebhook }
-func (webhookProvider) SourceType() string { return "event-sink" }
-func (webhookProvider) TargetType() string { return "webpa" }
+func (webhookProvider) Journey() string                       { return JourneyWebhook }
+func (provider webhookProvider) SourceType() string           { return provider.sourceType }
+func (webhookProvider) TargetType() string                    { return "webpa" }
+func (provider webhookProvider) SupportsActiveCallback() bool { return provider.activeCapable }
 
 func (provider webhookProvider) Expected(input ExpectedInput) (ExpectedGraph, error) {
 	if input.Source.Type != provider.SourceType() || input.Target.Type != provider.TargetType() {

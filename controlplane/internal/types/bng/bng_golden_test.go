@@ -257,6 +257,79 @@ func TestBNGDnsmasqResolvesWebPAByInstanceAlias(t *testing.T) {
 	}
 }
 
+func TestBNGDnsmasqResolvesWebConfigByInstanceAlias(t *testing.T) {
+	bng.Register()
+	serviceType, _ := typeregistry.Lookup("bng")
+	bngService := plan.Service{
+		Name: "bng", Type: "bng", Image: manifest.Image{Repository: "x/bng"}, Config: bngConfigNode(t),
+		Instances: []plan.Instance{{Interfaces: []plan.Interface{
+			{Role: "mgmt", Network: "edge-mgmt", IPv4: "10.10.10.10"},
+			{Role: "wan", Network: "edge-wan", Device: "eth0", IPv4: "10.200.0.2"},
+		}}},
+	}
+	webConfigService := plan.Service{
+		Name: "webconfig", Type: "webconfig",
+		Instances: []plan.Instance{{Interfaces: []plan.Interface{
+			{Role: "mgmt", Network: "edge-mgmt", IPv4: "10.10.10.11"},
+		}}},
+	}
+	deployment := plan.Deployment{
+		Name: "edge",
+		Networks: []plan.Network{
+			{Role: "mgmt", Bridge: "edge-mgmt", IPv4: &plan.Family{CIDR: "10.10.10.0/24", Gateway: "10.10.10.1"}},
+			{Role: "wan", Bridge: "edge-wan", IPv4: &plan.Family{CIDR: "10.200.0.0/24", Gateway: "10.200.0.1"}},
+		},
+		Services: []plan.Service{bngService, webConfigService},
+	}
+	result, err := serviceType.Renderer().Render(context.Background(), render.Input{Deployment: deployment, Service: bngService})
+	if err != nil {
+		t.Fatalf("render bng: %v", err)
+	}
+	conf, ok := artifact(result, "etc/dnsmasq.conf")
+	if !ok {
+		t.Fatal("expected etc/dnsmasq.conf")
+	}
+	for _, want := range []string{"cname=webconfig,webconfig-1", "cname=webconfig.dns.podman,webconfig-1"} {
+		if !strings.Contains(conf, want) {
+			t.Errorf("dnsmasq.conf missing %q:\n%s", want, conf)
+		}
+	}
+}
+
+func TestBNGDnsmasqOmitsWebConfigAliasesWithoutSharedManagementNetwork(t *testing.T) {
+	bng.Register()
+	serviceType, _ := typeregistry.Lookup("bng")
+	bngService := plan.Service{
+		Name: "bng", Type: "bng", Image: manifest.Image{Repository: "x/bng"}, Config: bngConfigNode(t),
+		Instances: []plan.Instance{{Interfaces: []plan.Interface{
+			{Role: "mgmt", Network: "edge-mgmt", IPv4: "10.10.10.10"},
+			{Role: "wan", Network: "edge-wan", Device: "eth0", IPv4: "10.200.0.2"},
+		}}},
+	}
+	webConfigService := plan.Service{
+		Name: "webconfig", Type: "webconfig",
+		Instances: []plan.Instance{{Interfaces: []plan.Interface{
+			{Role: "mgmt", Network: "other-mgmt", IPv4: "10.20.20.11"},
+		}}},
+	}
+	deployment := plan.Deployment{
+		Name: "edge",
+		Networks: []plan.Network{
+			{Role: "mgmt", Bridge: "edge-mgmt", IPv4: &plan.Family{CIDR: "10.10.10.0/24", Gateway: "10.10.10.1"}},
+			{Role: "wan", Bridge: "edge-wan", IPv4: &plan.Family{CIDR: "10.200.0.0/24", Gateway: "10.200.0.1"}},
+		},
+		Services: []plan.Service{bngService, webConfigService},
+	}
+	result, err := serviceType.Renderer().Render(context.Background(), render.Input{Deployment: deployment, Service: bngService})
+	if err != nil {
+		t.Fatalf("render bng: %v", err)
+	}
+	conf, _ := artifact(result, "etc/dnsmasq.conf")
+	if strings.Contains(conf, "cname=webconfig") {
+		t.Fatalf("dnsmasq.conf unexpectedly publishes WebConfig across management networks:\n%s", conf)
+	}
+}
+
 // TestBNGRendersWithDHCPAddressingOnItsOwnServerRole documents that the
 // control plane does not guard against setting addressing: dhcp on an
 // interface BNG itself serves DHCP for — rendering succeeds regardless

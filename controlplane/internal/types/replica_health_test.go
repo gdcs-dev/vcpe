@@ -60,3 +60,26 @@ func TestReplicaHealthMappings(t *testing.T) {
 		}
 	}
 }
+
+func TestTelemetryGatewayHealthMapping(t *testing.T) {
+	types.Register()
+	registered, ok := typeregistry.Lookup("telemetry-gateway")
+	if !ok {
+		t.Fatal("telemetry-gateway type is not registered")
+	}
+	service := plan.Service{
+		Name: "telemetry-gateway", Type: "telemetry-gateway", Replicas: 1,
+		Image:     manifest.Image{Repository: "example/telemetry-gateway", Tag: "test"},
+		Instances: []plan.Instance{{Index: 0, Interfaces: []plan.Interface{{Role: "mgmt", Network: "edge-mgmt", MAC: "02:00:00:00:00:01", IPv4: "10.0.0.2"}}}},
+	}
+	result, err := registered.Renderer().Render(context.Background(), render.Input{Deployment: plan.Deployment{Name: "edge"}, Service: service, HealthPorts: map[int]int{0: 47000}})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	for _, artifact := range result.Artifacts {
+		if artifact.Key == "compose.yaml" && strings.Contains(artifact.Content, "127.0.0.1:47000:8080") {
+			return
+		}
+	}
+	t.Fatal("compose.yaml missing telemetry-gateway port-8080 health publication")
+}

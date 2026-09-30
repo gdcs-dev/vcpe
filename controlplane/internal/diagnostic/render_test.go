@@ -320,7 +320,7 @@ func callbackGoldenResult(t *testing.T) Result {
 
 func webhookGoldenResult(t *testing.T) Result {
 	t.Helper()
-	graph, err := NewWebhookProvider().Expected(ExpectedInput{
+	graph, err := NewWebhookProvider("event-sink", true).Expected(ExpectedInput{
 		Deployment: plan.Deployment{Name: "edge"},
 		Source:     plan.Service{Name: "event-sink", Type: "event-sink"},
 		Instance:   plan.Instance{Index: 0},

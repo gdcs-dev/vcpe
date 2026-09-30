@@ -82,7 +82,7 @@ func TestBuildComposeServiceStandardFields(t *testing.T) {
 	}
 }
 
-func TestBuildComposeServiceUsesBNGThenAardvarkForManagementDNS(t *testing.T) {
+func TestBuildComposeServiceUsesBNGAsSoleManagementDNSUpstream(t *testing.T) {
 	mgmt := plan.Network{Role: "mgmt", Bridge: "edge-mgmt", IPv4: &plan.Family{Gateway: "10.10.10.1"}}
 	bngService := plan.Service{
 		Name: "bng", Type: "bng",
@@ -97,8 +97,13 @@ func TestBuildComposeServiceUsesBNGThenAardvarkForManagementDNS(t *testing.T) {
 
 	svc, _ := servicetemplate.BuildComposeService(input, instance, servicetemplate.DefaultAttachment)
 	dns, ok := svc["dns"].([]string)
-	if !ok || len(dns) != 2 || dns[0] != "10.10.10.10" || dns[1] != "10.10.10.1" {
-		t.Fatalf("dns = %#v, want [10.10.10.10 10.10.10.1]", svc["dns"])
+	if !ok || len(dns) != 1 || dns[0] != "10.10.10.10" {
+		t.Fatalf("dns = %#v, want [10.10.10.10]", svc["dns"])
+	}
+	for _, server := range dns {
+		if server == mgmt.IPv4.Gateway {
+			t.Fatalf("dns = %#v, must not include Podman gateway %s", dns, mgmt.IPv4.Gateway)
+		}
 	}
 }
 
@@ -173,11 +178,37 @@ func TestBuildComposeServiceRequiresSameManagedManagementNetwork(t *testing.T) {
 	}
 }
 
+func TestAddFirstInstanceNetworkAliases(t *testing.T) {
+	tests := []struct {
+		name     string
+		instance plan.Instance
+		networks map[string]any
+		want     bool
+	}{
+		{name: "first instance", instance: plan.Instance{Index: 0}, networks: map[string]any{"mgmt": map[string]any{}}, want: true},
+		{name: "later instance", instance: plan.Instance{Index: 1}, networks: map[string]any{"mgmt": map[string]any{}}, want: false},
+		{name: "missing network", instance: plan.Instance{Index: 0}, networks: map[string]any{}, want: false},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			servicetemplate.AddFirstInstanceNetworkAliases(testCase.instance, testCase.networks, "mgmt", []string{"canonical"})
+			network, _ := testCase.networks["mgmt"].(map[string]any)
+			aliases, ok := network["aliases"].([]string)
+			if ok != testCase.want {
+				t.Fatalf("aliases present = %t, want %t: %#v", ok, testCase.want, network)
+			}
+			if testCase.want && (len(aliases) != 1 || aliases[0] != "canonical") {
+				t.Fatalf("aliases = %#v, want [canonical]", aliases)
+			}
+		})
+	}
+}
+
 func TestAttachHealthPublicationNoOpWhenHealthPortZero(t *testing.T) {
 	topNets, svcNets, svc := map[string]any{}, map[string]any{}, map[string]any{}
 	input := render.Input{Deployment: plan.Deployment{Name: "edge"}}
 	instance := plan.Instance{Interfaces: []plan.Interface{{Role: "wan"}}}
-	servicetemplate.AttachHealthPublication(input, instance, 0, topNets, svcNets, svc)
+	servicetemplate.AttachHealthPublication(input, instance, 0, 8080, topNets, svcNets, svc)
 	if len(topNets) != 0 || len(svcNets) != 0 || len(svc) != 0 {
 		t.Fatalf("expected no-op when healthPort is 0, got topNets=%v svcNets=%v svc=%v", topNets, svcNets, svc)
 	}
@@ -188,7 +219,7 @@ func TestAttachHealthPublicationManagedTopologySkipsPrivateNetwork(t *testing.T)
 	instance := plan.Instance{Interfaces: []plan.Interface{{Role: "mgmt"}}}
 	topNets, svcNets, svc := map[string]any{}, map[string]any{}, map[string]any{}
 
-	servicetemplate.AttachHealthPublication(input, instance, 47000, topNets, svcNets, svc)
+	servicetemplate.AttachHealthPublication(input, instance, 47000, 8080, topNets, svcNets, svc)
 
 	if _, ok := svcNets["aa-health"]; ok {
 		t.Errorf("expected no aa-health attachment for a managed topology interface, got %#v", svcNets)
@@ -197,7 +228,7 @@ func TestAttachHealthPublicationManagedTopologySkipsPrivateNetwork(t *testing.T)
 		t.Errorf("expected no aa-health network declared, got %#v", topNets)
 	}
 	ports, ok := svc["ports"].([]string)
-	if !ok || len(ports) != 1 || ports[0] != "127.0.0.1:47000:9878" {
+	if !ok || len(ports) != 1 || ports[0] != "127.0.0.1:47000:8080" {
 		t.Errorf("svc ports = %#v", svc["ports"])
 	}
 }
@@ -207,7 +238,7 @@ func TestAttachHealthPublicationSelfAddressedUsesPrivateNetwork(t *testing.T) {
 	instance := plan.Instance{Interfaces: []plan.Interface{{Role: "wan"}}}
 	topNets, svcNets, svc := map[string]any{}, map[string]any{}, map[string]any{}
 
-	servicetemplate.AttachHealthPublication(input, instance, 47000, topNets, svcNets, svc)
+	servicetemplate.AttachHealthPublication(input, instance, 47000, 9878, topNets, svcNets, svc)
 
 	if _, ok := svcNets["aa-health"]; !ok {
 		t.Errorf("workload networks missing aa-health entry: %#v", svcNets)
@@ -228,7 +259,7 @@ func TestAttachHealthPublicationPreservesExistingApplicationPorts(t *testing.T) 
 	topNets, svcNets := map[string]any{}, map[string]any{}
 	svc := map[string]any{"ports": []string{"8080:8080"}}
 
-	servicetemplate.AttachHealthPublication(input, instance, 47000, topNets, svcNets, svc)
+	servicetemplate.AttachHealthPublication(input, instance, 47000, 9878, topNets, svcNets, svc)
 
 	ports, ok := svc["ports"].([]string)
 	if !ok || len(ports) != 2 || ports[0] != "8080:8080" || ports[1] != "127.0.0.1:47000:9878" {
@@ -243,7 +274,7 @@ func TestAttachHealthPublicationNoServicesMapMutated(t *testing.T) {
 	instance := plan.Instance{Interfaces: []plan.Interface{{Role: "wan"}}}
 	topNets, svcNets, svc := map[string]any{}, map[string]any{}, map[string]any{}
 
-	servicetemplate.AttachHealthPublication(input, instance, 47000, topNets, svcNets, svc)
+	servicetemplate.AttachHealthPublication(input, instance, 47000, 9878, topNets, svcNets, svc)
 
 	if _, ok := svc["depends_on"]; ok {
 		t.Errorf("expected no depends_on entry, got %#v", svc["depends_on"])

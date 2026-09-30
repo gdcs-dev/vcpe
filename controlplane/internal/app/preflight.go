@@ -30,6 +30,11 @@ func Preflight(doc manifest.Document) error {
 		if !ok {
 			return fmt.Errorf("service %q declares unsupported type %q: registered types are %s", svc.Name, svc.Type, strings.Join(typeregistry.Registered(), ", "))
 		}
+		if validator, ok := st.(typeregistry.ReplicaValidator); ok {
+			if err := validator.ValidateReplicas(svc.Replicas); err != nil {
+				return fmt.Errorf("service %q replicas: %w", svc.Name, err)
+			}
+		}
 		if err := st.ValidateConfig(svc.Config); err != nil {
 			return fmt.Errorf("service %q config: %w", svc.Name, err)
 		}

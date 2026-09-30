@@ -2,6 +2,7 @@ package image
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/gdcs-dev/vcpe/controlplane/internal/manifest"
@@ -189,6 +190,45 @@ func TestBuildWithOptionsNoServicePlatformsUsesGlobal(t *testing.T) {
 	got := backend.builds[0].Platforms
 	if len(got) != 2 || got[0] != "linux/amd64" || got[1] != "linux/arm64" {
 		t.Fatalf("expected global platforms %v, got %v", globalPlatforms, got)
+	}
+}
+
+func TestImageOperationsRejectUninitializedTelemetryGatewayBeforeMutation(t *testing.T) {
+	document := bngManifest(PolicyAlwaysPull)
+	document.Spec.Services[0].Name = "a-existing"
+	document.Spec.Services = append(document.Spec.Services, manifest.Service{
+		Name: "z-telemetry",
+		Type: "telemetry-gateway",
+		Image: manifest.Image{
+			Repository:   "ghcr.io/gdcs-dev/telemetry-gateway",
+			BuildContext: t.TempDir(),
+			PullPolicy:   PolicyBuildIfMissing,
+		},
+	})
+
+	for _, testCase := range []struct {
+		name string
+		run  func(*Manager) error
+	}{
+		{name: "build", run: func(manager *Manager) error {
+			_, err := manager.Build(context.Background(), document)
+			return err
+		}},
+		{name: "apply", run: func(manager *Manager) error {
+			_, err := manager.EnsureForApply(context.Background(), document)
+			return err
+		}},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			backend := &fakeBackend{existsByRef: map[string]bool{}}
+			err := testCase.run(New(backend))
+			if err == nil || !strings.Contains(err.Error(), "git submodule update --init --recursive services/telemetry-gateway") {
+				t.Fatalf("operation error = %v", err)
+			}
+			if len(backend.builds) != 0 || len(backend.pulls) != 0 {
+				t.Fatalf("backend mutated before validation: builds=%#v pulls=%#v", backend.builds, backend.pulls)
+			}
+		})
 	}
 }
 

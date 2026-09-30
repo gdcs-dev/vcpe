@@ -173,7 +173,7 @@ func renderBNGInstance(_ context.Context, input render.Input, cfg Config) (rende
 			{Key: "etc/sysctl.conf", Content: renderSysctl(cfg, devByRole)},
 			{Key: "etc/iptables.rules.v4", Content: renderIPTablesV4(input.Deployment, devByRole)},
 			{Key: "etc/iptables.rules.v6", Content: ""},
-			{Key: "etc/dnsmasq.conf", Content: renderDnsmasqConf(ipByRole, input.Deployment)},
+			{Key: "etc/dnsmasq.conf", Content: renderDnsmasqConf(ipByRole, input)},
 			{Key: "etc/dnsmasq.hosts", Content: renderDnsmasqHosts(input)},
 			{Key: "etc/dnsmasq.management.hosts", Content: ""},
 			{Key: "etc/dnsmasq.dhcp.hosts", Content: ""},
@@ -430,7 +430,8 @@ var webpaVirtualHosts = []string{
 // serves DHCP on the mgmt interface so containers receive IPs dynamically.
 // dnsmasq integrates DHCP leases into DNS, making each container resolvable
 // by hostname without a static hosts file.
-func renderDnsmasqConf(ipByRole map[string]string, dep plan.Deployment) string {
+func renderDnsmasqConf(ipByRole map[string]string, input render.Input) string {
+	dep := input.Deployment
 	var b strings.Builder
 	// Bind to loopback plus every interface IP BNG has, so dnsmasq answers
 	// DNS/DHCP on all segments regardless of how roles are named in the manifest.
@@ -489,7 +490,39 @@ func renderDnsmasqConf(ipByRole map[string]string, dep plan.Deployment) string {
 		}
 		break
 	}
+
+	if alias := webConfigAlias(input.Service.Instances[0], dep); alias != "" {
+		fmt.Fprintf(&b, "cname=webconfig,%s\n", alias)
+		fmt.Fprintf(&b, "cname=webconfig.dns.podman,%s\n", alias)
+	}
 	return b.String()
+}
+
+// webConfigAlias returns the first WebConfig instance alias only when the
+// current BNG instance and that WebConfig instance share their mgmt network.
+func webConfigAlias(bngInstance plan.Instance, dep plan.Deployment) string {
+	managementNetwork := ""
+	for _, iface := range bngInstance.Interfaces {
+		if iface.Role == "mgmt" {
+			managementNetwork = iface.Network
+			break
+		}
+	}
+	if managementNetwork == "" {
+		return ""
+	}
+
+	for _, service := range dep.Services {
+		if service.Type != "webconfig" || len(service.Instances) == 0 {
+			continue
+		}
+		for _, iface := range service.Instances[0].Interfaces {
+			if iface.Role == "mgmt" && iface.Network == managementNetwork {
+				return firstInstanceAlias(service)
+			}
+		}
+	}
+	return ""
 }
 
 // firstInstanceAlias returns the compose service key / aardvark-dns network
@@ -567,7 +600,7 @@ func renderBNGCompose(input render.Input, inst plan.Instance) string {
 		svc["ports"] = ports
 	}
 	svcNets, _ := svc["networks"].(map[string]any)
-	servicetemplate.AttachHealthPublication(input, inst, input.HealthPorts[inst.Index], topNets, svcNets, svc)
+	servicetemplate.AttachHealthPublication(input, inst, input.HealthPorts[inst.Index], 9878, topNets, svcNets, svc)
 	instanceName := fmt.Sprintf("%s-%d", input.Service.Name, inst.Index+1)
 	doc := map[string]any{
 		"services": map[string]any{

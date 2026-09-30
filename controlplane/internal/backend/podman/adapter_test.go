@@ -24,12 +24,12 @@ func TestImageCommandArgs(t *testing.T) {
 		t.Fatalf("unexpected no-cache build args: %#v", noCacheArgs)
 	}
 
-	// Single platform: --manifest mode
+	// Single platform: regular tagged-image mode
 	singlePlatform, err := buildImageArgs(image.BuildRequest{Tags: []string{"ghcr.io/gdcs-dev/bng:dev"}, Context: "services/bng", Platforms: []string{"linux/amd64"}})
 	if err != nil {
 		t.Fatalf("build args single platform: %v", err)
 	}
-	if !reflect.DeepEqual(singlePlatform, []string{"build", "--platform", "linux/amd64", "--manifest", "ghcr.io/gdcs-dev/bng:dev", "services/bng"}) {
+	if !reflect.DeepEqual(singlePlatform, []string{"build", "--platform", "linux/amd64", "-t", "ghcr.io/gdcs-dev/bng:dev", "services/bng"}) {
 		t.Fatalf("unexpected single-platform build args: %#v", singlePlatform)
 	}
 

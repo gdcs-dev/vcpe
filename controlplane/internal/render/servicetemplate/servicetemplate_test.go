@@ -289,6 +289,30 @@ func TestComposeAggregation(t *testing.T) {
 		assertComposeSections(t, result.Artifacts[0].Content, map[string]any{"first": map[string]any{"image": "example"}, "second": map[string]any{"image": "example"}}, map[string]any{"shared": map[string]any{"name": "shared-net", "external": true}})
 	})
 
+	t.Run("equivalent volume", func(t *testing.T) {
+		input := render.Input{Service: plan.Service{Instances: []plan.Instance{{Index: 0}, {Index: 1}}}}
+		renderer := servicetemplate.New(servicetemplate.Hooks[string]{
+			Name:         "test",
+			DecodeConfig: decodeString,
+			RenderInstance: func(_ context.Context, input render.Input, _ string) (render.Result, error) {
+				content := "services:\n  app-" + string(rune('1'+input.Service.Instances[0].Index)) + ":\n    image: example\nvolumes:\n  data: {}"
+				return render.Result{Artifacts: []render.Artifact{{Key: "compose.yaml", Content: content}}}, nil
+			},
+		})
+		result, err := renderer.Render(context.Background(), input)
+		if err != nil {
+			t.Fatalf("Render() error = %v", err)
+		}
+		var document map[string]any
+		if err := yaml.Unmarshal([]byte(result.Artifacts[0].Content), &document); err != nil {
+			t.Fatalf("unmarshal compose: %v", err)
+		}
+		volumes, ok := document["volumes"].(map[string]any)
+		if !ok || len(volumes) != 1 {
+			t.Fatalf("volumes = %#v, want one aggregated data volume", document["volumes"])
+		}
+	})
+
 	for _, testCase := range []struct {
 		name      string
 		fragments []string
@@ -296,6 +320,7 @@ func TestComposeAggregation(t *testing.T) {
 	}{
 		{name: "conflicting service", fragments: []string{"services:\n  app:\n    image: one", "services:\n  app:\n    image: two"}, want: "conflicting Compose service"},
 		{name: "conflicting network", fragments: []string{"networks:\n  shared:\n    external: true", "networks:\n  shared:\n    external: false"}, want: "conflicting Compose network"},
+		{name: "conflicting volume", fragments: []string{"volumes:\n  data:\n    name: one", "volumes:\n  data:\n    name: two"}, want: "conflicting Compose volume"},
 		{name: "missing compose", fragments: []string{""}, want: "missing compose.yaml artifact"},
 		{name: "multiple compose", fragments: []string{"services: {}", "services: {}"}, want: "multiple compose.yaml artifacts"},
 		{name: "malformed yaml", fragments: []string{"services: ["}, want: "parse compose.yaml"},
