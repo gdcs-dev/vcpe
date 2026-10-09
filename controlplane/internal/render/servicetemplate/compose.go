@@ -48,10 +48,10 @@ func BuildComposeService(input render.Input, instance plan.Instance, attach Netw
 		svcNets[iface.Role] = attach(iface, isManaged(input.Deployment, iface.Role))
 		externalNetworks[iface.Role] = map[string]any{"external": true, "name": iface.Network}
 	}
-	instanceName := fmt.Sprintf("%s-%d", input.Service.Name, instance.Index+1)
+	instanceName := instance.ComposeServiceName(input.Service.Name)
 	svc = map[string]any{
 		"image":          render.ImageRef(input.Service.Image),
-		"container_name": input.Deployment.Name + "-" + instanceName,
+		"container_name": instance.PodmanContainerName(input.Deployment.Name, input.Service.Name),
 		"hostname":       instanceName,
 		"env_file":       []string{fmt.Sprintf("instances/%d/compose.env", instance.Index+1)},
 		"networks":       svcNets,

@@ -1,0 +1,32 @@
+[Unit]
+Description=RDK telemetry agent OTLP producer
+Wants=otel-relay.service
+After=otel-relay.service
+ConditionPathExists=/etc/rdk-otel/enabled
+ConditionPathExists=/etc/rdk-otel/device.env
+ConditionPathExists=/etc/rdk-otel/otel-token
+
+[Service]
+Type=simple
+User=root
+Group=root
+UMask=0077
+EnvironmentFile=/etc/rdk-otel/device.env
+RuntimeDirectory=rdk-otel
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=yes
+ExecStartPre=/usr/bin/install -m 0600 /etc/rdk-otel/otel-token /run/rdk-otel/agent-token
+ExecStart=/usr/local/bin/sherloq-agent --config /etc/rdk-otel/agent.yaml --node-id ${DEVICE_ID}
+ExecStopPost=/usr/bin/rm -f /run/rdk-otel/agent-token
+KillSignal=SIGTERM
+TimeoutStopSec=30
+Restart=no
+MemoryHigh=48M
+MemoryMax=64M
+OOMPolicy=stop
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+
+[Install]
+WantedBy=multi-user.target

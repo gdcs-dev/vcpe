@@ -16,7 +16,7 @@ import (
 
 func TestRendererArtifactInventory(t *testing.T) {
 	types.Register()
-	for _, typeName := range []string{"bng", "event-sink", "gateway", "generic-container", "oktopus", "routerd", "telemetry-gateway", "webpa", "xb10"} {
+	for _, typeName := range []string{"bng", "event-sink", "gateway", "generic-container", "oktopus", "telemetry-gateway", "webpa", "xb10"} {
 		t.Run(typeName, func(t *testing.T) {
 			registered, ok := typeregistry.Lookup(typeName)
 			if !ok {
@@ -65,17 +65,11 @@ func TestRendererArtifactInventory(t *testing.T) {
 				if _, ok := artifacts["entrypoint.sh"]; !ok {
 					t.Errorf("missing generic-container entrypoint; got %v", artifactKeys(artifacts))
 				}
-				for key := range artifacts {
-					if strings.HasPrefix(key, "instances/") {
-						t.Errorf("generic-container unexpectedly emitted per-instance artifact %q", key)
-					}
-				}
-			} else {
-				for _, index := range []int{1, 2} {
-					key := fmt.Sprintf("instances/%d/compose.env", index)
-					if _, ok := artifacts[key]; !ok {
-						t.Errorf("missing one-based replica artifact %q; got %v", key, artifactKeys(artifacts))
-					}
+			}
+			for _, index := range []int{1, 2} {
+				key := fmt.Sprintf("instances/%d/compose.env", index)
+				if _, ok := artifacts[key]; !ok {
+					t.Errorf("missing one-based replica artifact %q; got %v", key, artifactKeys(artifacts))
 				}
 			}
 			for key := range artifacts {
@@ -97,7 +91,7 @@ func artifactKeys(artifacts map[string]string) []string {
 
 func TestRenderersPreserveManifestPorts(t *testing.T) {
 	types.Register()
-	for _, typeName := range []string{"bng", "event-sink", "gateway", "generic-container", "oktopus", "routerd", "telemetry-gateway", "webpa", "xb10"} {
+	for _, typeName := range []string{"bng", "event-sink", "gateway", "generic-container", "oktopus", "telemetry-gateway", "webpa", "xb10"} {
 		t.Run(typeName, func(t *testing.T) {
 			registered, ok := typeregistry.Lookup(typeName)
 			if !ok {
@@ -148,9 +142,8 @@ func TestRendererComposeSemantics(t *testing.T) {
 		{typeName: "bng", healthContainerPort: 9878, pinsIPv4: true, pinsMAC: true, externalName: "edge-mgmt", containerName: "edge-service-%d", hostname: "service-%d"},
 		{typeName: "event-sink", healthContainerPort: 9878, pinsIPv4: true, pinsMAC: true, externalName: "edge-mgmt", containerName: "edge-service-%d", hostname: "service-%d"},
 		{typeName: "gateway", pinsMAC: true, externalName: "edge-mgmt", containerName: "edge-service-%d", hostname: "service-%d"},
-		{typeName: "generic-container", externalName: "${IFACE_MGMT_NETWORK}", containerName: "${DEPLOYMENT_NAME}-${SERVICE_NAME}-%d", hostname: "${SERVICE_NAME}-%d"},
+		{typeName: "generic-container", externalName: "${IFACE_MGMT_NETWORK}", containerName: "edge-service-%d", hostname: "service-%d"},
 		{typeName: "oktopus", healthContainerPort: 9878, pinsIPv4: true, pinsMAC: true, externalName: "edge-mgmt", containerName: "edge-service-%d", hostname: "service-%d"},
-		{typeName: "routerd", healthContainerPort: 9878, pinsIPv4: true, pinsMAC: true, externalName: "edge-mgmt", containerName: "edge-service-%d", hostname: "service-%d"},
 		{typeName: "telemetry-gateway", healthContainerPort: 8080, pinsIPv4: true, pinsMAC: true, externalName: "edge-mgmt", containerName: "edge-service-%d", hostname: "service-%d"},
 		{typeName: "webpa", healthContainerPort: 9878, pinsIPv4: true, pinsMAC: true, externalName: "edge-mgmt", containerName: "edge-service-%d", hostname: "service-%d"},
 		{typeName: "xb10", healthContainerPort: 9878, pinsMAC: true, externalName: "edge-mgmt", containerName: "edge-service-%d", hostname: "service-%d"},

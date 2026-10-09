@@ -54,6 +54,9 @@ func ExecuteCLI(prog string, args []string, version string) error {
 	opts.StateRoot = stateRoot
 
 	if socket := os.Getenv("VCPE_DAEMON_SOCKET"); socket != "" {
+		if opts.Command == "scenario" {
+			return fmt.Errorf("scenario run requires local execution; unset VCPE_DAEMON_SOCKET")
+		}
 		return executeViaDaemon(socket, opts)
 	}
 

@@ -12,10 +12,62 @@ import (
 
 // Deployment is the fully resolved plan for a manifest.
 type Deployment struct {
+	Name              string
+	Labels            map[string]string
+	Networks          []Network
+	WirelessMedia     []WirelessMedium
+	WirelessNetworks  []WirelessNetwork
+	WirelessScenarios []WirelessScenario
+	Services          []Service
+}
+
+type ScenarioStation struct {
+	Service     string
+	Replica     int
+	Radio       string
+	Device      string
+	MAC         string
+	ManagerName string
+}
+
+type ScenarioStep struct {
+	AtMs  int
+	AP    RoamingCandidate
+	SNRDb int
+}
+
+type ScenarioAssertions struct {
+	InitialAP RoamingCandidate
+	FinalAP   RoamingCandidate
+	SameIPv4  bool
+	MaxRoamMs int
+	MaxGapMs  int
+}
+
+type WirelessScenario struct {
+	Name       string
+	Station    ScenarioStation
+	APs        []RoamingCandidate
+	Steps      []ScenarioStep
+	Assertions ScenarioAssertions
+}
+
+// WirelessMedium is the resolved RF policy shared by radios on one medium.
+type WirelessMedium struct {
 	Name     string
-	Labels   map[string]string
-	Networks []Network
-	Services []Service
+	Band     string
+	Channel  int
+	WidthMHz int
+}
+
+// WirelessNetwork is resolved wireless policy and never becomes a Podman
+// network or an IPAM allocation.
+type WirelessNetwork struct {
+	Name                string
+	SSID                string
+	Channel             int
+	Security            string
+	PassphraseSecretRef string
 }
 
 // Network is a resolved host-attached segment.
@@ -93,8 +145,71 @@ type ReplicaDelta struct {
 // Instance is a single replica with its concrete interface identities.
 // Index is 0-based internally; the external compose service name uses Index+1.
 type Instance struct {
-	Index      int
-	Interfaces []Interface
+	Index         int
+	InstanceName  string
+	ContainerName string
+	Interfaces    []Interface
+	Radios        []Radio
+}
+
+// ComposeServiceName returns the planner-owned external replica name, with a
+// deterministic fallback for tests or callers that construct plans directly.
+func (i Instance) ComposeServiceName(service string) string {
+	if i.InstanceName != "" {
+		return i.InstanceName
+	}
+	return InstanceName(service, i.Index)
+}
+
+// PodmanContainerName returns the planner-owned container name, with a
+// deterministic fallback for plans constructed outside the planner.
+func (i Instance) PodmanContainerName(deployment, service string) string {
+	if i.ContainerName != "" {
+		return i.ContainerName
+	}
+	return ContainerName(deployment, service, i.Index)
+}
+
+// Radio is a resolved late-attached wireless device. GroupMask is assigned by
+// persisted deployment allocation before runtime reconciliation.
+type Radio struct {
+	Name          string
+	Medium        string
+	Network       string
+	APBSSID       string
+	RoamingMedia  []string
+	Candidates    []RoamingCandidate
+	VAPs          []VAP
+	Device        string
+	Mode          string
+	Mesh          *manifest.Mesh
+	Bridge        string
+	Addressing    string
+	DefaultRoute  bool
+	ManagerName   string
+	MAC           string
+	GroupMask     uint64
+	ContainerName string
+}
+
+type RoamingCandidate struct {
+	Service string
+	Replica int
+	Radio   string
+	Slot    int
+	Medium  string
+	Band    string
+	Channel int
+	BSSID   string
+}
+
+// VAP is a resolved AP BSS bound to one radio slot and bridge.
+type VAP struct {
+	Slot    int
+	Network string
+	Bridge  string
+	Device  string
+	MAC     string
 }
 
 // Interface is a resolved attachment to a network role.
@@ -127,6 +242,27 @@ func (d Deployment) Network(role string) *Network {
 	for i := range d.Networks {
 		if d.Networks[i].Role == role {
 			return &d.Networks[i]
+		}
+	}
+	return nil
+}
+
+// WirelessNetwork returns the resolved wireless medium by name, or nil when
+// absent.
+func (d Deployment) WirelessNetwork(name string) *WirelessNetwork {
+	for i := range d.WirelessNetworks {
+		if d.WirelessNetworks[i].Name == name {
+			return &d.WirelessNetworks[i]
+		}
+	}
+	return nil
+}
+
+// WirelessMedium returns the resolved RF policy by name, or nil when absent.
+func (d Deployment) WirelessMedium(name string) *WirelessMedium {
+	for i := range d.WirelessMedia {
+		if d.WirelessMedia[i].Name == name {
+			return &d.WirelessMedia[i]
 		}
 	}
 	return nil

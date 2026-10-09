@@ -1,0 +1,46 @@
+---
+node:
+  client_id: telemetry-agent
+  topic_prefix: rdk
+  server_url: http://127.0.0.1:4318
+  otlp:
+    endpoint: http://127.0.0.1:4318/v1/metrics
+    bearer_credential_path: /run/rdk-otel/agent-token
+    export_interval_ms: 60000
+    timeout_ms: 10000
+    protocol: http_protobuf
+    temporality: cumulative
+    compression: gzip
+    retry:
+      initial_delay_ms: 1000
+      max_delay_ms: 30000
+      max_elapsed_ms: 300000
+    delivery:
+      streams:
+        - scope: com.rdk.telemetry.memory
+          metric_name: system.memory.linux.available
+          mode: best_effort
+      best_effort:
+        endpoint: http://127.0.0.1:4319/v1/metrics
+        queue_capacity: 64
+        export_interval_ms: 120000
+        sampling_rate: 0.1
+        sampling_seed: rdk-best-effort-v1
+  ring_capacity: 8192
+  max_batch: 500
+  max_seconds: 2.0
+  timeout_s: 10
+  server_wait_s: 120
+  server_down_exit_s: 300
+  max_rss_kb: 49152
+  enrol: false
+  apply_desired_state: false
+
+defaults:
+  interval_ms: 60000
+
+collectors:
+  - topic: mem_info
+    source: {kind: file, path: /proc/meminfo}
+    parser: kv_colon
+    kb_to_bytes: true

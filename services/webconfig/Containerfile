@@ -1,0 +1,67 @@
+##############################################################################
+# Stage 1: Build the pinned upstream WebConfig server
+##############################################################################
+FROM golang:1.26 AS builder
+
+ARG WEBCONFIG_REPOSITORY=https://github.com/rdkcentral/webconfig.git
+ARG WEBCONFIG_REVISION=3eca89417506ab6487e10d83548b836117e700a7
+
+# Go's async goroutine preemption (SIGURG) crashes QEMU user-mode emulation
+# ("uncaught target signal 11") when cross-building for a non-native arch.
+ENV GODEBUG=asyncpreemptoff=1
+
+RUN apt-get update && \
+   DEBIAN_FRONTEND=noninteractive apt-get -y install --no-install-recommends git && \
+   rm -rf /var/lib/apt/lists/*
+
+RUN git init /src \
+   && cd /src \
+   && git remote add origin "${WEBCONFIG_REPOSITORY}" \
+   && git fetch --depth 1 origin "${WEBCONFIG_REVISION}" \
+   && git checkout --detach FETCH_HEAD
+
+WORKDIR /src
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /out/webconfig ./main.go
+
+COPY bootstrap/main.go /src/cmd/vcpe-bootstrap/main.go
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /out/webconfig-bootstrap ./cmd/vcpe-bootstrap
+
+##############################################################################
+# Stage 2: Runtime image
+##############################################################################
+FROM debian:bookworm-slim
+
+ARG WEBCONFIG_REPOSITORY
+ARG WEBCONFIG_REVISION
+ARG TARGETOS
+ARG TARGETARCH
+
+RUN apt-get update && \
+   DEBIAN_FRONTEND=noninteractive apt-get -y install --no-install-recommends \
+   bash \
+   ca-certificates \
+   curl && \
+   rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /out/webconfig /usr/local/bin/webconfig
+COPY --from=builder /out/webconfig-bootstrap /usr/local/bin/webconfig-bootstrap
+COPY container/webconfig.conf /etc/webconfig/webconfig.conf
+COPY container/entrypoint.sh /usr/local/bin/webconfig-entrypoint
+COPY container/health-probe.sh /usr/local/bin/webconfig-health-probe
+COPY container/platforms/${TARGETOS}-${TARGETARCH}/vcpe-healthd /usr/local/bin/vcpe-healthd
+
+RUN chmod 0755 \
+   /usr/local/bin/webconfig \
+   /usr/local/bin/webconfig-bootstrap \
+   /usr/local/bin/webconfig-entrypoint \
+   /usr/local/bin/webconfig-health-probe \
+   /usr/local/bin/vcpe-healthd
+
+ENV WEBCONFIG_GATEWAY_MAC=02:00:00:00:00:01
+
+LABEL org.opencontainers.image.source="${WEBCONFIG_REPOSITORY}" \
+      org.opencontainers.image.revision="${WEBCONFIG_REVISION}" \
+      org.opencontainers.image.description="Development-only RDK WebConfig server for vCPE"
+
+ENTRYPOINT ["/usr/local/bin/webconfig-entrypoint"]
+HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 CMD ["/usr/local/bin/vcpe-healthd", "--check"]

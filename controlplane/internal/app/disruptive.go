@@ -2,11 +2,13 @@ package app
 
 import (
 	"fmt"
+	"reflect"
 	"sort"
 
 	"github.com/gdcs-dev/vcpe/controlplane/internal/ipam"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/manifest"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/persist"
+	"github.com/gdcs-dev/vcpe/controlplane/internal/plan"
 	"gopkg.in/yaml.v3"
 )
 
@@ -59,9 +61,111 @@ func classifyDisruptive(ps *persist.Store, doc manifest.Document) (bool, []strin
 					reasons = append(reasons, fmt.Sprintf("service %q scale-to-zero (was %d replicas)", svc.Name, was))
 				}
 			}
+			reasons = append(reasons, disruptiveRadioChanges(prev, doc)...)
 		}
 	}
+	persistedRadioReasons, err := disruptivePersistedRadioChanges(ps, doc)
+	if err != nil {
+		return false, nil, err
+	}
+	reasons = append(reasons, persistedRadioReasons...)
 
 	sort.Strings(reasons)
 	return len(reasons) > 0, reasons, nil
+}
+
+func disruptivePersistedRadioChanges(ps *persist.Store, desired manifest.Document) ([]string, error) {
+	owned, err := ps.ListWirelessRadios(desired.Metadata.Name)
+	if err != nil {
+		return nil, err
+	}
+	if len(owned) == 0 {
+		return nil, nil
+	}
+	group, hasGroup, err := ps.WirelessGroup(desired.Metadata.Name)
+	if err != nil {
+		return nil, err
+	}
+	type desiredRadio struct {
+		radio    manifest.Radio
+		replicas int
+	}
+	desiredByKey := map[string]desiredRadio{}
+	for _, service := range desired.Spec.Services {
+		for _, radio := range service.Radios {
+			desiredByKey[service.Name+"\x00"+radio.Name] = desiredRadio{radio: radio, replicas: service.Replicas}
+		}
+	}
+
+	var reasons []string
+	for _, radio := range owned {
+		current, exists := desiredByKey[radio.Service+"\x00"+radio.LogicalName]
+		if !exists || radio.Replica >= current.replicas {
+			continue
+		}
+		identity := fmt.Sprintf("service %q radio %q replica %d", radio.Service, radio.LogicalName, radio.Replica)
+		if radio.ManagerName != plan.RadioManagerName(desired.Metadata.Name, radio.Service, radio.Replica, radio.LogicalName) || radio.MAC != plan.CanonicalRadioMAC(desired.Metadata.Name, radio.Service, radio.Replica, radio.LogicalName) || radio.ContainerName != plan.ContainerName(desired.Metadata.Name, radio.Service, radio.Replica) {
+			reasons = append(reasons, identity+" derived identity changes")
+		}
+		if !hasGroup || radio.GroupBit != group.Bit {
+			reasons = append(reasons, identity+" hwsim group changes")
+		}
+		if (current.radio.Medium == "" && radio.Network != current.radio.Network) || radio.Device != current.radio.Device || radio.Mode != current.radio.Mode {
+			reasons = append(reasons, identity+" immutable contract changes")
+		}
+	}
+	return reasons, nil
+}
+
+func disruptiveRadioChanges(previous, desired manifest.Document) []string {
+	type radioIdentity struct {
+		service string
+		radio   manifest.Radio
+	}
+	desiredRadios := map[string]radioIdentity{}
+	for _, service := range desired.Spec.Services {
+		for _, radio := range service.Radios {
+			desiredRadios[service.Name+"\x00"+radio.Name] = radioIdentity{service: service.Name, radio: radio}
+		}
+	}
+
+	var reasons []string
+	mediaByName := map[string]manifest.WirelessMedium{}
+	for _, medium := range desired.Spec.WirelessMedia {
+		mediaByName[medium.Name] = medium
+	}
+	for _, old := range previous.Spec.WirelessMedia {
+		if current, exists := mediaByName[old.Name]; !exists || current.Band != old.Band || current.Channel != old.Channel || current.WidthMHz != old.WidthMHz {
+			reasons = append(reasons, fmt.Sprintf("wireless medium %q RF policy changes", old.Name))
+		}
+	}
+	for _, service := range previous.Spec.Services {
+		for _, previousRadio := range service.Radios {
+			key := service.Name + "\x00" + previousRadio.Name
+			current, exists := desiredRadios[key]
+			if !exists {
+				reasons = append(reasons, fmt.Sprintf("service %q radio %q identity is removed", service.Name, previousRadio.Name))
+				continue
+			}
+			if current.radio.Medium != previousRadio.Medium {
+				reasons = append(reasons, fmt.Sprintf("service %q radio %q medium changes from %q to %q", service.Name, previousRadio.Name, previousRadio.Medium, current.radio.Medium))
+			}
+			if previousRadio.Medium == "" && current.radio.Network != previousRadio.Network {
+				reasons = append(reasons, fmt.Sprintf("service %q radio %q wireless network changes from %q to %q", service.Name, previousRadio.Name, previousRadio.Network, current.radio.Network))
+			}
+			if current.radio.Device != previousRadio.Device {
+				reasons = append(reasons, fmt.Sprintf("service %q radio %q device changes from %q to %q", service.Name, previousRadio.Name, previousRadio.Device, current.radio.Device))
+			}
+			if current.radio.Mode != previousRadio.Mode {
+				reasons = append(reasons, fmt.Sprintf("service %q radio %q mode changes from %q to %q", service.Name, previousRadio.Name, previousRadio.Mode, current.radio.Mode))
+			}
+			if !reflect.DeepEqual(current.radio.Mesh, previousRadio.Mesh) {
+				reasons = append(reasons, fmt.Sprintf("service %q radio %q mesh contract changes", service.Name, previousRadio.Name))
+			}
+			if !reflect.DeepEqual(current.radio.Roaming, previousRadio.Roaming) {
+				reasons = append(reasons, fmt.Sprintf("service %q radio %q roaming media changes", service.Name, previousRadio.Name))
+			}
+		}
+	}
+	return reasons
 }

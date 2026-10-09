@@ -196,6 +196,7 @@ export default function App() {
             type: svc.type,
             replicas: svc.replicas,
             items,
+            radios: svc.radios ?? [],
           } satisfies ServiceNodeData,
           draggable: true,
         });
@@ -211,6 +212,26 @@ export default function App() {
             type: 'dependsOn',
             markerEnd: { type: MarkerType.ArrowClosed, color: '#666' },
           });
+        }
+      }
+
+      for (const station of model.spec.services) {
+        for (const radio of station.radios ?? []) {
+          if (radio.mode !== 'station') continue;
+          for (const accessPoint of model.spec.services) {
+            for (const ap of accessPoint.radios ?? []) {
+              if (ap.mode !== 'ap' || ap.medium !== radio.medium) continue;
+              const vap = ap.vaps?.find(item => item.network === radio.network);
+              if (!vap) continue;
+              edges.push({
+                id: `wireless-${station.name}-${radio.name}-${accessPoint.name}-${ap.name}-${vap.slot}`,
+                source: `service:${accessPoint.name}`, target: `service:${station.name}`,
+                sourceHandle: `vap-${ap.name}-${vap.slot}`, targetHandle: `station-${radio.name}`,
+                label: `${radio.medium} · ${radio.network}`, style: {stroke: '#76ae80'},
+                markerEnd: {type: MarkerType.ArrowClosed, color: '#76ae80'},
+              });
+            }
+          }
         }
       }
 

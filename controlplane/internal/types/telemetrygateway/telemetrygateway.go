@@ -122,7 +122,7 @@ func renderInstance(_ context.Context, input render.Input, config Config) (rende
 	servicetemplate.AddFirstInstanceNetworkAliases(instance, serviceNetworks, "mgmt", []string{TypeName})
 	servicetemplate.AttachHealthPublication(input, instance, input.HealthPorts[instance.Index], 8080, networks, serviceNetworks, service)
 
-	instanceName := fmt.Sprintf("%s-%d", input.Service.Name, instance.Index+1)
+	instanceName := instance.ComposeServiceName(input.Service.Name)
 	compose, err := yaml.Marshal(map[string]any{
 		"services": map[string]any{instanceName: service},
 		"networks": networks,

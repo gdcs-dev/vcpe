@@ -76,15 +76,6 @@ func TestBuiltInMetadata(t *testing.T) {
 			renderer:    "oktopus-renderer",
 		},
 		{
-			name:         "routerd",
-			health:       typeregistry.HealthBehavior{Mode: typeregistry.HealthModeCurated, ContainerPort: 9878},
-			imagePolicy:  "build",
-			description:  "RDK-B-style router control plane — manifest-driven LAN bridge topology and WAN policy",
-			defaultImage: "ghcr.io/gdcs-dev/routerd",
-			roles:        []typeregistry.RoleRequirement{{Role: "wan", Required: true}},
-			renderer:     "routerd-renderer",
-		},
-		{
 			name:         "telemetry-gateway",
 			health:       typeregistry.HealthBehavior{Mode: typeregistry.HealthModeCurated, ContainerPort: 8080},
 			imagePolicy:  "build",

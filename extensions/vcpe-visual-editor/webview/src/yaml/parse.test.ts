@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parse } from './parse';
+import { parse, validateWireless } from './parse';
 import { readFileSync } from 'fs';
 import { resolve } from 'path';
 
@@ -70,6 +70,21 @@ describe('parse', () => {
 
     const gateway = result.model.spec.services.find(s => s.name === 'gateway');
     expect(gateway?.dependsOn).toContain('bng');
+  });
+
+  it('parses tri-band media, mirrored profiles, and ordered VAP slots', () => {
+    const yaml = readFileSync(resolve(__dirname, '../../../../../manifests/dev/wireless.yaml'), 'utf8');
+    const result = parse(yaml);
+    if ('error' in result) throw new Error(result.error);
+    expect(result.model.spec.wirelessMedia?.map(medium => medium.band)).toEqual(['2.4ghz', '5ghz', '6ghz']);
+    expect(result.model.spec.wirelessNetworks?.find(profile => profile.name === 'home')?.passphraseSecretRef).toBe('home-wifi');
+    const gateway = result.model.spec.services.find(service => service.name === 'gateway');
+    expect(gateway?.radios?.map(radio => radio.vaps?.length)).toEqual([8, 8, 8]);
+    expect(gateway?.radios?.[2].vaps?.[1]).toEqual({slot: 1, network: 'guest', bridge: 'brguest'});
+    expect(result.model.spec.services.find(service => service.name === 'client-6')?.radios?.[0].medium).toBe('rf6');
+    expect(validateWireless(result.model)).toBeNull();
+    result.model.spec.wirelessNetworks![0].security = 'open';
+    expect(validateWireless(result.model)).toContain('6 GHz requires WPA3');
   });
 
   it('parses macvlan network with driverOptions', () => {

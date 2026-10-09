@@ -2,6 +2,7 @@ package persist
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"strconv"
@@ -16,7 +17,7 @@ type Store struct {
 
 // SchemaVersion stamps the on-disk state so a control plane refuses to operate
 // against state written by an incompatible schema.
-const SchemaVersion = "vcpe.dev/v1"
+const SchemaVersion = "vcpe.dev/state/v3"
 
 type IPAMLease struct {
 	CustomerID string
@@ -38,6 +39,32 @@ type HealthEndpoint struct {
 	HostPort   int
 }
 
+// WirelessGroup is one deployment's stable hwsim group-bit allocation.
+type WirelessGroup struct {
+	Deployment string `json:"deployment"`
+	Bit        int    `json:"bit"`
+}
+
+// Mask returns the nonzero hwsim group mask for this allocation.
+func (g WirelessGroup) Mask() uint64 { return uint64(1) << uint(g.Bit) }
+
+// WirelessRadio is persisted desired ownership for one service replica radio.
+type WirelessRadio struct {
+	Deployment    string `json:"deployment"`
+	Service       string `json:"service"`
+	Replica       int    `json:"replica"`
+	LogicalName   string `json:"logicalName"`
+	ManagerName   string `json:"managerName"`
+	MAC           string `json:"mac"`
+	Network       string `json:"network"`
+	Device        string `json:"device"`
+	Mode          string `json:"mode"`
+	Bridge        string `json:"bridge,omitempty"`
+	ContainerName string `json:"containerName"`
+	GroupBit      int    `json:"groupBit"`
+	Status        string `json:"status"`
+}
+
 type OperationTimelineEntry struct {
 	OperationID string `json:"operationId"`
 	Command     string `json:"command"`
@@ -52,6 +79,8 @@ type MetricsSnapshot struct {
 	DriftCount          int `json:"driftCount"`
 	RunningOperations   int `json:"runningOperations"`
 	RecoveredOperations int `json:"recoveredOperations"`
+	WirelessGroups      int `json:"wirelessGroups"`
+	WirelessRadios      int `json:"wirelessRadios"`
 }
 
 type OperationPhaseEntry struct {
@@ -61,6 +90,17 @@ type OperationPhaseEntry struct {
 }
 
 func Open(stateRoot string) (*Store, error) {
+	return open(stateRoot, true)
+}
+
+// OpenForReset opens the database without enforcing its current schema stamp.
+// It is restricted to the explicit state-reset path, which immediately clears
+// and re-stamps all tables.
+func OpenForReset(stateRoot string) (*Store, error) {
+	return open(stateRoot, false)
+}
+
+func open(stateRoot string, enforceVersion bool) (*Store, error) {
 	dbPath := filepath.Join(stateRoot, "state.db")
 	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
@@ -68,13 +108,16 @@ func Open(stateRoot string) (*Store, error) {
 	}
 
 	s := &Store{db: db}
+	db.SetMaxOpenConns(1)
 	if err := s.ensureSchema(); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
-	if err := s.ensureSchemaVersion(); err != nil {
-		_ = db.Close()
-		return nil, err
+	if enforceVersion {
+		if err := s.ensureSchemaVersion(); err != nil {
+			_ = db.Close()
+			return nil, err
+		}
 	}
 	return s, nil
 }
@@ -126,6 +169,31 @@ CREATE TABLE IF NOT EXISTS health_endpoints (
 	PRIMARY KEY(customer_id, service_name, replica_index)
 );
 
+CREATE TABLE IF NOT EXISTS wireless_groups (
+	customer_id TEXT PRIMARY KEY,
+	bit_index INTEGER NOT NULL UNIQUE CHECK(bit_index >= 0 AND bit_index < 64),
+	updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS wireless_radios (
+	customer_id TEXT NOT NULL,
+	service_name TEXT NOT NULL,
+	replica_index INTEGER NOT NULL,
+	logical_name TEXT NOT NULL,
+	manager_name TEXT NOT NULL UNIQUE,
+	mac TEXT NOT NULL,
+	network_name TEXT NOT NULL,
+	device_name TEXT NOT NULL,
+	mode TEXT NOT NULL,
+	bridge_name TEXT NOT NULL,
+	container_name TEXT NOT NULL,
+	group_bit INTEGER NOT NULL,
+	status TEXT NOT NULL,
+	updated_at TEXT NOT NULL,
+	PRIMARY KEY(customer_id, service_name, replica_index, logical_name),
+	FOREIGN KEY(customer_id) REFERENCES wireless_groups(customer_id)
+);
+
 CREATE TABLE IF NOT EXISTS checkpoints (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL,
@@ -166,7 +234,7 @@ func (s *Store) ensureSchemaVersion() error {
 // Reset clears all persisted state and re-stamps the schema version. It backs
 // the `vcpe state reset` command.
 func (s *Store) Reset() error {
-	tables := []string{"operations", "operation_journal", "desired_snapshots", "ipam_leases", "health_endpoints", "checkpoints", "meta"}
+	tables := []string{"operations", "operation_journal", "desired_snapshots", "ipam_leases", "health_endpoints", "wireless_radios", "wireless_groups", "checkpoints", "meta"}
 	tx, err := s.db.Begin()
 	if err != nil {
 		return fmt.Errorf("begin reset tx: %w", err)
@@ -382,6 +450,12 @@ func (s *Store) Metrics() (MetricsSnapshot, error) {
 	if err := s.db.QueryRow(`SELECT COUNT(*) FROM operations WHERE status LIKE '%drift%'`).Scan(&metrics.DriftCount); err != nil {
 		return MetricsSnapshot{}, fmt.Errorf("query drift count: %w", err)
 	}
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM wireless_groups`).Scan(&metrics.WirelessGroups); err != nil {
+		return MetricsSnapshot{}, fmt.Errorf("query wireless groups: %w", err)
+	}
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM wireless_radios`).Scan(&metrics.WirelessRadios); err != nil {
+		return MetricsSnapshot{}, fmt.Errorf("query wireless radios: %w", err)
+	}
 
 	return metrics, nil
 }
@@ -394,6 +468,8 @@ func (s *Store) ListKnownDeployments() ([]string, error) {
 		SELECT DISTINCT customer_id FROM ipam_leases
 		UNION
 		SELECT DISTINCT customer_id FROM desired_snapshots
+		UNION
+		SELECT DISTINCT customer_id FROM wireless_groups
 		ORDER BY customer_id ASC
 	`)
 	if err != nil {
@@ -525,6 +601,37 @@ func (s *Store) DeleteReplicaCounts(deployment string) error {
 	return nil
 }
 
+func (s *Store) SetPendingCredentialRecreate(deployment string, services []string) error {
+	encoded, err := json.Marshal(services)
+	if err != nil {
+		return fmt.Errorf("encode pending credential recreation: %w", err)
+	}
+	return s.UpsertCheckpoint("credential_recreate/"+deployment, string(encoded))
+}
+
+func (s *Store) PendingCredentialRecreate(deployment string) ([]string, error) {
+	var encoded string
+	err := s.db.QueryRow(`SELECT value FROM checkpoints WHERE key = ?`, "credential_recreate/"+deployment).Scan(&encoded)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get pending credential recreation for %s: %w", deployment, err)
+	}
+	var services []string
+	if err := json.Unmarshal([]byte(encoded), &services); err != nil {
+		return nil, fmt.Errorf("decode pending credential recreation for %s: %w", deployment, err)
+	}
+	return services, nil
+}
+
+func (s *Store) DeletePendingCredentialRecreate(deployment string) error {
+	if _, err := s.db.Exec(`DELETE FROM checkpoints WHERE key = ?`, "credential_recreate/"+deployment); err != nil {
+		return fmt.Errorf("delete pending credential recreation for %s: %w", deployment, err)
+	}
+	return nil
+}
+
 // ReserveHealthEndpoint returns a stable loopback host-port reservation for a
 // deployment service replica. Reservations remain stable across reconciles and
 // are globally unique inside the control-plane-owned range.
@@ -606,4 +713,188 @@ func (s *Store) DeleteHealthEndpoints(deployment string) error {
 		return fmt.Errorf("delete health endpoints for %s: %w", deployment, err)
 	}
 	return nil
+}
+
+// AllocateWirelessGroup returns an existing allocation or reserves the lowest
+// free bit. Store operations are serialized by the single SQLite connection.
+func (s *Store) AllocateWirelessGroup(deployment string) (WirelessGroup, error) {
+	if deployment == "" {
+		return WirelessGroup{}, fmt.Errorf("wireless group deployment is required")
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return WirelessGroup{}, fmt.Errorf("begin wireless group allocation: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	group := WirelessGroup{Deployment: deployment}
+	err = tx.QueryRow(`SELECT bit_index FROM wireless_groups WHERE customer_id = ?`, deployment).Scan(&group.Bit)
+	if err == nil {
+		if err := tx.Commit(); err != nil {
+			return WirelessGroup{}, fmt.Errorf("commit existing wireless group: %w", err)
+		}
+		return group, nil
+	}
+	if err != sql.ErrNoRows {
+		return WirelessGroup{}, fmt.Errorf("lookup wireless group for %s: %w", deployment, err)
+	}
+
+	used := map[int]struct{}{}
+	rows, err := tx.Query(`SELECT bit_index FROM wireless_groups`)
+	if err != nil {
+		return WirelessGroup{}, fmt.Errorf("list wireless group allocations: %w", err)
+	}
+	for rows.Next() {
+		var bit int
+		if err := rows.Scan(&bit); err != nil {
+			rows.Close()
+			return WirelessGroup{}, fmt.Errorf("scan wireless group allocation: %w", err)
+		}
+		used[bit] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return WirelessGroup{}, fmt.Errorf("iterate wireless group allocations: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return WirelessGroup{}, fmt.Errorf("close wireless group rows: %w", err)
+	}
+	for bit := 0; bit < 64; bit++ {
+		if _, exists := used[bit]; exists {
+			continue
+		}
+		if _, err := tx.Exec(`INSERT INTO wireless_groups(customer_id, bit_index, updated_at) VALUES(?, ?, ?)`, deployment, bit, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+			return WirelessGroup{}, fmt.Errorf("reserve wireless group bit %d for %s: %w", bit, deployment, err)
+		}
+		group.Bit = bit
+		if err := tx.Commit(); err != nil {
+			return WirelessGroup{}, fmt.Errorf("commit wireless group allocation: %w", err)
+		}
+		return group, nil
+	}
+	return WirelessGroup{}, fmt.Errorf("wireless group capacity exhausted: all 64 bits are allocated")
+}
+
+func (s *Store) WirelessGroup(deployment string) (WirelessGroup, bool, error) {
+	group := WirelessGroup{Deployment: deployment}
+	err := s.db.QueryRow(`SELECT bit_index FROM wireless_groups WHERE customer_id = ?`, deployment).Scan(&group.Bit)
+	if err == sql.ErrNoRows {
+		return WirelessGroup{}, false, nil
+	}
+	if err != nil {
+		return WirelessGroup{}, false, fmt.Errorf("query wireless group for %s: %w", deployment, err)
+	}
+	return group, true, nil
+}
+
+func (s *Store) ReleaseWirelessGroup(deployment string) error {
+	var radios int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM wireless_radios WHERE customer_id = ?`, deployment).Scan(&radios); err != nil {
+		return fmt.Errorf("count radios before releasing group for %s: %w", deployment, err)
+	}
+	if radios != 0 {
+		return fmt.Errorf("cannot release wireless group for %s while %d radio records remain", deployment, radios)
+	}
+	if _, err := s.db.Exec(`DELETE FROM wireless_groups WHERE customer_id = ?`, deployment); err != nil {
+		return fmt.Errorf("release wireless group for %s: %w", deployment, err)
+	}
+	return nil
+}
+
+// ReplaceWirelessRadios atomically replaces one deployment's desired records.
+func (s *Store) ReplaceWirelessRadios(deployment string, radios []WirelessRadio) (err error) {
+	group, ok, err := s.WirelessGroup(deployment)
+	if err != nil {
+		return err
+	}
+	if len(radios) > 0 && !ok {
+		return fmt.Errorf("wireless group for %s is not allocated", deployment)
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin wireless radio replace: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+	if _, err = tx.Exec(`DELETE FROM wireless_radios WHERE customer_id = ?`, deployment); err != nil {
+		return fmt.Errorf("delete wireless radios for %s: %w", deployment, err)
+	}
+	for _, radio := range radios {
+		if radio.Deployment != deployment || radio.Service == "" || radio.Replica < 0 || radio.LogicalName == "" || radio.ManagerName == "" || radio.GroupBit != group.Bit {
+			return fmt.Errorf("invalid wireless radio identity for deployment %s: %+v", deployment, radio)
+		}
+		_, err = tx.Exec(`
+			INSERT INTO wireless_radios(customer_id, service_name, replica_index, logical_name, manager_name, mac, network_name, device_name, mode, bridge_name, container_name, group_bit, status, updated_at)
+			VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`, radio.Deployment, radio.Service, radio.Replica, radio.LogicalName, radio.ManagerName, radio.MAC, radio.Network, radio.Device, radio.Mode, radio.Bridge, radio.ContainerName, radio.GroupBit, radio.Status, time.Now().UTC().Format(time.RFC3339Nano))
+		if err != nil {
+			return fmt.Errorf("insert wireless radio %s: %w", radio.ManagerName, err)
+		}
+	}
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("commit wireless radio replace: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) ListWirelessRadios(deployment string) ([]WirelessRadio, error) {
+	query := `SELECT customer_id, service_name, replica_index, logical_name, manager_name, mac, network_name, device_name, mode, bridge_name, container_name, group_bit, status FROM wireless_radios`
+	args := []any{}
+	if deployment != "" {
+		query += ` WHERE customer_id = ?`
+		args = append(args, deployment)
+	}
+	query += ` ORDER BY customer_id, service_name, replica_index, logical_name`
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list wireless radios: %w", err)
+	}
+	defer rows.Close()
+	var radios []WirelessRadio
+	for rows.Next() {
+		var radio WirelessRadio
+		if err := rows.Scan(&radio.Deployment, &radio.Service, &radio.Replica, &radio.LogicalName, &radio.ManagerName, &radio.MAC, &radio.Network, &radio.Device, &radio.Mode, &radio.Bridge, &radio.ContainerName, &radio.GroupBit, &radio.Status); err != nil {
+			return nil, fmt.Errorf("scan wireless radio: %w", err)
+		}
+		radios = append(radios, radio)
+	}
+	return radios, rows.Err()
+}
+
+func (s *Store) DeleteWirelessRadios(deployment string) error {
+	if _, err := s.db.Exec(`DELETE FROM wireless_radios WHERE customer_id = ?`, deployment); err != nil {
+		return fmt.Errorf("delete wireless radios for %s: %w", deployment, err)
+	}
+	return nil
+}
+
+func (s *Store) UpdateWirelessRadioStatus(deployment, managerName, status string) error {
+	result, err := s.db.Exec(`UPDATE wireless_radios SET status = ?, updated_at = ? WHERE customer_id = ? AND manager_name = ?`, status, time.Now().UTC().Format(time.RFC3339Nano), deployment, managerName)
+	if err != nil {
+		return fmt.Errorf("update wireless radio %s status: %w", managerName, err)
+	}
+	if count, _ := result.RowsAffected(); count != 1 {
+		return fmt.Errorf("wireless radio %s is not owned by deployment %s", managerName, deployment)
+	}
+	return nil
+}
+
+func (s *Store) WirelessKeepSet() ([]string, error) {
+	rows, err := s.db.Query(`SELECT manager_name FROM wireless_radios ORDER BY manager_name`)
+	if err != nil {
+		return nil, fmt.Errorf("query wireless keep set: %w", err)
+	}
+	defer rows.Close()
+	var names []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, fmt.Errorf("scan wireless keep name: %w", err)
+		}
+		names = append(names, name)
+	}
+	return names, rows.Err()
 }

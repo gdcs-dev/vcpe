@@ -19,8 +19,14 @@ const (
 // Interface.Addressing. AddressingDHCP is also the default applied when the
 // field is left empty.
 const (
-	AddressingDHCP   = "dhcp"
-	AddressingStatic = "static"
+	AddressingDHCP       = "dhcp"
+	AddressingStatic     = "static"
+	WirelessOpen         = "open"
+	WirelessWPA2Personal = "wpa2-personal"
+	WirelessWPA3Personal = "wpa3-personal"
+	RadioModeAP          = "ap"
+	RadioModeStation     = "station"
+	RadioModeMesh        = "mesh"
 )
 
 // Document is the top-level desired-state manifest. The deployment identity is
@@ -40,11 +46,30 @@ type Metadata struct {
 }
 
 type Spec struct {
-	Networks              []Network   `json:"networks" yaml:"networks"`
-	Services              []Service   `json:"services" yaml:"services"`
-	Secrets               []SecretRef `json:"secrets,omitempty" yaml:"secrets,omitempty"`
-	MaxReplicasPerService int         `json:"maxReplicasPerService,omitempty" yaml:"maxReplicasPerService,omitempty"`
-	MaxActiveDeployments  int         `json:"maxActiveDeployments,omitempty" yaml:"maxActiveDeployments,omitempty"`
+	Networks              []Network          `json:"networks" yaml:"networks"`
+	WirelessMedia         []WirelessMedium   `json:"wirelessMedia,omitempty" yaml:"wirelessMedia,omitempty"`
+	WirelessNetworks      []WirelessNetwork  `json:"wirelessNetworks,omitempty" yaml:"wirelessNetworks,omitempty"`
+	WirelessScenarios     []WirelessScenario `json:"wirelessScenarios,omitempty" yaml:"wirelessScenarios,omitempty"`
+	Services              []Service          `json:"services" yaml:"services"`
+	Secrets               []SecretRef        `json:"secrets,omitempty" yaml:"secrets,omitempty"`
+	MaxReplicasPerService int                `json:"maxReplicasPerService,omitempty" yaml:"maxReplicasPerService,omitempty"`
+	MaxActiveDeployments  int                `json:"maxActiveDeployments,omitempty" yaml:"maxActiveDeployments,omitempty"`
+}
+
+type WirelessMedium struct {
+	Name     string `json:"name" yaml:"name"`
+	Band     string `json:"band" yaml:"band"`
+	Channel  int    `json:"channel" yaml:"channel"`
+	WidthMHz int    `json:"widthMHz" yaml:"widthMHz"`
+}
+
+// WirelessNetwork declares reusable WLAN profile policy. It is not
+// a Podman network and does not participate in control-plane IPAM.
+type WirelessNetwork struct {
+	Name                string `json:"name" yaml:"name"`
+	SSID                string `json:"ssid" yaml:"ssid"`
+	Security            string `json:"security" yaml:"security"`
+	PassphraseSecretRef string `json:"passphraseSecretRef,omitempty" yaml:"passphraseSecretRef,omitempty"`
 }
 
 // Network declares a host-attached L2/L3 segment by role. Bridge defaults to
@@ -90,10 +115,77 @@ type Service struct {
 	Image      Image        `json:"image" yaml:"image"`
 	DependsOn  []string     `json:"dependsOn,omitempty" yaml:"dependsOn,omitempty"`
 	Interfaces []Interface  `json:"interfaces,omitempty" yaml:"interfaces,omitempty"`
+	Radios     []Radio      `json:"radios,omitempty" yaml:"radios,omitempty"`
 	Bridges    []BridgeSpec `json:"bridges,omitempty" yaml:"bridges,omitempty"`
 	Ports      []string     `json:"ports,omitempty" yaml:"ports,omitempty"`
 	Volumes    []string     `json:"volumes,omitempty" yaml:"volumes,omitempty"`
 	Config     yaml.Node    `json:"-" yaml:"config,omitempty"`
+}
+
+// Radio declares a late-attached wireless device for each service replica.
+// Machine-level identities and namespace placement remain planner-owned.
+type Radio struct {
+	Name         string   `json:"name" yaml:"name"`
+	Medium       string   `json:"medium" yaml:"medium"`
+	Network      string   `json:"network,omitempty" yaml:"network,omitempty"`
+	Device       string   `json:"device" yaml:"device"`
+	Mode         string   `json:"mode" yaml:"mode"`
+	VAPs         []VAP    `json:"vaps,omitempty" yaml:"vaps,omitempty"`
+	Mesh         *Mesh    `json:"mesh,omitempty" yaml:"mesh,omitempty"`
+	Roaming      *Roaming `json:"roaming,omitempty" yaml:"roaming,omitempty"`
+	Addressing   string   `json:"addressing,omitempty" yaml:"addressing,omitempty"`
+	DefaultRoute bool     `json:"defaultRoute,omitempty" yaml:"defaultRoute,omitempty"`
+}
+
+type Mesh struct {
+	ID           string `json:"id" yaml:"id"`
+	Bridge       string `json:"bridge" yaml:"bridge"`
+	SAESecretRef string `json:"saeSecretRef" yaml:"saeSecretRef"`
+}
+
+type Roaming struct {
+	Media []string `json:"media" yaml:"media"`
+}
+
+type RadioReference struct {
+	Service string `json:"service" yaml:"service"`
+	Replica int    `json:"replica" yaml:"replica"`
+	Radio   string `json:"radio" yaml:"radio"`
+}
+
+type VAPReference struct {
+	Service string `json:"service" yaml:"service"`
+	Replica int    `json:"replica" yaml:"replica"`
+	Radio   string `json:"radio" yaml:"radio"`
+	Slot    *int   `json:"slot" yaml:"slot"`
+}
+
+type RFStep struct {
+	AtMs  *int         `json:"atMs" yaml:"atMs"`
+	AP    VAPReference `json:"ap" yaml:"ap"`
+	SNRDb *int         `json:"snrDb" yaml:"snrDb"`
+}
+
+type RoamAssertions struct {
+	InitialAP VAPReference `json:"initialAp" yaml:"initialAp"`
+	FinalAP   VAPReference `json:"finalAp" yaml:"finalAp"`
+	SameIPv4  bool         `json:"sameIPv4" yaml:"sameIPv4"`
+	MaxRoamMs int          `json:"maxRoamMs" yaml:"maxRoamMs"`
+	MaxGapMs  int          `json:"maxGapMs" yaml:"maxGapMs"`
+}
+
+type WirelessScenario struct {
+	Name       string         `json:"name" yaml:"name"`
+	Station    RadioReference `json:"station" yaml:"station"`
+	APs        []VAPReference `json:"aps" yaml:"aps"`
+	Steps      []RFStep       `json:"steps" yaml:"steps"`
+	Assertions RoamAssertions `json:"assertions" yaml:"assertions"`
+}
+
+type VAP struct {
+	Slot    int    `json:"slot" yaml:"slot"`
+	Network string `json:"network" yaml:"network"`
+	Bridge  string `json:"bridge" yaml:"bridge"`
 }
 
 type Image struct {
@@ -142,7 +234,8 @@ type BridgeSpec struct {
 type SecretRef struct {
 	Name     string `json:"name" yaml:"name"`
 	Provider string `json:"provider" yaml:"provider"`
-	Key      string `json:"key" yaml:"key"`
+	Key      string `json:"key,omitempty" yaml:"key,omitempty"`
+	Value    string `json:"value,omitempty" yaml:"value,omitempty"`
 }
 
 // Load reads and strictly decodes a manifest. YAML is a superset of JSON, so a
@@ -154,14 +247,17 @@ func Load(path string) (Document, error) {
 	if err != nil {
 		return Document{}, fmt.Errorf("read manifest: %w", err)
 	}
+	return Parse(b)
+}
 
-	dec := yaml.NewDecoder(bytes.NewReader(b))
+// Parse strictly decodes one manifest from YAML or JSON bytes.
+func Parse(data []byte) (Document, error) {
+	dec := yaml.NewDecoder(bytes.NewReader(data))
 	dec.KnownFields(true)
 
 	var doc Document
 	if err := dec.Decode(&doc); err != nil {
 		return Document{}, fmt.Errorf("parse manifest: %w", err)
 	}
-
 	return doc, nil
 }

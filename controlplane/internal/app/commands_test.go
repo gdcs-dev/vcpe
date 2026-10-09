@@ -2,6 +2,7 @@ package app
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -40,6 +41,59 @@ func TestStatusOutputModes(t *testing.T) {
 		}
 	}
 }
+
+func TestStatusDisplaysWirelessOwnership(t *testing.T) {
+	stateRoot := t.TempDir()
+	store, err := persist.Open(stateRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SaveDesiredSnapshot("edge", []byte(wirelessLifecycleSnapshot("edge"))); err != nil {
+		t.Fatal(err)
+	}
+	group, err := store.AllocateWirelessGroup("edge")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ReplaceWirelessRadios("edge", []persist.WirelessRadio{{
+		Deployment: "edge", Service: "gateway", LogicalName: "ap", ManagerName: "vcpe-edge-ap",
+		Device: "wlan0", Mode: "ap", GroupBit: group.Bit, Status: "ready",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	originalInspector := newWirelessReadinessInspector
+	newWirelessReadinessInspector = func() wirelessReadinessInspector { return readinessInspectorStub{ready: true} }
+	t.Cleanup(func() { newWirelessReadinessInspector = originalInspector })
+	human, err := runStatus(Options{Name: "edge", StateRoot: stateRoot})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"wireless group: bit=0 mask=1", "radio gateway/1/ap: ready", "manager=vcpe-edge-ap", "device=wlan0", "medium=rf24 band=2.4ghz channel=1 width=20MHz", "slot=0 interface=wlan0", "bridge=brlan0 state=ready"} {
+		if !strings.Contains(human.Message, want) {
+			t.Fatalf("status missing %q:\n%s", want, human.Message)
+		}
+	}
+	jsonStatus, err := runStatus(Options{Name: "edge", StateRoot: stateRoot, OutputJSON: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"wireless"`, `"managerName": "vcpe-edge-ap"`, `"status": "ready"`, `"medium": "rf24"`, `"vaps"`, `"bssid"`, `"state": "ready"`} {
+		if !strings.Contains(jsonStatus.Message, want) {
+			t.Fatalf("JSON status missing %q:\n%s", want, jsonStatus.Message)
+		}
+	}
+	newWirelessReadinessInspector = func() wirelessReadinessInspector {
+		return readinessInspectorStub{vapError: errors.New("container unavailable")}
+	}
+	unknown, err := runStatus(Options{Name: "edge", StateRoot: stateRoot, OutputJSON: true})
+	if err != nil || !strings.Contains(unknown.Message, `"state": "unknown"`) {
+		t.Fatalf("unavailable VAP status = %v, %v", unknown.Message, err)
+	}
+}
+
 func TestDiagnoseTelemetryActiveCallbackFailsBeforeHTTP(t *testing.T) {
 	stateRoot := t.TempDir()
 	store, err := persist.Open(stateRoot)
@@ -636,6 +690,7 @@ func TestConfigShow(t *testing.T) {
 
 func TestStateResetReinitializes(t *testing.T) {
 	stateRoot := t.TempDir()
+	stubWirelessManagerFactory(t, wirelessManagerStub{})
 
 	// Seed a lease, then reset, then confirm it is cleared.
 	ps, err := persist.Open(stateRoot)
@@ -709,7 +764,6 @@ func TestDownNoNameMultipleDeployments(t *testing.T) {
 }
 
 func TestPreflightRejectsUnsupportedType(t *testing.T) {
-	stateRoot := t.TempDir()
 	dir := t.TempDir()
 	path := dir + "/m.yaml"
 	content := "apiVersion: vcpe.dev/v1\n" +
@@ -729,9 +783,24 @@ func TestPreflightRejectsUnsupportedType(t *testing.T) {
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("write manifest: %v", err)
 	}
-	_, err := executeLocal(Options{Command: "plan", ManifestPath: path, StateRoot: stateRoot})
-	if err == nil || !strings.Contains(err.Error(), "unsupported type") {
-		t.Fatalf("expected unsupported type error, got %v", err)
+	for _, serviceType := range []string{"not-a-real-type", "routerd"} {
+		for _, command := range []string{"plan", "apply"} {
+			t.Run(serviceType+"/"+command, func(t *testing.T) {
+				stateRoot := t.TempDir()
+				manifest := strings.Replace(content, "not-a-real-type", serviceType, 1)
+				if err := os.WriteFile(path, []byte(manifest), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				_, err := executeLocal(Options{Command: command, ManifestPath: path, StateRoot: stateRoot})
+				if err == nil || !strings.Contains(err.Error(), "unsupported type") || !strings.Contains(err.Error(), serviceType) {
+					t.Fatalf("expected unsupported %s type error, got %v", serviceType, err)
+				}
+				entries, err := os.ReadDir(stateRoot)
+				if err != nil || len(entries) != 0 {
+					t.Fatalf("preflight mutated state: entries=%v error=%v", entries, err)
+				}
+			})
+		}
 	}
 }
 
@@ -770,6 +839,141 @@ func TestClassifyDisruptiveCIDRChange(t *testing.T) {
 	}
 	if len(reasons) == 0 || !strings.Contains(strings.Join(reasons, "\n"), "CIDR changes") {
 		t.Fatalf("expected CIDR change reason, got %v", reasons)
+	}
+}
+
+func TestClassifyDisruptiveRadioContractChanges(t *testing.T) {
+	previous := `apiVersion: vcpe.dev/v1
+kind: Deployment
+metadata: {name: edge}
+spec:
+  wirelessNetworks: [{name: home, ssid: vcpe-lab, channel: 1, security: open}]
+  services:
+    - name: station
+      replicas: 1
+      radios: [{name: home, network: home, device: wlan0, mode: station}]
+`
+	tests := []struct {
+		name  string
+		radio *manifest.Radio
+		want  string
+	}{
+		{name: "removed identity", radio: nil, want: "identity is removed"},
+		{name: "changed medium", radio: &manifest.Radio{Name: "home", Network: "guest", Device: "wlan0", Mode: manifest.RadioModeStation}, want: "wireless network changes"},
+		{name: "changed device", radio: &manifest.Radio{Name: "home", Network: "home", Device: "wlan1", Mode: manifest.RadioModeStation}, want: "device changes"},
+		{name: "changed mode", radio: &manifest.Radio{Name: "home", Network: "home", Device: "wlan0", Mode: manifest.RadioModeAP}, want: "mode changes"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ps, err := persist.Open(t.TempDir())
+			if err != nil {
+				t.Fatalf("open persist: %v", err)
+			}
+			defer ps.Close()
+			if err := ps.SaveDesiredSnapshot("edge", []byte(previous)); err != nil {
+				t.Fatalf("save desired snapshot: %v", err)
+			}
+			doc := manifest.Document{Metadata: manifest.Metadata{Name: "edge"}, Spec: manifest.Spec{Services: []manifest.Service{{Name: "station", Replicas: 1}}}}
+			if tt.radio != nil {
+				doc.Spec.Services[0].Radios = []manifest.Radio{*tt.radio}
+			}
+			disruptive, reasons, err := classifyDisruptive(ps, doc)
+			if err != nil {
+				t.Fatalf("classify: %v", err)
+			}
+			if !disruptive || !strings.Contains(strings.Join(reasons, "\n"), tt.want) {
+				t.Fatalf("disruptive=%t reasons=%v, want %q", disruptive, reasons, tt.want)
+			}
+		})
+	}
+}
+
+func TestDisruptiveMediaAndVAPPolicyChanges(t *testing.T) {
+	base := func() manifest.Document {
+		return manifest.Document{
+			Spec: manifest.Spec{
+				WirelessMedia: []manifest.WirelessMedium{{Name: "rf5", Band: "5ghz", Channel: 36, WidthMHz: 20}},
+				WirelessNetworks: []manifest.WirelessNetwork{
+					{Name: "home", SSID: "Home", Security: manifest.WirelessWPA3Personal},
+					{Name: "guest", SSID: "Guest", Security: manifest.WirelessOpen},
+				},
+				Services: []manifest.Service{
+					{Name: "gateway", Radios: []manifest.Radio{{
+						Name: "ap5", Mode: manifest.RadioModeAP, Medium: "rf5", Device: "wlan0",
+						VAPs: []manifest.VAP{{Slot: 0, Network: "home", Bridge: "brlan"}},
+					}}},
+					{Name: "client", Radios: []manifest.Radio{{
+						Name: "sta5", Mode: manifest.RadioModeStation, Medium: "rf5", Network: "home", Device: "wlan0",
+					}}},
+				},
+			},
+		}
+	}
+	for _, test := range []struct {
+		name string
+		edit func(*manifest.Document)
+		want string
+	}{
+		{"station profile", func(doc *manifest.Document) { doc.Spec.Services[1].Radios[0].Network = "guest" }, ""},
+		{"VAP profile and bridge", func(doc *manifest.Document) {
+			doc.Spec.Services[0].Radios[0].VAPs[0].Network, doc.Spec.Services[0].Radios[0].VAPs[0].Bridge = "guest", "brguest"
+		}, ""},
+		{"VAP count", func(doc *manifest.Document) {
+			doc.Spec.Services[0].Radios[0].VAPs = append(doc.Spec.Services[0].Radios[0].VAPs, manifest.VAP{Slot: 7, Network: "guest", Bridge: "brguest"})
+		}, ""},
+		{"security policy", func(doc *manifest.Document) { doc.Spec.WirelessNetworks[0].Security = manifest.WirelessWPA2Personal }, ""},
+		{"RF channel", func(doc *manifest.Document) { doc.Spec.WirelessMedia[0].Channel = 40 }, "RF policy changes"},
+		{"radio medium", func(doc *manifest.Document) {
+			doc.Spec.WirelessMedia = append(doc.Spec.WirelessMedia, manifest.WirelessMedium{Name: "other", Band: "5ghz", Channel: 40, WidthMHz: 20})
+			doc.Spec.Services[0].Radios[0].Medium = "other"
+		}, "medium changes"},
+		{"primary device", func(doc *manifest.Document) { doc.Spec.Services[0].Radios[0].Device = "wlan1" }, "device changes"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			desired := base()
+			test.edit(&desired)
+			reasons := disruptiveRadioChanges(base(), desired)
+			if test.want == "" && len(reasons) != 0 {
+				t.Fatalf("mutable VAP/profile policy requires approval: %v", reasons)
+			}
+			if test.want != "" && !strings.Contains(strings.Join(reasons, "\n"), test.want) {
+				t.Fatalf("missing %q approval reason: %v", test.want, reasons)
+			}
+		})
+	}
+}
+
+func TestDisruptiveMeshAndRoamingContractChanges(t *testing.T) {
+	previous := manifest.Document{Spec: manifest.Spec{Services: []manifest.Service{
+		{Name: "gateway", Radios: []manifest.Radio{{Name: "backhaul", Mode: manifest.RadioModeMesh, Medium: "rf5", Mesh: &manifest.Mesh{ID: "mesh-home", Bridge: "brlan", SAESecretRef: "mesh-key"}}}},
+		{Name: "client", Radios: []manifest.Radio{{Name: "station", Mode: manifest.RadioModeStation, Network: "home", Roaming: &manifest.Roaming{Media: []string{"rf5", "rf24"}}}}},
+	}}}
+	for _, test := range []struct {
+		name string
+		edit func(*manifest.Document)
+		want string
+	}{
+		{"mesh identity", func(doc *manifest.Document) { doc.Spec.Services[0].Radios[0].Mesh.ID = "other" }, "mesh contract changes"},
+		{"mesh bridge", func(doc *manifest.Document) { doc.Spec.Services[0].Radios[0].Mesh.Bridge = "other" }, "mesh contract changes"},
+		{"mesh secret", func(doc *manifest.Document) { doc.Spec.Services[0].Radios[0].Mesh.SAESecretRef = "other" }, "mesh contract changes"},
+		{"roaming candidates", func(doc *manifest.Document) { doc.Spec.Services[1].Radios[0].Roaming.Media = []string{"rf5"} }, "roaming media changes"},
+		{"roaming to fixed", func(doc *manifest.Document) { doc.Spec.Services[1].Radios[0].Roaming = nil }, "roaming media changes"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			encoded, err := json.Marshal(previous)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var desired manifest.Document
+			if err := json.Unmarshal(encoded, &desired); err != nil {
+				t.Fatal(err)
+			}
+			test.edit(&desired)
+			reasons := disruptiveRadioChanges(previous, desired)
+			if !strings.Contains(strings.Join(reasons, "\n"), test.want) {
+				t.Fatalf("reasons = %v, want %q", reasons, test.want)
+			}
+		})
 	}
 }
 

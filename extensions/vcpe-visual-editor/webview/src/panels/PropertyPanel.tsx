@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import type { ManifestModel, Network, Service } from '../yaml/parse';
+import { validateWireless, type ManifestModel, type Network, type Service } from '../yaml/parse';
 import { applyMutation } from '../yaml/serialize';
 
 interface Props {
@@ -38,6 +38,9 @@ export function PropertyPanel({ model, selectedNodeId, onMutation, rawYaml }: Pr
           ? selectedNodeId.startsWith('network:') ? '◼ Network' : '◻ Service'
           : 'Deployment Settings'}
       </div>
+      {validateWireless(model) && <div role="alert" style={{ padding: 8, color: '#e6a878', fontSize: 11 }}>
+        {validateWireless(model)}
+      </div>}
       <div style={styles.body}>{content}</div>
     </div>
   );
@@ -90,6 +93,9 @@ function NetworkForm({ model, network, onMutation, rawYaml }: { model: ManifestM
 
 function ServiceForm({ model, service, onMutation, rawYaml }: { model: ManifestModel; service: Service; onMutation: Props['onMutation']; rawYaml: string }) {
   const idx = model.spec.services.findIndex(s => s.name === service.name);
+  const [newRadioName, setNewRadioName] = useState('');
+  const [newRadioMode, setNewRadioMode] = useState('ap');
+  const [newRadioMedium, setNewRadioMedium] = useState('');
 
   const commit = (path: (string | number)[], value: unknown) => {
     const { newYaml, description } = applyMutation(rawYaml, { kind: 'setScalar', path, value });
@@ -217,6 +223,62 @@ function ServiceForm({ model, service, onMutation, rawYaml }: { model: ManifestM
         <div style={{ fontSize: 10, color: '#666', marginTop: 2 }}>Saved on blur</div>
       </>}
       <BridgesSection service={service} serviceIndex={idx} onMutation={onMutation} rawYaml={rawYaml} />
+      {(service.radios?.length ?? 0) > 0 && <>
+        <Divider label="Wireless radios" />
+        {service.radios!.map((radio, radioIndex) => {
+          const path = ['spec', 'services', idx, 'radios', radioIndex];
+          return <div key={radio.name} style={{ marginBottom: 12 }}>
+            <Field label="Radio" value={radio.name} readOnly />
+            <Field label="Device" value={radio.device} onCommit={value => commit([...path, 'device'], value)} />
+            <SelectField label="Medium" value={radio.medium} options={model.spec.wirelessMedia?.map(medium => medium.name) ?? []}
+              onChange={value => commit([...path, 'medium'], value)} />
+            {radio.mode === 'station' ? <>
+              <SelectField label="Profile" value={radio.network ?? ''} options={model.spec.wirelessNetworks?.map(profile => profile.name) ?? []}
+                onChange={value => commit([...path, 'network'], value)} />
+            </> : radio.vaps?.map((vap, vapIndex) => {
+              const vapPath = [...path, 'vaps', vapIndex];
+              return <div key={vap.slot} style={{ paddingLeft: 8, borderLeft: '2px solid #444', marginTop: 8 }}>
+                <Field label="Slot" value={String(vap.slot)} readOnly />
+                <SelectField label="Profile" value={vap.network} options={model.spec.wirelessNetworks?.map(profile => profile.name) ?? []}
+                  onChange={value => commit([...vapPath, 'network'], value)} />
+                <SelectField label="Bridge" value={vap.bridge} options={service.bridges?.map(bridge => bridge.name) ?? []}
+                  onChange={value => commit([...vapPath, 'bridge'], value)} />
+              </div>;
+            })}
+            {radio.mode === 'ap' && (radio.vaps?.length ?? 0) < 8 && (() => {
+              const available = model.spec.wirelessNetworks?.find(profile => !radio.vaps?.some(vap => vap.network === profile.name));
+              const slot = Array.from({length: 8}, (_, value) => value).find(value => !radio.vaps?.some(vap => vap.slot === value));
+              const bridge = service.bridges?.[0]?.name;
+              if (!available || slot === undefined || !bridge) return null;
+              return <button onClick={() => {
+                const { newYaml, description } = applyMutation(rawYaml, {kind: 'appendWireless', path: [...path, 'vaps'],
+                  value: {slot, network: available.name, bridge}});
+                onMutation(description, newYaml);
+              }}>+ VAP slot {slot}</button>;
+            })()}
+          </div>;
+        })}
+      </>}
+      {(model.spec.wirelessMedia?.length ?? 0) > 0 && <>
+        <Divider label="Add wireless radio" />
+        <input aria-label="Radio name" placeholder="Radio name" value={newRadioName}
+          onChange={event => setNewRadioName(event.target.value)} style={styles.addInput} />
+        <SelectField label="Mode" value={newRadioMode} options={['ap', 'station']} onChange={setNewRadioMode} />
+        <SelectField label="Medium" value={newRadioMedium || model.spec.wirelessMedia![0].name}
+          options={model.spec.wirelessMedia!.map(medium => medium.name)} onChange={setNewRadioMedium} />
+        <button disabled={!newRadioName.trim() || service.radios?.some(radio => radio.name === newRadioName.trim()) ||
+          !(model.spec.wirelessNetworks?.length) || (newRadioMode === 'ap' && !service.bridges?.length)}
+          onClick={() => {
+            const profile = model.spec.wirelessNetworks![0].name;
+            const value = {name: newRadioName.trim(), mode: newRadioMode, medium: newRadioMedium || model.spec.wirelessMedia![0].name,
+              device: `wlan${service.radios?.length ?? 0}`,
+              ...(newRadioMode === 'ap' ? {vaps: [{slot: 0, network: profile, bridge: service.bridges![0].name}]} : {network: profile, addressing: 'dhcp'}),
+            };
+            const { newYaml, description } = applyMutation(rawYaml, {kind: 'appendWireless', path: ['spec', 'services', idx, 'radios'], value});
+            onMutation(description, newYaml);
+            setNewRadioName('');
+          }}>+ Radio</button>
+      </>}
     </div>
   );
 }
@@ -291,9 +353,19 @@ function BridgesSection({ service, serviceIndex, onMutation, rawYaml }: {
 // ─── DeploymentSettingsDrawer ────────────────────────────────────────────────
 
 function DeploymentSettingsDrawer({ model, onMutation, rawYaml }: { model: ManifestModel; onMutation?: Props['onMutation']; rawYaml?: string }) {
+  const [mediumName, setMediumName] = useState('');
+  const [mediumBand, setMediumBand] = useState('2.4ghz');
+  const [profileName, setProfileName] = useState('');
+  const [profileSSID, setProfileSSID] = useState('');
   const commit = (path: (string | number)[], value: unknown) => {
     if (!onMutation || !rawYaml) return;
     const { newYaml, description } = applyMutation(rawYaml, { kind: 'setScalar', path, value });
+    onMutation(description, newYaml);
+  };
+
+  const append = (path: (string | number)[], value: Parameters<typeof applyMutation>[1] & {kind: 'appendWireless'}) => {
+    if (!onMutation || !rawYaml) return;
+    const { newYaml, description } = applyMutation(rawYaml, {...value, path});
     onMutation(description, newYaml);
   };
 
@@ -318,6 +390,51 @@ function DeploymentSettingsDrawer({ model, onMutation, rawYaml }: { model: Manif
       {onMutation && rawYaml && (
         <NetworksSection model={model} onMutation={onMutation} rawYaml={rawYaml} />
       )}
+      {(model.spec.wirelessMedia?.length ?? 0) > 0 && <>
+        <Divider label="Wireless media" />
+        {model.spec.wirelessMedia!.map((medium, index) => <div key={medium.name} style={{ marginBottom: 8 }}>
+          <Field label="Name" value={medium.name} readOnly />
+          <SelectField label="Band" value={medium.band} options={['2.4ghz', '5ghz', '6ghz']}
+            onChange={value => commit(['spec', 'wirelessMedia', index, 'band'], value)} />
+          <Field label="Channel" value={String(medium.channel)} type="number"
+            onCommit={value => commit(['spec', 'wirelessMedia', index, 'channel'], Number(value))} />
+          <Field label="Width MHz" value={String(medium.widthMHz)} readOnly />
+        </div>)}
+      </>}
+      <Divider label="Add wireless medium" />
+      <input aria-label="Medium name" placeholder="Medium name" value={mediumName} onChange={event => setMediumName(event.target.value)} style={styles.addInput} />
+      <SelectField label="Band" value={mediumBand} options={['2.4ghz', '5ghz', '6ghz']} onChange={setMediumBand} />
+      <button disabled={!mediumName.trim() || model.spec.wirelessMedia?.some(medium => medium.name === mediumName.trim())}
+        onClick={() => {
+          append(['spec', 'wirelessMedia'], {kind: 'appendWireless', path: [], value: {
+            name: mediumName.trim(), band: mediumBand, channel: mediumBand === '2.4ghz' ? 1 : mediumBand === '5ghz' ? 36 : 5, widthMHz: 20,
+          }});
+          setMediumName('');
+        }}>+ Medium</button>
+      {(model.spec.wirelessNetworks?.length ?? 0) > 0 && <>
+        <Divider label="Wireless profiles" />
+        {model.spec.wirelessNetworks!.map((profile, index) => <div key={profile.name} style={{ marginBottom: 8 }}>
+          <Field label="Name" value={profile.name} readOnly />
+          <Field label="SSID" value={profile.ssid}
+            onCommit={value => commit(['spec', 'wirelessNetworks', index, 'ssid'], value)} />
+          <SelectField label="Security" value={profile.security} options={['open', 'wpa2-personal', 'wpa3-personal']}
+            onChange={value => commit(['spec', 'wirelessNetworks', index, 'security'], value)} />
+          <SelectField label="Secret ref" value={profile.passphraseSecretRef ?? ''}
+            options={['', ...(model.spec.secrets?.map(secret => secret.name) ?? [])]}
+            onChange={value => commit(['spec', 'wirelessNetworks', index, 'passphraseSecretRef'], value || null)} />
+        </div>)}
+      </>}
+      <Divider label="Add wireless profile" />
+      <input aria-label="Profile name" placeholder="Profile name" value={profileName} onChange={event => setProfileName(event.target.value)} style={styles.addInput} />
+      <input aria-label="SSID" placeholder="SSID" value={profileSSID} onChange={event => setProfileSSID(event.target.value)} style={styles.addInput} />
+      <button disabled={!profileName.trim() || !profileSSID.trim() || model.spec.wirelessNetworks?.some(profile => profile.name === profileName.trim())}
+        onClick={() => {
+          append(['spec', 'wirelessNetworks'], {kind: 'appendWireless', path: [], value: {
+            name: profileName.trim(), ssid: profileSSID.trim(), security: 'open',
+          }});
+          setProfileName('');
+          setProfileSSID('');
+        }}>+ Profile</button>
       {(model.spec.secrets?.length ?? 0) > 0 && <>
         <Divider label="Secrets" />
         {model.spec.secrets!.map(s => (
@@ -485,6 +602,18 @@ function Field({
   );
 }
 
+function SelectField({ label, value, options, onChange }: {
+  label: string; value: string; options: string[]; onChange: (value: string) => void;
+}) {
+  return <label style={{ display: 'block', marginBottom: 6, fontSize: 10, color: '#888' }}>
+    {label}
+    <select value={value} onChange={event => onChange(event.target.value)}
+      style={{ display: 'block', width: '100%', padding: '3px 6px', background: '#1e1e1e', color: '#ddd', border: '1px solid #555', borderRadius: 3, fontSize: 12 }}>
+      {options.map(option => <option key={option} value={option}>{option || 'None'}</option>)}
+    </select>
+  </label>;
+}
+
 function CheckField({ label, checked, onChange }: { label: string; checked: boolean; onChange?: (v: boolean) => void }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
@@ -509,6 +638,7 @@ function Divider({ label }: { label: string }) {
 }
 
 const styles: Record<string, React.CSSProperties> = {
+  addInput: { width: '100%', marginBottom: 6, padding: '3px 6px', background: '#1e1e1e', color: '#ddd', border: '1px solid #555', borderRadius: 3, fontSize: 12 },
   container: { width: 220, borderLeft: '1px solid #333', background: 'var(--vscode-sideBar-background, #252526)', display: 'flex', flexDirection: 'column', overflowY: 'auto' },
   header: { fontWeight: 700, fontSize: 11, color: '#888', textTransform: 'uppercase', padding: '8px 12px 4px', letterSpacing: 0.5, borderBottom: '1px solid #333' },
   body: { padding: 12, overflowY: 'auto', flex: 1 },

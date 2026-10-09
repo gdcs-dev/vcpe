@@ -1,0 +1,23 @@
+[Unit]
+Description=RDK webconfig otelagent subdoc bridge
+Documentation=file:///usr/local/share/doc/otelagent-webconfig-bridge/README.md
+After=rbus.service webconfig.service
+Wants=rbus.service
+ConditionPathExists=/etc/rdk-otel/enabled
+
+[Service]
+Type=simple
+User=root
+Group=root
+UMask=0077
+ExecStart=/usr/local/bin/otelagent-webconfig-bridge
+KillSignal=SIGTERM
+TimeoutStopSec=30
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/opt/otelagent-webconfig-bridge /etc/rdk-otel /tmp
+
+[Install]
+WantedBy=multi-user.target

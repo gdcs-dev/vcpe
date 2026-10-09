@@ -14,6 +14,17 @@ func TestServiceNameFromContext(t *testing.T) {
 	}
 }
 
+func TestRuntimeInitServicesExcludeRemovedType(t *testing.T) {
+	if runtimeInitServices["routerd"] {
+		t.Fatal("removed routerd service remains in the image-staging list")
+	}
+	for _, service := range []string{"bng", "event-sink", "gateway", "oktopus", "webconfig", "webpa", "xb10", "client"} {
+		if !runtimeInitServices[service] {
+			t.Errorf("missing runtime-init staging for %q", service)
+		}
+	}
+}
+
 func TestParsePlatform(t *testing.T) {
 	goos, goarch, err := ParsePlatform("linux/arm64")
 	if err != nil {

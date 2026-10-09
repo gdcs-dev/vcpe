@@ -1,12 +1,16 @@
 package app
 
 import (
+	"context"
+	"encoding/hex"
 	"fmt"
 	"sort"
 	"strings"
 
+	"github.com/gdcs-dev/vcpe/controlplane/internal/imageref"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/manifest"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/typeregistry"
+	"github.com/gdcs-dev/vcpe/controlplane/internal/types/gateway"
 )
 
 // Preflight performs all pre-mutation validation: the structural manifest rules
@@ -38,6 +42,11 @@ func Preflight(doc manifest.Document) error {
 		if err := st.ValidateConfig(svc.Config); err != nil {
 			return fmt.Errorf("service %q config: %w", svc.Name, err)
 		}
+		if svc.Type == "gateway" {
+			if err := gateway.ValidateMeshLAN(svc); err != nil {
+				return fmt.Errorf("service %q config: %w", svc.Name, err)
+			}
+		}
 
 		ifaceRoles := map[string]struct{}{}
 		for _, iface := range svc.Interfaces {
@@ -56,6 +65,48 @@ func Preflight(doc manifest.Document) error {
 		// Warnings are non-fatal; surface them on stderr via the observability
 		// log so operators see them without failing the apply.
 		_ = w
+	}
+	return nil
+}
+
+func requirePinnedMeshGatewayImages(doc manifest.Document) error {
+	for _, svc := range doc.Spec.Services {
+		for _, radio := range svc.Radios {
+			if radio.Mode != manifest.RadioModeMesh {
+				continue
+			}
+			if doc.Metadata.Labels["environment"] == "development" && svc.Type == "gateway" &&
+				svc.Image.Repository == "ghcr.io/gdcs-dev/gateway" && svc.Image.Tag == "dev" &&
+				svc.Image.PullPolicy == "build-if-missing" && svc.Image.BuildContext == "services/gateway" {
+				break
+			}
+			const prefix = "ghcr.io/gdcs-dev/gateway@sha256:"
+			digest := strings.TrimPrefix(svc.Image.Repository, prefix)
+			decoded, err := hex.DecodeString(digest)
+			if !strings.HasPrefix(svc.Image.Repository, prefix) || err != nil || len(decoded) != 32 || strings.ToLower(digest) != digest || svc.Image.Tag != "" || svc.Image.BuildContext != "" {
+				return fmt.Errorf("mesh Gateway %q requires an immutable ghcr.io/gdcs-dev/gateway@sha256 digest without a tag or build context", svc.Name)
+			}
+			break
+		}
+	}
+	return nil
+}
+
+type meshGatewayImageVerifier interface {
+	VerifyMeshGatewayImage(context.Context, string) error
+}
+
+func verifyMeshGatewayImages(ctx context.Context, doc manifest.Document, verifier meshGatewayImageVerifier) error {
+	for _, svc := range doc.Spec.Services {
+		for _, radio := range svc.Radios {
+			if radio.Mode != manifest.RadioModeMesh {
+				continue
+			}
+			if err := verifier.VerifyMeshGatewayImage(ctx, imageref.Format(svc.Image)); err != nil {
+				return fmt.Errorf("mesh Gateway %q image verification: %w", svc.Name, err)
+			}
+			break
+		}
 	}
 	return nil
 }

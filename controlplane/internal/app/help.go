@@ -39,7 +39,7 @@ var commandHelp = map[string]CommandHelp{
 	},
 	"up": {
 		Synopsis:    "Bring up a deployment from a manifest",
-		Description: "Reconciles networks, images, IPAM allocation, and compose lifecycle in a single journaled operation. Alias: apply",
+		Description: "Reconciles networks, images, IPAM allocation, and compose lifecycle in a single journaled operation. Wireless personal credentials are resolved from manifest env/file secret references; never pass credential values as command arguments. Alias: apply",
 		RequiredFlags: []FlagHelp{
 			{Name: "--manifest", Arg: "<path>", Description: "Path to deployment manifest YAML"},
 		},
@@ -68,9 +68,20 @@ var commandHelp = map[string]CommandHelp{
 			"vcpe plan --manifest ./manifest-bng-7.yaml",
 		},
 	},
+	"scenario": {
+		Synopsis:    "Run a declared wireless RF scenario",
+		Description: "Runs a controlled automatic-roam experiment from an active deployment snapshot; out-of-band station control invalidates the result.",
+		Positionals: []string{"run"},
+		RequiredFlags: []FlagHelp{
+			{Name: "--name", Arg: "<deployment>", Description: "Active deployment identity"},
+			{Name: "--scenario", Arg: "<name>", Description: "Declared wireless scenario"},
+		},
+		OptionalFlags: []FlagHelp{{Name: "--state-root", Arg: "<path>", Description: "Override the state root"}},
+		Examples:      []string{"vcpe scenario run --name mesh-roaming --scenario crossover"},
+	},
 	"down": {
 		Synopsis:    "Tear down a named deployment",
-		Description: "Stops compose services and releases all IPAM leases for the named deployment. Alias: destroy (destroy also requires --force).",
+		Description: "Stops compose services, removes their protected wireless credential files, and releases all IPAM leases for the named deployment. Credentials are removed only after consumers stop. Alias: destroy (destroy also requires --force).",
 		OptionalFlags: []FlagHelp{
 			{Name: "--name", Arg: "<deployment>", Description: "Name of the deployment to tear down (metadata.name from the manifest)"},
 			{Name: "--manifest", Arg: "<path>", Description: "Path to the manifest file; metadata.name is used as the deployment name"},
@@ -84,16 +95,17 @@ var commandHelp = map[string]CommandHelp{
 	},
 	"status": {
 		Synopsis:      "Show control-plane status",
-		Description:   "Reports reconcile metrics, active IPAM leases, and recent operation history. With --name, shows the desired state snapshot for that deployment; if exactly one deployment is active, it is used by default.",
+		Description:   "Reports reconcile metrics, active IPAM leases, wireless ownership, and recent operation history without displaying resolved credential values. With --name, shows the wireless group, per-radio medium, and planned VAP slot/interface/BSSID/bridge with observed readiness; if exactly one deployment is active, it is used by default.",
 		RequiredFlags: []FlagHelp{},
 		OptionalFlags: []FlagHelp{
 			{Name: "--name", Arg: "<deployment>", Description: "Filter output to a specific deployment"},
 			{Name: "--state-root", Arg: "<path>", Description: "Override the default state root directory"},
-			{Name: "--json", Description: "Emit structured JSON with metrics, timeline, desired, planned, observed, and runtimeInitDiagnostics keys"},
+			{Name: "--json", Description: "Emit structured JSON with metrics, timeline, desired, wireless (including nested radio/VAP topology), health, and runtimeInitDiagnostics keys"},
 		},
 		Examples: []string{
 			"vcpe status",
 			"vcpe status --name bng-7",
+			"vcpe status --name wireless --json",
 			"vcpe status --json",
 		},
 	},
@@ -156,7 +168,7 @@ var commandHelp = map[string]CommandHelp{
 	},
 	"state": {
 		Synopsis:      "Manage persisted control-plane state",
-		Description:   "Provides subcommands for inspecting or resetting the persisted state. Use `state reset` to clear all IPAM leases and deployment snapshots when recovering from schema migrations.",
+		Description:   "Provides subcommands for inspecting or resetting persisted state. `state reset` first garbage-collects every manager-owned wireless radio, then clears and re-stamps state; cleanup failure preserves state for recovery.",
 		Positionals:   []string{"<subcommand>"},
 		RequiredFlags: []FlagHelp{},
 		OptionalFlags: []FlagHelp{

@@ -1,7 +1,7 @@
 # AGENTS.md
 
 vCPE: local Podman dev/test harness for containerized broadband components (BNG,
-GATEWAY, WebPA, routerd, XB10, client). Operator entrypoint is the Go `vcpe` control
+GATEWAY, WebPA, XB10, client). Operator entrypoint is the Go `vcpe` control
 plane in `controlplane/`. It reconciles a desired-state manifest into Podman
 projects (declarative: manifest -> plan -> apply).
 

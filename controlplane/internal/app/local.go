@@ -1,9 +1,11 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"sort"
 	"strings"
 	"time"
@@ -13,6 +15,8 @@ import (
 	"github.com/gdcs-dev/vcpe/controlplane/internal/health"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/manifest"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/persist"
+	"github.com/gdcs-dev/vcpe/controlplane/internal/plan"
+	"github.com/gdcs-dev/vcpe/controlplane/internal/secrets"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/state"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/typeregistry"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/types"
@@ -40,6 +44,8 @@ func executeLocal(opts Options) (daemon.CommandResponse, error) {
 		return runApply(opts)
 	case "plan":
 		return runPlan(opts)
+	case "scenario":
+		return runScenario(opts)
 	case "down", "destroy":
 		return runDown(opts)
 	case "list":
@@ -240,6 +246,22 @@ func runStatus(opts Options) (daemon.CommandResponse, error) {
 	if err != nil {
 		return daemon.CommandResponse{}, err
 	}
+	var wirelessGroup *persist.WirelessGroup
+	wirelessRadios := []persist.WirelessRadio{}
+	if opts.Name != "" {
+		group, exists, err := ps.WirelessGroup(opts.Name)
+		if err != nil {
+			return daemon.CommandResponse{}, err
+		}
+		if exists {
+			wirelessGroup = &group
+		}
+		wirelessRadios, err = ps.ListWirelessRadios(opts.Name)
+		if err != nil {
+			return daemon.CommandResponse{}, err
+		}
+	}
+	wirelessTopology := wirelessStatusTopology(ps, opts.Name, wirelessRadios)
 
 	if opts.OutputJSON {
 		payload := map[string]any{
@@ -249,6 +271,7 @@ func runStatus(opts Options) (daemon.CommandResponse, error) {
 			"planned":  map[string]any{"deployment": opts.Name},
 			"observed": map[string]any{"runningOperations": metrics.RunningOperations},
 			"health":   healthObservations,
+			"wireless": map[string]any{"group": wirelessGroup, "radios": wirelessRadios, "topology": wirelessTopology},
 			"runtimeInitDiagnostics": map[string]any{
 				"contractsRoot": state.VersionedArtifactsRoot(opts.StateRoot),
 			},
@@ -271,11 +294,135 @@ func runStatus(opts Options) (daemon.CommandResponse, error) {
 			}
 			b.WriteByte('\n')
 		}
+		if wirelessGroup != nil {
+			fmt.Fprintf(&b, "wireless group: bit=%d mask=%d\n", wirelessGroup.Bit, wirelessGroup.Mask())
+		}
+		for _, radio := range wirelessRadios {
+			fmt.Fprintf(&b, "radio %s/%d/%s: %s manager=%s device=%s\n",
+				radio.Service, radio.Replica+1, radio.LogicalName, radio.Status, radio.ManagerName, radio.Device)
+		}
+		for _, radio := range wirelessTopology {
+			fmt.Fprintf(&b, "  %s/%d/%s medium=%s band=%s channel=%d width=%dMHz\n", radio.Service, radio.Replica+1, radio.Name, radio.Medium, radio.Band, radio.Channel, radio.WidthMHz)
+			for _, vap := range radio.VAPs {
+				fmt.Fprintf(&b, "    slot=%d interface=%s bssid=%s bridge=%s state=%s\n", vap.Slot, vap.Interface, vap.BSSID, vap.Bridge, vap.State)
+			}
+		}
 	}
 	fmt.Fprintf(&b, "reconcile total: %d (failures: %d)\n", metrics.ReconcileTotal, metrics.ReconcileFailures)
 	fmt.Fprintf(&b, "ipam leases in use: %d\n", metrics.IPAMLeasesInUse)
+	fmt.Fprintf(&b, "wireless groups in use: %d\n", metrics.WirelessGroups)
+	fmt.Fprintf(&b, "wireless radios desired: %d\n", metrics.WirelessRadios)
 	fmt.Fprintf(&b, "running operations: %d\n", metrics.RunningOperations)
 	return daemon.CommandResponse{Message: strings.TrimRight(b.String(), "\n")}, nil
+}
+
+type statusVAP struct {
+	Slot      int    `json:"slot"`
+	Interface string `json:"interface"`
+	BSSID     string `json:"bssid"`
+	Bridge    string `json:"bridge"`
+	State     string `json:"state"`
+}
+
+type statusRadio struct {
+	Service  string      `json:"service"`
+	Replica  int         `json:"replica"`
+	Name     string      `json:"name"`
+	Medium   string      `json:"medium"`
+	Band     string      `json:"band"`
+	Channel  int         `json:"channel"`
+	WidthMHz int         `json:"widthMHz"`
+	VAPs     []statusVAP `json:"vaps"`
+}
+
+func wirelessStatusTopology(store *persist.Store, deployment string, owned []persist.WirelessRadio) []statusRadio {
+	topology := []statusRadio{}
+	if deployment == "" || len(owned) == 0 {
+		return topology
+	}
+	snapshot, exists, err := store.LatestDesiredSnapshot(deployment)
+	if err != nil || !exists {
+		return topology
+	}
+	doc, err := manifest.Parse(snapshot)
+	if err != nil {
+		return topology
+	}
+	media := map[string]manifest.WirelessMedium{}
+	for _, medium := range doc.Spec.WirelessMedia {
+		media[medium.Name] = medium
+	}
+	inspector := newWirelessReadinessInspector()
+	type probeResult struct {
+		data []byte
+		err  error
+	}
+	probes := map[string]probeResult{}
+	for _, owner := range owned {
+		for _, service := range doc.Spec.Services {
+			if service.Name != owner.Service {
+				continue
+			}
+			for _, radio := range service.Radios {
+				if radio.Name != owner.LogicalName {
+					continue
+				}
+				medium := media[radio.Medium]
+				entry := statusRadio{Service: owner.Service, Replica: owner.Replica, Name: radio.Name, Medium: radio.Medium, Band: medium.Band, Channel: medium.Channel, WidthMHz: medium.WidthMHz, VAPs: []statusVAP{}}
+				if radio.Mode != manifest.RadioModeAP {
+					topology = append(topology, entry)
+					continue
+				}
+				container := plan.ContainerName(deployment, owner.Service, owner.Replica)
+				probe, ok := probes[container]
+				if !ok {
+					probeCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+					probe.data, probe.err = inspector.ContainerVAPStatus(probeCtx, container)
+					cancel()
+					probes[container] = probe
+				}
+				observed := map[int]observedVAP{}
+				if probe.err == nil {
+					decoder := json.NewDecoder(bytes.NewReader(probe.data))
+					for {
+						var vap observedVAP
+						if err := decoder.Decode(&vap); err == io.EOF {
+							break
+						} else if err != nil {
+							observed = nil
+							break
+						}
+						if vap.Radio == radio.Name {
+							if _, duplicate := observed[vap.Slot]; duplicate {
+								observed = nil
+								break
+							}
+							observed[vap.Slot] = vap
+						}
+					}
+				}
+				for _, vap := range radio.VAPs {
+					device := plan.VAPDeviceName(deployment, owner.Service, owner.Replica, radio.Name, vap.Slot)
+					if vap.Slot == 0 {
+						device = radio.Device
+					}
+					view := statusVAP{Slot: vap.Slot, Interface: device, BSSID: plan.CanonicalVAPBSSID(deployment, owner.Service, owner.Replica, radio.Name, vap.Slot), Bridge: vap.Bridge, State: "unknown"}
+					if probe.err == nil && observed != nil {
+						view.State = "missing"
+						if actual, ok := observed[vap.Slot]; ok {
+							view.State = "mismatch"
+							if actual.Interface == view.Interface && actual.BSSID == view.BSSID && actual.Bridge == view.Bridge && actual.Enabled {
+								view.State = "ready"
+							}
+						}
+					}
+					entry.VAPs = append(entry.VAPs, view)
+				}
+				topology = append(topology, entry)
+			}
+		}
+	}
+	return topology
 }
 
 func desiredView(ps *persist.Store, name string) map[string]any {
@@ -355,11 +502,63 @@ func runState(opts Options) (daemon.CommandResponse, error) {
 	}
 	switch args[0] {
 	case "reset":
-		ps, err := persist.Open(opts.StateRoot)
+		lock, err := state.AcquireWriterLock(opts.StateRoot)
+		if err != nil {
+			return daemon.CommandResponse{}, err
+		}
+		defer lock.Release()
+
+		ps, err := persist.OpenForReset(opts.StateRoot)
 		if err != nil {
 			return daemon.CommandResponse{}, err
 		}
 		defer ps.Close()
+		ctx := context.Background()
+		deployments, err := ps.ListKnownDeployments()
+		if err != nil {
+			return daemon.CommandResponse{}, err
+		}
+		hasRF := false
+		for _, deployment := range deployments {
+			raw, exists, err := ps.LatestDesiredSnapshot(deployment)
+			if err != nil {
+				return daemon.CommandResponse{}, err
+			}
+			if !exists {
+				continue
+			}
+			var desired manifest.Document
+			if err := yaml.Unmarshal(raw, &desired); err != nil {
+				return daemon.CommandResponse{}, fmt.Errorf("decode RF state for reset %s: %w", deployment, err)
+			}
+			hasRF = hasRF || len(desired.Spec.WirelessScenarios) > 0
+		}
+		if !skipRuntime() {
+			for _, deployment := range deployments {
+				services, err := serviceNamesFromSnapshot(ps, deployment)
+				if err != nil {
+					return daemon.CommandResponse{}, err
+				}
+				if err := teardownComposeLifecycle(ctx, opts.StateRoot, deployment, services); err != nil {
+					return daemon.CommandResponse{}, fmt.Errorf("stop consumers before state reset: %w", err)
+				}
+			}
+		}
+		manager, err := newWirelessManager(ctx)
+		if err != nil {
+			return daemon.CommandResponse{}, fmt.Errorf("initialize wireless manager for state reset: %w", err)
+		}
+		if _, err := manager.GC(ctx, nil, true); err != nil {
+			return daemon.CommandResponse{}, fmt.Errorf("garbage collect wireless radios before state reset: %w", err)
+		}
+		if hasRF && !skipRuntime() {
+			if err := newRFBaselineInstaller().ClearBaseline(ctx); err != nil {
+				return daemon.CommandResponse{}, fmt.Errorf("clear host RF baseline before state reset: %w", err)
+			}
+		}
+		if err := secrets.RemoveAllCredentials(opts.StateRoot); err != nil {
+			return daemon.CommandResponse{}, err
+		}
 		if err := ps.Reset(); err != nil {
 			return daemon.CommandResponse{}, err
 		}

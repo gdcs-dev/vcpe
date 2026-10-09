@@ -1,5 +1,5 @@
 import { Document, isSeq, isMap, parseDocument, stringify } from 'yaml';
-import type { Network, Service, Interface, BridgeSpec } from './parse';
+import type { Network, Service, Interface, BridgeSpec, WirelessMedium, WirelessProfile, Radio, VAP } from './parse';
 
 // ─── Mutation types ───────────────────────────────────────────────────────────
 
@@ -14,7 +14,8 @@ export type Mutation =
   | { kind: 'insertBridge'; serviceIndex: number; bridge: BridgeSpec }
   | { kind: 'deleteBridge'; serviceIndex: number; bridgeIndex: number }
   | { kind: 'renameService'; oldName: string; newName: string }
-  | { kind: 'setConfig'; serviceIndex: number; configYaml: string };
+  | { kind: 'setConfig'; serviceIndex: number; configYaml: string }
+  | { kind: 'appendWireless'; path: (string | number)[]; value: WirelessMedium | WirelessProfile | Radio | VAP };
 
 // ─── ApplyResult ─────────────────────────────────────────────────────────────
 
@@ -63,6 +64,11 @@ export function applyMutation(yamlText: string, mutation: Mutation): ApplyResult
 
     case 'setConfig':
       return applySetConfig(doc, mutation.serviceIndex, mutation.configYaml);
+
+    case 'appendWireless':
+      if (!isSeq(doc.getIn(mutation.path))) doc.setIn(mutation.path, doc.createNode([]));
+      doc.addIn(mutation.path, doc.createNode(stripNulls(mutation.value)));
+      return { newYaml: String(doc), description: `add ${mutation.path.join('.')}` };
   }
 }
 

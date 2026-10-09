@@ -1,0 +1,14 @@
+[Unit]
+Description=vCPE Gateway wireless access points
+After=network.target
+ConditionPathExists=/etc/vcpe/gateway-network-ready
+ConditionPathExistsGlob=/etc/vcpe/hostapd/*.conf
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/vcpe-hostapd
+Restart=on-failure
+RestartSec=2s
+
+[Install]
+WantedBy=multi-user.target

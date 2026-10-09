@@ -128,38 +128,6 @@ apply_runtime_config() {
     /usr/local/libexec/network-startup.sh
     wait_for_ipv6_ready
 
-    # Before dnsmasq overwrites resolv.conf, resolve each peer hostname from
-    # dnsmasq.hosts via Podman's aardvark-dns (which knows each container's
-    # actual runtime IP). Write only the management-owned records; DHCP lease
-    # callbacks own dnsmasq.dhcp.hosts independently.
-    # Peers that depend on BNG (e.g. webpa) start after it, so their aardvark
-    # alias may not exist yet on the first attempt; retry briefly.
-    resolve_peer_ip() {
-        local hostname=$1
-        local attempt
-        for attempt in $(seq 1 10); do
-            local ip
-            ip=$(getent hosts "$hostname" 2>/dev/null | awk '{print $1}' | head -1 || true)
-            if [[ -n "$ip" ]]; then
-                printf '%s' "$ip"
-                return 0
-            fi
-            sleep 0.5
-        done
-        return 1
-    }
-    : > /etc/dnsmasq.management.hosts
-    while IFS= read -r line || [[ -n "$line" ]]; do
-        [[ -z "$line" || "$line" == '#'* ]] && continue
-        first_hostname=$(printf '%s' "$line" | awk '{print $2}')
-        [[ -z "$first_hostname" ]] && continue
-        actual_ip=$(resolve_peer_ip "$first_hostname" || true)
-        if [[ -n "$actual_ip" ]]; then
-            rest=$(printf '%s' "$line" | cut -d' ' -f2-)
-            printf '%s %s\n' "$actual_ip" "$rest" >> /etc/dnsmasq.management.hosts
-        fi
-    done < /etc/dnsmasq.hosts
-
     cat >/etc/resolv.conf <<'EOF'
 nameserver 127.0.0.1
 options timeout:1 attempts:2

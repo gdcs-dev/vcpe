@@ -1,7 +1,7 @@
 # Podman vCPE
 
 vCPE is a local development and testing environment for containerized broadband
-components (BNG, GATEWAY, routerd, WebPA, XB10, and client peers) on Podman.
+components (BNG, GATEWAY, WebPA, WebConfig, XB10, and client peers) on Podman.
 
 The only operator command is `vcpe` (the Go control plane). It reconciles a
 declarative desired-state manifest into Podman projects. Top-level scripts in
@@ -18,6 +18,21 @@ Health endpoint and status behavior is documented in [docs/health.md](docs/healt
 
 ## Build
 
+Initialize the telemetry-gateway source submodule after cloning:
+
+```bash
+git submodule update --init --recursive services/telemetry-gateway
+```
+
+Developers whose `~/.ssh/config` selects the required GitHub identity through
+the `github-gdcs` host alias can keep the canonical repository URL and add a
+workstation-local rewrite:
+
+```bash
+git config --local url."git@github-gdcs:".insteadOf "git@github.com:"
+git submodule sync -- services/telemetry-gateway
+```
+
 ```bash
 cd controlplane
 go build -o bin/vcpe ./cmd/vcpe
@@ -31,6 +46,36 @@ On macOS, initialize and start a Podman machine once:
 podman machine init
 podman machine start
 ```
+
+Wireless development requires the dynamic hwsim machine image:
+
+```bash
+podman machine init \
+	--image docker://ghcr.io/gdcs-dev/vcpe/machine-os:6.1
+podman machine set --rootful
+podman machine start
+```
+
+This image intentionally boots with no wireless PHYs. The vCPE control plane
+allocates and attaches declared radios through `/usr/libexec/vcpe/vcpe-hwsim`
+after their target containers start.
+
+Build and run the maintained tri-band, 24-VAP WPA3-Personal example with:
+
+```bash
+vcpe build --manifest manifests/dev/wireless.yaml
+vcpe up --manifest manifests/dev/wireless.yaml
+vcpe status --name wireless
+vcpe down --name wireless
+```
+
+The three stations use `services/wireless-client` through the existing
+`generic-container` type; `wireless-client` is an image, not a registered
+service type. The development passphrase must contain 8 through 63 printable
+ASCII characters. This development-only manifest carries a literal credential
+so it runs without environment setup; use an `env` or `file` provider for
+non-development deployments. Credentials are not written to ordinary generated
+artifacts.
 
 For host-network reconciliation on macOS, `vcpe` auto-detects and delegates Linux
 network commands to the Podman machine host. You can force delegation explicitly:
@@ -100,13 +145,27 @@ before apply.
 | `bng` | Broadband Network Gateway — DHCP, DNS, iptables NAT |
 | `gateway` | CPE simulator — WAN DHCP client, LAN bridge, NAT |
 | `webpa` | WebPA / WebConfig device-management server |
+| `webconfig` | Development-only WebConfig server for Gateway's bundled `webcfg` client |
 | `event-sink` | XMiDT webhook consumer; logs matching WRP events as structured JSON |
+| `telemetry-gateway` | Embedded local telemetry gateway, PostgreSQL, and observability stack |
 | `xb10` | XB10 CPE simulator |
 | `oktopus` | Oktopus USP controller |
 | `generic-container` | Arbitrary container with configurable command |
 
 New workloads are added by registering a new service type in the control plane,
 not by editing the planner or renderer.
+
+The embedded telemetry-gateway development topology is documented in
+[docs/telemetry-gateway.md](docs/telemetry-gateway.md).
+
+### WebConfig Development Service
+
+`webconfig` supplies Gateway's bundled `webcfg` client with MessagePack
+subdocuments from `http://webconfig:9000/api/v1/device/{mac}/config`. It uses
+ephemeral in-container SQLite state, seeds its development fixture on every
+start, and has authentication and external connectors disabled. It is only for
+isolated local development and testing; it MUST NOT be used as a production
+deployment pattern.
 
 ## Network Fields
 
@@ -117,9 +176,10 @@ IPs from the explicit `interfaces[].ipv4` values in the manifest.
 
 ## State Schema Cutover
 
-Persisted state is stamped with `schemaVersion: vcpe.dev/v1`. If you run against
-a state root written by an incompatible schema, `vcpe` refuses to operate and
-directs you to reset it:
+Persisted state is stamped with `schemaVersion: vcpe.dev/state/v3`. The v2
+wireless snapshot shape is incompatible; there is no automatic conversion.
+Tear down active deployments with the old binary, then use the v3 binary to
+reset and re-stamp the root before applying new manifests:
 
 ```bash
 controlplane/bin/vcpe state reset

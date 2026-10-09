@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net"
 	"sort"
+	"strings"
 
 	"github.com/gdcs-dev/vcpe/controlplane/internal/manifest"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/plan"
@@ -20,6 +21,10 @@ import (
 // previousReplicas maps service name to the replica count from the last
 // successful apply, enabling delta computation. Pass nil for a fresh deploy.
 func Build(doc manifest.Document, previousReplicas map[string]int) (plan.Deployment, error) {
+	return buildResolved(doc, previousReplicas)
+}
+
+func buildResolved(doc manifest.Document, previousReplicas map[string]int) (plan.Deployment, error) {
 	networks := resolveNetworks(doc)
 	netByRole := map[string]plan.Network{}
 	for _, n := range networks {
@@ -39,13 +44,243 @@ func Build(doc manifest.Document, previousReplicas map[string]int) (plan.Deploym
 		}
 		services = append(services, resolveService(doc.Metadata.Name, svc, prev, netByRole))
 	}
+	if len(doc.Spec.WirelessMedia) != 0 {
+		type apTarget struct {
+			candidate plan.RoamingCandidate
+			owner     string
+		}
+		apByPair := map[string][]apTarget{}
+		roamingPairs := map[string]bool{}
+		fixedPairs := map[string]bool{}
+		media := map[string]manifest.WirelessMedium{}
+		for _, medium := range doc.Spec.WirelessMedia {
+			media[medium.Name] = medium
+		}
+		for _, service := range doc.Spec.Services {
+			for _, radio := range service.Radios {
+				if radio.Mode != manifest.RadioModeStation {
+					continue
+				}
+				if radio.Roaming == nil {
+					fixedPairs[radio.Medium+"\x00"+radio.Network] = true
+				} else {
+					for _, medium := range radio.Roaming.Media {
+						roamingPairs[medium+"\x00"+radio.Network] = true
+					}
+				}
+			}
+		}
+		for _, service := range services {
+			for _, instance := range service.Instances {
+				for _, radio := range instance.Radios {
+					if radio.Mode == manifest.RadioModeAP {
+						for _, vap := range radio.VAPs {
+							key := radio.Medium + "\x00" + vap.Network
+							owner := service.Name + "\x00" + radio.Name
+							medium := media[radio.Medium]
+							apByPair[key] = append(apByPair[key], apTarget{owner: owner, candidate: plan.RoamingCandidate{
+								Service: service.Name, Replica: instance.Index, Radio: radio.Name, Slot: vap.Slot,
+								Medium: radio.Medium, Band: medium.Band, Channel: medium.Channel, BSSID: vap.MAC,
+							}})
+						}
+					}
+				}
+			}
+		}
+		for key, targets := range apByPair {
+			for _, target := range targets[1:] {
+				if target.owner != targets[0].owner && (!roamingPairs[key] || fixedPairs[key]) {
+					medium, network, _ := strings.Cut(key, "\x00")
+					return plan.Deployment{}, fmt.Errorf("multiple AP radios for medium %q profile %q", medium, network)
+				}
+			}
+		}
+		for serviceIndex := range services {
+			for instanceIndex := range services[serviceIndex].Instances {
+				for radioIndex := range services[serviceIndex].Instances[instanceIndex].Radios {
+					radio := &services[serviceIndex].Instances[instanceIndex].Radios[radioIndex]
+					if radio.Mode != manifest.RadioModeStation {
+						continue
+					}
+					if len(radio.RoamingMedia) > 0 {
+						for _, medium := range radio.RoamingMedia {
+							for _, target := range apByPair[medium+"\x00"+radio.Network] {
+								radio.Candidates = append(radio.Candidates, target.candidate)
+							}
+						}
+						if len(radio.Candidates) < 2 {
+							return plan.Deployment{}, fmt.Errorf("station radio %q requires at least two roaming AP candidates", radio.Name)
+						}
+						sort.Slice(radio.Candidates, func(left, right int) bool {
+							first, second := radio.Candidates[left], radio.Candidates[right]
+							if first.Service != second.Service {
+								return first.Service < second.Service
+							}
+							if first.Replica != second.Replica {
+								return first.Replica < second.Replica
+							}
+							if first.Radio != second.Radio {
+								return first.Radio < second.Radio
+							}
+							return first.Slot < second.Slot
+						})
+					} else if radio.Medium != "" {
+						targets := apByPair[radio.Medium+"\x00"+radio.Network]
+						if len(targets) == 0 {
+							return plan.Deployment{}, fmt.Errorf("station radio %q has no AP for medium %q profile %q", radio.Name, radio.Medium, radio.Network)
+						}
+						radio.APBSSID = targets[0].candidate.BSSID
+					}
+				}
+			}
+		}
+	}
 
-	return plan.Deployment{
-		Name:     doc.Metadata.Name,
-		Labels:   doc.Metadata.Labels,
-		Networks: networks,
-		Services: services,
-	}, nil
+	resolved := plan.Deployment{
+		Name:             doc.Metadata.Name,
+		Labels:           doc.Metadata.Labels,
+		Networks:         networks,
+		WirelessMedia:    resolveWirelessMedia(doc.Spec.WirelessMedia),
+		WirelessNetworks: resolveWirelessNetworks(doc.Spec.WirelessNetworks),
+		Services:         services,
+	}
+	resolved.WirelessScenarios, err = resolveWirelessScenarios(doc.Spec.WirelessScenarios, services)
+	if err != nil {
+		return plan.Deployment{}, err
+	}
+	if len(resolved.WirelessMedia) != 0 {
+		if err := checkWirelessIdentityCollisions(resolved); err != nil {
+			return plan.Deployment{}, err
+		}
+	}
+	return resolved, nil
+}
+
+func resolveWirelessScenarios(scenarios []manifest.WirelessScenario, services []plan.Service) ([]plan.WirelessScenario, error) {
+	resolved := make([]plan.WirelessScenario, 0, len(scenarios))
+	for _, scenario := range scenarios {
+		var station plan.ScenarioStation
+		var candidates []plan.RoamingCandidate
+		for _, service := range services {
+			if service.Name != scenario.Station.Service || scenario.Station.Replica < 1 || scenario.Station.Replica > len(service.Instances) {
+				continue
+			}
+			instance := service.Instances[scenario.Station.Replica-1]
+			for _, radio := range instance.Radios {
+				if radio.Name == scenario.Station.Radio && len(radio.RoamingMedia) > 0 {
+					station = plan.ScenarioStation{Service: service.Name, Replica: instance.Index, Radio: radio.Name, Device: radio.Device, MAC: radio.MAC, ManagerName: radio.ManagerName}
+					candidates = radio.Candidates
+				}
+			}
+		}
+		if candidates == nil {
+			return nil, fmt.Errorf("scenario %q station is not a planned roaming station", scenario.Name)
+		}
+		candidateFor := func(ref manifest.VAPReference) (plan.RoamingCandidate, error) {
+			if ref.Slot != nil {
+				for _, candidate := range candidates {
+					if candidate.Service == ref.Service && candidate.Replica == ref.Replica-1 && candidate.Radio == ref.Radio && candidate.Slot == *ref.Slot {
+						return candidate, nil
+					}
+				}
+			}
+			return plan.RoamingCandidate{}, fmt.Errorf("scenario %q AP %q is not a planned roaming candidate", scenario.Name, ref.Radio)
+		}
+		planned := plan.WirelessScenario{Name: scenario.Name, Station: station}
+		for _, ref := range scenario.APs {
+			candidate, err := candidateFor(ref)
+			if err != nil {
+				return nil, err
+			}
+			planned.APs = append(planned.APs, candidate)
+		}
+		initial, err := candidateFor(scenario.Assertions.InitialAP)
+		if err != nil {
+			return nil, err
+		}
+		final, err := candidateFor(scenario.Assertions.FinalAP)
+		if err != nil {
+			return nil, err
+		}
+		planned.Assertions = plan.ScenarioAssertions{InitialAP: initial, FinalAP: final, SameIPv4: scenario.Assertions.SameIPv4, MaxRoamMs: scenario.Assertions.MaxRoamMs, MaxGapMs: scenario.Assertions.MaxGapMs}
+		for _, step := range scenario.Steps {
+			if step.AtMs == nil || step.SNRDb == nil {
+				return nil, fmt.Errorf("scenario %q step requires atMs and snrDb", scenario.Name)
+			}
+			candidate, err := candidateFor(step.AP)
+			if err != nil {
+				return nil, err
+			}
+			planned.Steps = append(planned.Steps, plan.ScenarioStep{AtMs: *step.AtMs, AP: candidate, SNRDb: *step.SNRDb})
+		}
+		resolved = append(resolved, planned)
+	}
+	return resolved, nil
+}
+
+func checkWirelessIdentityCollisions(deployment plan.Deployment) error {
+	macOwners := map[string]string{}
+	for _, service := range deployment.Services {
+		for _, instance := range service.Instances {
+			deviceOwners := map[string]string{}
+			register := func(device, mac, owner string) error {
+				if previous := deviceOwners[device]; previous != "" {
+					return fmt.Errorf("interface name %q collision between %s and %s", device, previous, owner)
+				}
+				deviceOwners[device] = owner
+				key := strings.ToLower(mac)
+				if previous := macOwners[key]; previous != "" {
+					return fmt.Errorf("MAC %q collision between %s and %s", mac, previous, owner)
+				}
+				macOwners[key] = owner
+				return nil
+			}
+			for _, iface := range instance.Interfaces {
+				if err := register(iface.Device, iface.MAC, service.Name+"/"+instance.InstanceName+"/interface "+iface.Role); err != nil {
+					return err
+				}
+			}
+			for _, radio := range instance.Radios {
+				owner := service.Name + "/" + instance.InstanceName + "/radio " + radio.Name
+				if err := register(radio.Device, radio.MAC, owner); err != nil {
+					return err
+				}
+				for _, vap := range radio.VAPs {
+					if vap.Slot == 0 {
+						if vap.Device != radio.Device || !strings.EqualFold(vap.MAC, radio.MAC) {
+							return fmt.Errorf("%s slot 0 identity differs from primary radio", owner)
+						}
+						continue
+					}
+					if err := register(vap.Device, vap.MAC, fmt.Sprintf("%s/slot %d", owner, vap.Slot)); err != nil {
+						return err
+					}
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func resolveWirelessNetworks(networks []manifest.WirelessNetwork) []plan.WirelessNetwork {
+	resolved := make([]plan.WirelessNetwork, 0, len(networks))
+	for _, network := range networks {
+		resolved = append(resolved, plan.WirelessNetwork{
+			Name: network.Name, SSID: network.SSID, Security: network.Security,
+			PassphraseSecretRef: network.PassphraseSecretRef,
+		})
+	}
+	return resolved
+}
+
+func resolveWirelessMedia(media []manifest.WirelessMedium) []plan.WirelessMedium {
+	resolved := make([]plan.WirelessMedium, 0, len(media))
+	for _, medium := range media {
+		resolved = append(resolved, plan.WirelessMedium{
+			Name: medium.Name, Band: medium.Band, Channel: medium.Channel, WidthMHz: medium.WidthMHz,
+		})
+	}
+	return resolved
 }
 
 // computeReplicaDelta derives the set of 0-based replica indices to add and
@@ -246,7 +481,12 @@ func resolveService(deployment string, svc manifest.Service, prev int, netByRole
 }
 
 func resolveInstance(deployment string, svc manifest.Service, index, replicas int, netByRole map[string]plan.Network) plan.Instance {
-	inst := plan.Instance{Index: index}
+	containerName := plan.ContainerName(deployment, svc.Name, index)
+	inst := plan.Instance{
+		Index:         index,
+		InstanceName:  plan.InstanceName(svc.Name, index),
+		ContainerName: containerName,
+	}
 	for pos, iface := range svc.Interfaces {
 		net := netByRole[iface.Role]
 
@@ -297,6 +537,45 @@ func resolveInstance(deployment string, svc manifest.Service, index, replicas in
 			resolved.Gateway6 = net.IPv6.Gateway
 		}
 		inst.Interfaces = append(inst.Interfaces, resolved)
+	}
+	for _, radio := range svc.Radios {
+		addressing := radio.Addressing
+		if radio.Mode == manifest.RadioModeStation && addressing == "" {
+			addressing = manifest.AddressingDHCP
+		}
+		resolvedRadio := plan.Radio{
+			Name:          radio.Name,
+			Medium:        radio.Medium,
+			Network:       radio.Network,
+			Device:        radio.Device,
+			Mode:          radio.Mode,
+			Mesh:          radio.Mesh,
+			Addressing:    addressing,
+			DefaultRoute:  radio.DefaultRoute,
+			ManagerName:   plan.RadioManagerName(deployment, svc.Name, index, radio.Name),
+			MAC:           plan.CanonicalRadioMAC(deployment, svc.Name, index, radio.Name),
+			ContainerName: containerName,
+		}
+		if radio.Mesh != nil {
+			resolvedRadio.Bridge = radio.Mesh.Bridge
+		}
+		if radio.Roaming != nil {
+			resolvedRadio.RoamingMedia = append([]string(nil), radio.Roaming.Media...)
+		}
+		for _, vap := range radio.VAPs {
+			device := plan.VAPDeviceName(deployment, svc.Name, index, radio.Name, vap.Slot)
+			if vap.Slot == 0 {
+				device = radio.Device
+			}
+			resolvedRadio.VAPs = append(resolvedRadio.VAPs, plan.VAP{
+				Slot: vap.Slot, Network: vap.Network, Bridge: vap.Bridge,
+				Device: device, MAC: plan.CanonicalVAPBSSID(deployment, svc.Name, index, radio.Name, vap.Slot),
+			})
+		}
+		sort.Slice(resolvedRadio.VAPs, func(left, right int) bool {
+			return resolvedRadio.VAPs[left].Slot < resolvedRadio.VAPs[right].Slot
+		})
+		inst.Radios = append(inst.Radios, resolvedRadio)
 	}
 	return inst
 }

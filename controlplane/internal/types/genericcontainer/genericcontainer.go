@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/gdcs-dev/vcpe/controlplane/internal/plan"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/render"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/render/servicetemplate"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/typeregistry"
@@ -50,6 +51,34 @@ type CommandHealthProbe struct {
 // It reads VCPE_INIT_* vars to perform identity → network → dns → exec.
 const entrypointSH = `#!/bin/sh
 set -e
+
+# ── Late-attached radio readiness ─────────────────────────────────────────────
+
+_vcpe_radio_vars=$(env | awk -F= '$1 ~ /^RADIO_.*_DEVICE$/ {print $1}' | sort)
+if [ -n "$_vcpe_radio_vars" ]; then
+	_vcpe_radio_timeout="${VCPE_RADIO_READY_TIMEOUT_SECONDS:-30}"
+	case "$_vcpe_radio_timeout" in
+		''|*[!0-9]*|0) echo "invalid VCPE_RADIO_READY_TIMEOUT_SECONDS: $_vcpe_radio_timeout" >&2; exit 1 ;;
+	esac
+	_vcpe_radio_remaining="$_vcpe_radio_timeout"
+	while :; do
+		_vcpe_radio_missing=""
+		for _radio_var in $_vcpe_radio_vars; do
+			_radio_dev=$(eval "printf '%s' \"\${${_radio_var}:-}\"")
+			[ -n "$_radio_dev" ] || continue
+			if ! ip link show "$_radio_dev" >/dev/null 2>&1; then
+				_vcpe_radio_missing="${_vcpe_radio_missing}${_vcpe_radio_missing:+, }$_radio_dev"
+			fi
+		done
+		[ -z "$_vcpe_radio_missing" ] && break
+		if [ "$_vcpe_radio_remaining" -le 0 ]; then
+			echo "radio device readiness timed out after ${_vcpe_radio_timeout}s; missing: $_vcpe_radio_missing" >&2
+			exit 1
+		fi
+		sleep 1
+		_vcpe_radio_remaining=$((_vcpe_radio_remaining - 1))
+	done
+fi
 
 # ── Identity ─────────────────────────────────────────────────────────────────
 
@@ -248,24 +277,25 @@ func renderInterpolated(_ context.Context, input render.Input, cfg Config) (rend
 		}
 	}
 
-	env := render.IfaceEnv(input.Deployment, input.Service, input.Service.Instances[0])
 	extra := make([]string, 0, len(cfg.Env))
 	for k, v := range cfg.Env {
 		extra = append(extra, k+"="+v)
 	}
 	sort.Strings(extra)
-	env = append(env, extra...)
 
 	composeYAML, err := generateCompose(input, cfg)
 	if err != nil {
 		return render.Result{}, err
 	}
 
-	artifacts := []render.Artifact{
-		{Key: "compose.env", Content: strings.Join(env, "\n") + "\n"},
-		{Key: "compose.yaml", Content: composeYAML},
-		{Key: "entrypoint.sh", Content: entrypointSH},
-	}
+	artifacts := render.InstanceEnvArtifacts(input, func(instance plan.Instance) []string {
+		environment := render.IfaceEnv(input.Deployment, input.Service, instance)
+		return append(environment, extra...)
+	})
+	artifacts = append(artifacts,
+		render.Artifact{Key: "compose.yaml", Content: composeYAML},
+		render.Artifact{Key: "entrypoint.sh", Content: entrypointSH},
+	)
 	if cfg.Health != nil {
 		artifacts = append(artifacts, render.Artifact{Key: "vcpe-healthd.required", Content: ""})
 	}
@@ -304,9 +334,9 @@ func generateCompose(input render.Input, cfg Config) (string, error) {
 	// pinMAC controls whether mac_address is included in the network
 	// attachment; single-replica services pin the IPAM MAC, multi-replica
 	// services let Podman assign a unique random MAC to each container.
-	buildSvcEntry := func(index int, pinMAC bool) map[string]any {
+	buildSvcEntry := func(instance plan.Instance, pinMAC bool) map[string]any {
 		svcNetworks := map[string]any{}
-		for _, iface := range inst.Interfaces {
+		for _, iface := range instance.Interfaces {
 			key := strings.ToUpper(strings.ReplaceAll(iface.Role, "-", "_"))
 			netEntry := map[string]any{}
 			if pinMAC {
@@ -316,15 +346,18 @@ func generateCompose(input render.Input, cfg Config) (string, error) {
 		}
 		svc := map[string]any{
 			"image":    render.ImageRef(input.Service.Image),
-			"env_file": []string{"compose.env"},
+			"env_file": []string{fmt.Sprintf("instances/%d/compose.env", instance.Index+1)},
 			"restart":  "unless-stopped",
 			"cap_add":  []string{"NET_ADMIN", "NET_RAW"},
 		}
 		if len(svcNetworks) > 0 {
 			svc["networks"] = svcNetworks
+		} else if len(instance.Radios) > 0 {
+			svc["network_mode"] = "none"
 		}
 		volumes := append(append([]string(nil), input.Service.Volumes...), cfg.Volumes...)
 		volumes = append(volumes, "./entrypoint.sh:/run/vcpe/entrypoint.sh:ro")
+		volumes = append(volumes, render.SecretFileMounts(input.WirelessCredentialFiles)...)
 		svc["volumes"] = volumes
 		svc["entrypoint"] = []string{"/bin/sh", "/run/vcpe/entrypoint.sh"}
 		if len(cfg.Command) > 0 {
@@ -332,8 +365,8 @@ func generateCompose(input render.Input, cfg Config) (string, error) {
 		}
 		// Merge top-level manifest ports with any ports declared in config.
 		allPorts := append(append([]string(nil), input.Service.Ports...), cfg.Ports...)
-		if cfg.Health != nil && input.HealthPorts[index] != 0 {
-			allPorts = append(allPorts, fmt.Sprintf("127.0.0.1:%d:9878", input.HealthPorts[index]))
+		if cfg.Health != nil && input.HealthPorts[instance.Index] != 0 {
+			allPorts = append(allPorts, fmt.Sprintf("127.0.0.1:%d:9878", input.HealthPorts[instance.Index]))
 		}
 		if len(allPorts) > 0 {
 			svc["ports"] = allPorts
@@ -353,16 +386,20 @@ func generateCompose(input render.Input, cfg Config) (string, error) {
 	// count so that names are stable when replicas changes. This enables
 	// scale-up and scale-down without orphaning existing containers.
 	for i := 0; i < replicas; i++ {
+		instance := plan.Instance{Index: i}
+		if i < len(input.Service.Instances) {
+			instance = input.Service.Instances[i]
+		}
 		// Pin the MAC address only for single-replica services, where the IPAM
 		// MAC is stable. Multi-replica services let Podman assign unique MACs.
 		pinMAC := replicas == 1
-		entry := buildSvcEntry(i, pinMAC)
+		entry := buildSvcEntry(instance, pinMAC)
 		// Set an explicit container_name and hostname, always indexed (e.g.
 		// example-client-1) so names are stable and unambiguous regardless of
 		// replica count.
-		entry["container_name"] = fmt.Sprintf("${DEPLOYMENT_NAME}-${SERVICE_NAME}-%d", i+1)
-		entry["hostname"] = fmt.Sprintf("${SERVICE_NAME}-%d", i+1)
-		services[fmt.Sprintf("%s-%d", input.Service.Name, i+1)] = entry
+		entry["container_name"] = instance.PodmanContainerName(input.Deployment.Name, input.Service.Name)
+		entry["hostname"] = instance.ComposeServiceName(input.Service.Name)
+		services[instance.ComposeServiceName(input.Service.Name)] = entry
 		if cfg.Health != nil {
 			servicetemplate.AttachProbeSidecar(services, input.Service.Name, i, render.ImageRef(input.Service.Image), genericHealthCommand(cfg.Health))
 		}

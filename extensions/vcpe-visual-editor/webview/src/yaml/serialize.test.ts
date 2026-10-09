@@ -70,6 +70,22 @@ describe('applyMutation — setScalar', () => {
   });
 });
 
+describe('applyMutation — appendWireless', () => {
+  it('adds a medium, profile, and AP radio without losing unrelated services', () => {
+    const result = roundTrip(MINIMAL_MANIFEST,
+      { kind: 'appendWireless', path: ['spec', 'wirelessMedia'], value: {name: 'rf24', band: '2.4ghz', channel: 1, widthMHz: 20} },
+      { kind: 'appendWireless', path: ['spec', 'wirelessNetworks'], value: {name: 'home', ssid: 'vcpe-lab', security: 'open'} },
+      { kind: 'appendWireless', path: ['spec', 'services', 1, 'radios'], value: {name: 'ap', medium: 'rf24', mode: 'ap', device: 'wlan0', vaps: [{slot: 0, network: 'home', bridge: 'brlan0'}]} },
+      { kind: 'appendWireless', path: ['spec', 'services', 1, 'radios', 0, 'vaps'], value: {slot: 1, network: 'guest', bridge: 'brguest'} },
+    );
+    const parsed = parse(result);
+    if ('error' in parsed) throw new Error(parsed.error);
+    expect(parsed.model.spec.wirelessMedia?.[0].channel).toBe(1);
+    expect(parsed.model.spec.services[1].radios?.[0].vaps?.map(vap => vap.slot)).toEqual([0, 1]);
+    expect(parsed.model.spec.services[0].name).toBe('bng');
+  });
+});
+
 describe('applyMutation — insertNetwork', () => {
   it('appends a new network to spec.networks', () => {
     const result = roundTrip(MINIMAL_MANIFEST, {

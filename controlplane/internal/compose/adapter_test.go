@@ -2,6 +2,7 @@ package compose
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -26,6 +27,14 @@ func TestCommandArgsForComposeOperations(t *testing.T) {
 	upScoped, err := commandArgs("up", Request{ProjectName: "podman-bng-20", EnvFile: "runtime/20/compose.env", ComposeFile: "services/bng/compose.yaml", RemoveOrphans: true, Services: []string{"client-2"}})
 	if err != nil {
 		t.Fatalf("scoped up args: %v", err)
+	}
+
+	upRecreate, err := commandArgs("up", Request{ProjectName: "podman-bng-20", ForceRecreate: true, Services: []string{"client-1"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := strings.Join(upRecreate, " "), "-p podman-bng-20 up -d --force-recreate client-1"; got != want {
+		t.Fatalf("up recreate args = %q, want %q", got, want)
 	}
 	if !reflect.DeepEqual(upScoped, []string{"-p", "podman-bng-20", "--env-file", "runtime/20/compose.env", "-f", "services/bng/compose.yaml", "up", "-d", "--remove-orphans", "client-2"}) {
 		t.Fatalf("unexpected scoped up args: %#v", upScoped)

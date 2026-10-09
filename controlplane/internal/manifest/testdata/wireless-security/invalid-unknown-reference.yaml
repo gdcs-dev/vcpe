@@ -1,0 +1,9 @@
+apiVersion: vcpe.dev/v1
+kind: Deployment
+metadata: {name: edge}
+spec:
+  networks: []
+  wirelessNetworks:
+    - {name: home, ssid: vcpe-lab, security: wpa2-personal, passphraseSecretRef: missing}
+  services:
+    - {name: client, type: generic-container, replicas: 1, image: {repository: client}}

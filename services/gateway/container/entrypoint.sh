@@ -1,26 +1,31 @@
 #!/bin/bash
-set -euo pipefail
+set -Eeuo pipefail
+trap 'echo "gateway-entrypoint: failed at line $LINENO" >&2' ERR
 
 rename_interfaces_by_mac() {
     declare -A current_by_mac=()
     declare -A target_by_mac=()
     declare -A temp_by_target=()
-    local name mac role_key device_var device stripped
+    local name mac role_key device_var device stripped prefix target health_device=eth0
+    local net_root="${VCPE_SYS_CLASS_NET_ROOT:-/sys/class/net}"
 
-    # Build rename table from IFACE_*_MAC + IFACE_*_DEVICE env vars.
-    # No legacy aliases (LAN1_MAC, EROUTER0_MAC, WAN0_MAC) are used.
+    # Build one rename table for wired interfaces and late-attached radios.
     while IFS='=' read -r var_name mac_val; do
-        [[ "$var_name" == IFACE_*_MAC ]] || continue
+        case "$var_name" in
+            IFACE_*_MAC) prefix="IFACE" ;;
+            RADIO_*_MAC) prefix="RADIO" ;;
+            *) continue ;;
+        esac
         [[ -n "$mac_val" ]] || continue
         role_key="${var_name%_MAC}"
-        role_key="${role_key#IFACE_}"
-        device_var="IFACE_${role_key}_DEVICE"
+        role_key="${role_key#${prefix}_}"
+        device_var="${prefix}_${role_key}_DEVICE"
         device="${!device_var:-}"
         [[ -n "$device" ]] || continue
         target_by_mac["${mac_val,,}"]="$device"
     done < <(env)
 
-    for path in /sys/class/net/*; do
+    for path in "$net_root"/*; do
         name=$(basename "$path")
         [[ "$name" == lo ]] && continue
         mac=$(cat "$path/address")
@@ -32,16 +37,25 @@ rename_interfaces_by_mac() {
         # instead of the real managed health attachment.
         stripped="${mac//[:.]/}"
         [[ "$stripped" =~ ^0+$ ]] && continue
-        current_by_mac["${mac,,}"]=$name
+        local mac_key="${mac,,}"
+        local desired_target="${target_by_mac[$mac_key]:-}"
+        local existing="${current_by_mac[$mac_key]:-}"
+        if [[ -z "$existing" || "$name" == "$desired_target" || ( "$existing" != "$desired_target" && "$name" == "tmp-${desired_target}" ) ]]; then
+            current_by_mac[$mac_key]=$name
+        fi
     done
 
-    # The private health network is attached first so Podman forwards the
-    # loopback-published endpoint through its assigned address. Move that
-    # unmanaged interface aside before assigning manifest device names.
+    for target in "${target_by_mac[@]}"; do
+        [[ "$target" == eth0 ]] && health_device=vcpe-health0
+    done
+    # Keep Podman's eth0 when no declared interface needs its name so netavark
+    # can tear the network down on restart.
     for mac in "${!current_by_mac[@]}"; do
         [[ -n "${target_by_mac[$mac]:-}" ]] && continue
         name=${current_by_mac[$mac]}
-        ip link set "$name" name vcpe-health0
+        if [[ "$name" != "$health_device" ]]; then
+            ip link set "$name" name "$health_device"
+        fi
         unset 'current_by_mac[$mac]'
         break
     done
@@ -53,8 +67,15 @@ rename_interfaces_by_mac() {
             continue
         fi
         local temp_name="tmp-${target}"
+        if [[ "${current_by_mac[$mac]}" == "$temp_name" ]]; then
+            temp_by_target[$target]=$temp_name
+            continue
+        fi
         ip link set "${current_by_mac[$mac]}" down
-        ip link set "${current_by_mac[$mac]}" name "$temp_name"
+        if ! ip link set "${current_by_mac[$mac]}" name "$temp_name"; then
+            echo "gateway-entrypoint: cannot stage interface ${current_by_mac[$mac]} as $temp_name for $target" >&2
+            return 1
+        fi
         temp_by_target[$target]=$temp_name
     done
 
@@ -62,28 +83,27 @@ rename_interfaces_by_mac() {
         ip link set "${temp_by_target[$target]}" name "$target"
     done
 
-    preserve_health_default_route
+    preserve_health_default_route "$health_device"
 }
 
 # preserve_health_default_route keeps the managed aa-health attachment
-# (renamed to vcpe-health0 above) reachable for connections that terminate
+# reachable for connections that terminate
 # locally on its own address, independent of whatever global default route
 # configure_networking later installs for erouter0 (gateway's own WAN
 # uplink). Without this, a health-check reply whose destination address
 # isn't in any locally-attached subnet — e.g. a request forwarded through
 # Podman Machine's host<->VM tunnel — falls through to the global default
-# route and is black-holed via erouter0 instead of returning via
-# vcpe-health0. It is a no-op when no vcpe-health0 interface exists (i.e.
-# every topology attachment is already Podman-managed).
+# route and is black-holed via erouter0 instead of returning via the health
+# attachment. It is a no-op when the attachment has no default route.
 preserve_health_default_route() {
-    local health_default health_gw health_ip
-    health_default=$(ip route show default dev vcpe-health0 2>/dev/null | head -1)
+    local health_device=$1 health_default health_gw health_ip
+    health_default=$(ip route show default dev "$health_device" 2>/dev/null | head -1 || true)
     [[ -n "$health_default" ]] || return 0
     health_gw=$(awk '{print $3}' <<<"$health_default")
-    health_ip=$(ip -4 -o addr show vcpe-health0 | awk '{print $4}' | cut -d/ -f1)
+    health_ip=$(ip -4 -o addr show "$health_device" | awk '{print $4}' | cut -d/ -f1)
     [[ -n "$health_gw" && -n "$health_ip" ]] || return 0
     ip rule add from "$health_ip" table 100 priority 100 2>/dev/null || true
-    ip route add default via "$health_gw" dev vcpe-health0 table 100 2>/dev/null || true
+    ip route add default via "$health_gw" dev "$health_device" table 100 2>/dev/null || true
 }
 
 configure_networking() {
@@ -92,7 +112,9 @@ configure_networking() {
     local wan_dev="${IFACE_WAN_DEVICE:-}"
     local cm_dev="${IFACE_CM_DEVICE:-}"
     local lan_bridge="${LAN_BRIDGE:-brlan0}"
+    local ready_file="${VCPE_NETWORK_READY_FILE:-/etc/vcpe/gateway-network-ready}"
     local erouter_iface="$wan_dev"
+    local var bridge_name attachment_key device_var mode_var dev prefix
 
     ip link set lo up
 
@@ -105,20 +127,56 @@ configure_networking() {
         [[ "$var" == BRIDGE_*_NAME ]] || continue
         [[ -n "$bridge_name" ]] || continue
         ip link add "$bridge_name" type bridge 2>/dev/null || true
+        local bridge_mac_var="${var%_NAME}_MAC"
+        if [[ -n "${!bridge_mac_var:-}" ]]; then
+            ip link set "$bridge_name" address "${!bridge_mac_var}"
+        fi
         ip link set "$bridge_name" up || true
         bridge_done[$bridge_name]=1
     done < <(env)
-    # Enslave interfaces to bridges using IFACE_*_BRIDGE env vars.
+    if (( ${#bridge_done[@]} > 1 )); then
+        sysctl -q -w net.ipv4.conf.all.arp_ignore=1
+    fi
+    # Enslave wired interfaces and AP radios to declared bridges.
     while IFS='=' read -r var bridge_name; do
-        [[ "$var" == IFACE_*_BRIDGE ]] || continue
+        case "$var" in
+            IFACE_*_BRIDGE) prefix="IFACE" ;;
+            RADIO_*_VAP_*_BRIDGE) continue ;;
+            RADIO_*_BRIDGE) prefix="RADIO" ;;
+            *) continue ;;
+        esac
         [[ -n "$bridge_name" ]] || continue
-        role_key="${var%_BRIDGE}"; role_key="${role_key#IFACE_}"
-        dev_var="IFACE_${role_key}_DEVICE"
-        dev="${!dev_var:-}"
+        attachment_key="${var%_BRIDGE}"
+        if [[ "$prefix" == RADIO ]]; then
+            mode_var="${attachment_key}_MODE"
+            [[ "${!mode_var:-}" == mesh ]] && continue
+        fi
+        attachment_key="${attachment_key#${prefix}_}"
+        device_var="${prefix}_${attachment_key}_DEVICE"
+        dev="${!device_var:-}"
         [[ -n "$dev" ]] || continue
-        ip link set "$dev" up || true
-        ip link set "$dev" master "$bridge_name" || true
-        ip addr flush dev "$dev" 2>/dev/null || true
+        if [[ "$prefix" == "RADIO" ]]; then
+            ip link set "$dev" up
+            ip link set "$dev" nomaster 2>/dev/null || true
+            ip link set "$dev" master "$bridge_name"
+            ip addr flush dev "$dev"
+        else
+            ip link set "$dev" up || true
+            ip link set "$dev" master "$bridge_name" || true
+            ip addr flush dev "$dev" 2>/dev/null || true
+        fi
+    done < <(env)
+    while IFS='=' read -r var medium_name; do
+        [[ "$var" == RADIO_*_MEDIUM && -n "$medium_name" ]] || continue
+        attachment_key="${var%_MEDIUM}"
+        mode_var="${attachment_key}_MODE"
+        [[ "${!mode_var:-}" == mesh ]] && continue
+        device_var="${attachment_key}_DEVICE"
+        dev="${!device_var:-}"
+        [[ -n "$dev" ]] || continue
+        ip link set "$dev" up
+        ip link set "$dev" nomaster 2>/dev/null || true
+        ip addr flush dev "$dev"
     done < <(env)
     # Configure bridge IPs from BRIDGE_*_IPV4.
     while IFS='=' read -r var cidr; do
@@ -183,6 +241,9 @@ configure_networking() {
             dhclient -v "$erouter_iface" || true
         fi
     fi
+
+    mkdir -p "$(dirname "$ready_file")"
+    touch "$ready_file"
 }
 
 start_lan_dhcp() {
@@ -247,9 +308,27 @@ EOF
     fi
 }
 
+# configure_rdk_otel writes the per-device identity and a dev bearer token
+# consumed by otel-relay.service/telemetry-agent-otlp.service's
+# EnvironmentFile=/etc/rdk-otel/device.env. Must run after configure_networking
+# has renamed the WAN interface to erouter0. The token is generated once and
+# then left alone so it stays stable across container restarts.
+configure_rdk_otel() {
+    mkdir -p /etc/rdk-otel
+    local mac
+    mac=$(cat /sys/class/net/erouter0/address 2>/dev/null || echo 00:00:00:00:00:00)
+    echo "DEVICE_ID=${mac}" > /etc/rdk-otel/device.env
+    if [[ ! -s /etc/rdk-otel/otel-token ]]; then
+        head -c32 /dev/urandom | od -An -tx1 | tr -d ' \n' > /etc/rdk-otel/otel-token
+        echo >> /etc/rdk-otel/otel-token
+        chmod 0600 /etc/rdk-otel/otel-token
+    fi
+}
+
 main() {
     rename_interfaces_by_mac
     configure_networking
+    configure_rdk_otel
     # NAT all LAN bridge traffic going out via the WAN (erouter) interface so
     # clients can reach the internet and management hosts through the BNG.
     if command -v iptables >/dev/null 2>&1 && [[ -n "${IFACE_WAN_DEVICE:-}" ]]; then
@@ -267,4 +346,6 @@ main() {
     exec /sbin/init
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    main "$@"
+fi

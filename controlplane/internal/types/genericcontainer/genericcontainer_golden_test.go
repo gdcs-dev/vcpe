@@ -2,6 +2,9 @@ package genericcontainer_test
 
 import (
 	"context"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -73,6 +76,7 @@ func TestGenericContainerGeneratesComposeAndEnv(t *testing.T) {
 	for _, frag := range []string{
 		"client-1:",
 		"image: docker.io/library/alpine:3.19",
+		"instances/1/compose.env",
 		"8080:80",
 		"entrypoint.sh:/run/vcpe/entrypoint.sh:ro",
 		"entrypoint:",
@@ -87,6 +91,266 @@ func TestGenericContainerGeneratesComposeAndEnv(t *testing.T) {
 	if !strings.Contains(entrypoint, "exec \"$@\"") {
 		t.Fatalf("entrypoint.sh missing exec:\n%s", entrypoint)
 	}
+}
+
+func TestGenericContainerRendersRadioEnvPerReplica(t *testing.T) {
+	genericcontainer.Register()
+	serviceType, _ := typeregistry.Lookup("generic-container")
+	deployment := plan.Deployment{
+		Name: "edge",
+		WirelessNetworks: []plan.WirelessNetwork{{
+			Name: "home", SSID: "vcpe-lab", Channel: 6, Security: "open",
+		}},
+	}
+	service := plan.Service{
+		Name: "station", Type: "generic-container", Replicas: 2,
+		Image: manifest.Image{Repository: "example/station", Tag: "test"},
+		Instances: []plan.Instance{
+			{Index: 0, Radios: []plan.Radio{{Name: "wifi", Network: "home", Device: "wlan0", MAC: "02:00:00:00:00:01", Mode: "station", Addressing: "dhcp"}}},
+			{Index: 1, Radios: []plan.Radio{{Name: "wifi", Network: "home", Device: "wlan0", MAC: "02:00:00:00:00:02", Mode: "station", Addressing: "dhcp"}}},
+		},
+	}
+	result, err := serviceType.Renderer().Render(context.Background(), render.Input{
+		Deployment: deployment,
+		Service:    service,
+		WirelessCredentialFiles: map[string]render.SecretFileHandle{
+			"home": {HostPath: "/private/home", ContainerPath: "/run/vcpe/credentials/home"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifacts := map[string]string{}
+	for _, artifact := range result.Artifacts {
+		artifacts[artifact.Key] = artifact.Content
+	}
+	if !strings.Contains(artifacts["instances/1/compose.env"], "RADIO_WIFI_MAC=02:00:00:00:00:01") {
+		t.Fatalf("instance 1 radio env is incorrect:\n%s", artifacts["instances/1/compose.env"])
+	}
+	if !strings.Contains(artifacts["instances/2/compose.env"], "RADIO_WIFI_MAC=02:00:00:00:00:02") {
+		t.Fatalf("instance 2 radio env is incorrect:\n%s", artifacts["instances/2/compose.env"])
+	}
+	for _, path := range []string{"instances/1/compose.env", "instances/2/compose.env"} {
+		if !strings.Contains(artifacts["compose.yaml"], path) {
+			t.Fatalf("compose.yaml missing %q:\n%s", path, artifacts["compose.yaml"])
+		}
+	}
+	if !strings.Contains(artifacts["compose.yaml"], "/private/home:/run/vcpe/credentials/home:ro") {
+		t.Fatalf("compose.yaml does not mount the scoped wireless credential:\n%s", artifacts["compose.yaml"])
+	}
+}
+
+func TestGenericContainerPersonalSecurityComposeConfig(t *testing.T) {
+	podmanCompose, err := exec.LookPath("podman-compose")
+	if err != nil {
+		t.Skip("podman-compose is required for generated Compose validation")
+	}
+	genericcontainer.Register()
+	serviceType, _ := typeregistry.Lookup("generic-container")
+	credential := filepath.Join(t.TempDir(), "passphrase")
+	if err := os.WriteFile(credential, []byte("compose-config-sentinel"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	deployment := plan.Deployment{Name: "edge", WirelessNetworks: []plan.WirelessNetwork{{
+		Name: "home", SSID: "vcpe-lab", Channel: 1, Security: manifest.WirelessWPA3Personal, PassphraseSecretRef: "home-wifi",
+	}}}
+	service := plan.Service{
+		Name: "station", Type: "generic-container", Image: manifest.Image{Repository: "example/station", Tag: "test"},
+		Instances: []plan.Instance{{Index: 0, Radios: []plan.Radio{{Name: "wifi", Network: "home", Device: "wlan0", Mode: "station", Addressing: "dhcp"}}}},
+	}
+	result, err := serviceType.Renderer().Render(context.Background(), render.Input{
+		Deployment: deployment,
+		Service:    service,
+		WirelessCredentialFiles: map[string]render.SecretFileHandle{
+			"home": {HostPath: credential, ContainerPath: "/run/vcpe/credentials/home/passphrase"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifactDir := t.TempDir()
+	for _, artifact := range result.Artifacts {
+		path := filepath.Join(artifactDir, artifact.Key)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(artifact.Content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cmd := exec.Command(podmanCompose, "-f", filepath.Join(artifactDir, "compose.yaml"), "config")
+	cmd.Dir = artifactDir
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("podman-compose config: %v\n%s", err, output)
+	}
+	if !strings.Contains(string(output), "/run/vcpe/credentials/home/passphrase") {
+		t.Fatalf("expanded Compose omitted credential file path:\n%s", output)
+	}
+	if strings.Contains(string(output), "compose-config-sentinel") {
+		t.Fatalf("expanded Compose exposed credential bytes:\n%s", output)
+	}
+}
+
+func TestGenericContainerEntrypointWaitsForRadioArrival(t *testing.T) {
+	entrypoint := renderEntrypoint(t)
+	output, err := runEntrypoint(t, entrypoint, []string{
+		"RADIO_WIFI_DEVICE=wlan0",
+		"VCPE_RADIO_READY_TIMEOUT_SECONDS=2",
+		"VCPE_TEST_IP_READY_AFTER=2",
+	})
+	if err != nil {
+		t.Fatalf("entrypoint failed: %v\n%s", err, output)
+	}
+	if !strings.Contains(output, "workload-started") {
+		t.Fatalf("entrypoint did not execute workload: %s", output)
+	}
+}
+
+func TestGenericContainerEntrypointReportsRadioTimeout(t *testing.T) {
+	entrypoint := renderEntrypoint(t)
+	output, err := runEntrypoint(t, entrypoint, []string{
+		"RADIO_WIFI_DEVICE=wlan0",
+		"VCPE_RADIO_READY_TIMEOUT_SECONDS=1",
+		"VCPE_TEST_IP_READY_AFTER=99",
+	})
+	if err == nil || !strings.Contains(output, "missing: wlan0") {
+		t.Fatalf("error = %v, output = %s", err, output)
+	}
+}
+
+func TestGenericContainerEntrypointWithoutRadiosDoesNotWait(t *testing.T) {
+	entrypoint := renderEntrypoint(t)
+	output, err := runEntrypoint(t, entrypoint, nil)
+	if err != nil {
+		t.Fatalf("entrypoint failed: %v\n%s", err, output)
+	}
+	if strings.Contains(output, "ip-called") || !strings.Contains(output, "workload-started") {
+		t.Fatalf("unexpected no-radio output: %s", output)
+	}
+}
+
+func TestGenericContainerRadioOnlyUsesNoNetworkMode(t *testing.T) {
+	compose := renderGenericCompose(t, plan.Instance{
+		Radios: []plan.Radio{{Name: "wifi", Network: "home", Device: "wlan0", Mode: "station"}},
+	})
+	service := composeService(t, compose, "station-1")
+	if service["network_mode"] != "none" {
+		t.Fatalf("network_mode = %#v, want none", service["network_mode"])
+	}
+	if _, exists := service["networks"]; exists {
+		t.Fatalf("radio-only service has networks: %#v", service["networks"])
+	}
+	if _, exists := compose["networks"]; exists {
+		t.Fatalf("radio-only compose has top-level networks: %#v", compose["networks"])
+	}
+}
+
+func TestGenericContainerMixedTransportPreservesWiredNetwork(t *testing.T) {
+	compose := renderGenericCompose(t, plan.Instance{
+		Interfaces: []plan.Interface{{Role: "mgmt", Network: "edge-mgmt", Device: "eth0", MAC: "02:00:00:00:00:01"}},
+		Radios:     []plan.Radio{{Name: "wifi", Network: "home", Device: "wlan0", Mode: "station"}},
+	})
+	service := composeService(t, compose, "station-1")
+	if _, exists := service["network_mode"]; exists {
+		t.Fatalf("mixed service has network_mode: %#v", service["network_mode"])
+	}
+	if _, exists := service["networks"]; !exists {
+		t.Fatal("mixed service is missing wired networks")
+	}
+	if _, exists := compose["networks"]; !exists {
+		t.Fatal("mixed compose is missing top-level wired networks")
+	}
+}
+
+func renderGenericCompose(t *testing.T, instance plan.Instance) map[string]any {
+	t.Helper()
+	genericcontainer.Register()
+	serviceType, _ := typeregistry.Lookup("generic-container")
+	instance.Index = 0
+	service := plan.Service{
+		Name: "station", Type: "generic-container", Replicas: 1,
+		Image:     manifest.Image{Repository: "example/station", Tag: "test"},
+		Instances: []plan.Instance{instance},
+	}
+	result, err := serviceType.Renderer().Render(context.Background(), render.Input{Deployment: plan.Deployment{Name: "edge"}, Service: service})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, artifact := range result.Artifacts {
+		if artifact.Key == "compose.yaml" {
+			var document map[string]any
+			if err := yaml.Unmarshal([]byte(artifact.Content), &document); err != nil {
+				t.Fatal(err)
+			}
+			return document
+		}
+	}
+	t.Fatal("compose artifact not found")
+	return nil
+}
+
+func composeService(t *testing.T, document map[string]any, name string) map[string]any {
+	t.Helper()
+	services, ok := document["services"].(map[string]any)
+	if !ok {
+		t.Fatalf("services = %#v", document["services"])
+	}
+	service, ok := services[name].(map[string]any)
+	if !ok {
+		t.Fatalf("service %q = %#v", name, services[name])
+	}
+	return service
+}
+
+func renderEntrypoint(t *testing.T) string {
+	t.Helper()
+	genericcontainer.Register()
+	serviceType, _ := typeregistry.Lookup("generic-container")
+	service := plan.Service{
+		Name: "station", Type: "generic-container", Replicas: 1,
+		Image:     manifest.Image{Repository: "example/station", Tag: "test"},
+		Instances: []plan.Instance{{Index: 0}},
+	}
+	result, err := serviceType.Renderer().Render(context.Background(), render.Input{Deployment: plan.Deployment{Name: "edge"}, Service: service})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, artifact := range result.Artifacts {
+		if artifact.Key == "entrypoint.sh" {
+			return artifact.Content
+		}
+	}
+	t.Fatal("entrypoint artifact not found")
+	return ""
+}
+
+func runEntrypoint(t *testing.T, entrypoint string, environment []string) (string, error) {
+	t.Helper()
+	directory := t.TempDir()
+	entrypointPath := filepath.Join(directory, "entrypoint.sh")
+	if err := os.WriteFile(entrypointPath, []byte(entrypoint), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ipScript := `#!/bin/sh
+echo ip-called
+echo call >> "$VCPE_TEST_IP_CALLS"
+count=$(wc -l < "$VCPE_TEST_IP_CALLS")
+[ "$count" -ge "${VCPE_TEST_IP_READY_AFTER:-99}" ]
+`
+	if err := os.WriteFile(filepath.Join(directory, "ip"), []byte(ipScript), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(directory, "sleep"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	command := exec.Command("/bin/sh", entrypointPath, "/bin/sh", "-c", "echo workload-started")
+	command.Env = append([]string{
+		"PATH=" + directory + ":" + os.Getenv("PATH"),
+		"VCPE_TEST_IP_CALLS=" + filepath.Join(directory, "ip-calls"),
+	}, environment...)
+	output, err := command.CombinedOutput()
+	return string(output), err
 }
 
 // TestGenericContainerStaticAddressing verifies that an interface with

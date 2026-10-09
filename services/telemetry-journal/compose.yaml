@@ -1,0 +1,42 @@
+# Standalone compose for telemetry-journal — NOT a manifest-declared vcpe
+# service type. Bring it up alongside a deployment that already has event-sink
+# running (and therefore an "mgmt" network already created), so aardvark-dns
+# resolves both by name:
+#
+#   podman compose -f services/telemetry-journal/compose.yaml up -d
+#
+# The build reuses telemetry_journal's own Containerfile unmodified.
+
+services:
+  telemetry-journal:
+    build:
+      context: ../../temp/sherloq/Frontend/telemetry_journal
+      dockerfile: Containerfile
+    image: ${TELEMETRY_JOURNAL_IMAGE:-vcpe-telemetry-journal:dev}
+    container_name: telemetry-journal
+    hostname: telemetry-journal
+    env_file:
+      - compose.env
+    ports:
+      - "5007:5007"
+    volumes:
+      - telemetry-journal-data:/data
+    networks:
+      mgmt:
+        aliases:
+          - telemetry-journal
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:5007/healthz"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+
+volumes:
+  telemetry-journal-data:
+
+networks:
+  mgmt:
+    external: true
+    name: ${IFACE_MGMT_NETWORK}

@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
+	"net/netip"
 	"os"
 	"os/exec"
 	"runtime"
@@ -16,7 +18,11 @@ import (
 
 // Adapter implements image.Backend directly for Podman image operations and
 // owns the Podman-specific networking operations in this package.
-type Adapter struct{}
+type Adapter struct {
+	run commandOutputRunner
+}
+
+type commandOutputRunner func(context.Context, string, ...string) ([]byte, error)
 
 var _ image.Backend = (*Adapter)(nil)
 
@@ -33,6 +39,163 @@ type NetworkSpec struct {
 
 func New() *Adapter {
 	return &Adapter{}
+}
+
+func (a *Adapter) output(ctx context.Context, name string, args ...string) ([]byte, error) {
+	if a != nil && a.run != nil {
+		return a.run(ctx, name, args...)
+	}
+	return exec.CommandContext(ctx, name, args...).CombinedOutput()
+}
+
+// ContainerPID returns the VM-side PID for a running Podman container.
+func (a *Adapter) ContainerPID(ctx context.Context, name string) (int, error) {
+	if strings.TrimSpace(name) == "" {
+		return 0, fmt.Errorf("container name is required")
+	}
+	out, err := a.output(ctx, "podman", "inspect", "--type", "container", "--format", "{{json .State}}", name)
+	if err != nil {
+		return 0, fmt.Errorf("inspect podman container %s: %w (%s)", name, err, strings.TrimSpace(string(out)))
+	}
+	var state struct {
+		Running bool `json:"Running"`
+		PID     int  `json:"Pid"`
+	}
+	if err := json.Unmarshal(out, &state); err != nil {
+		return 0, fmt.Errorf("decode podman container %s state: %w", name, err)
+	}
+	if !state.Running {
+		return 0, fmt.Errorf("podman container %s is not running", name)
+	}
+	if state.PID <= 0 {
+		return 0, fmt.Errorf("podman container %s has invalid VM-side PID %d", name, state.PID)
+	}
+	return state.PID, nil
+}
+
+// ContainerFile reads a bounded, non-secret runtime contract file from a
+// running container. Callers own the path and content contract.
+func (a *Adapter) ContainerFile(ctx context.Context, name, path string) ([]byte, error) {
+	if strings.TrimSpace(name) == "" {
+		return nil, fmt.Errorf("container name is required")
+	}
+	if strings.TrimSpace(path) == "" {
+		return nil, fmt.Errorf("container file path is required")
+	}
+	out, err := a.output(ctx, "podman", "exec", name, "cat", path)
+	if err != nil {
+		return nil, fmt.Errorf("read runtime contract from podman container %s: %w", name, err)
+	}
+	return out, nil
+}
+
+func (a *Adapter) ContainerVAPStatus(ctx context.Context, name string) ([]byte, error) {
+	if strings.TrimSpace(name) == "" {
+		return nil, fmt.Errorf("container name is required")
+	}
+	out, err := a.output(ctx, "podman", "exec", name, "gateway-health-probe", "vaps")
+	if err != nil {
+		return out, fmt.Errorf("inspect wireless VAPs in podman container %s: %w", name, err)
+	}
+	return out, nil
+}
+
+func (a *Adapter) ContainerMeshStatus(ctx context.Context, name string) ([]byte, error) {
+	if strings.TrimSpace(name) == "" {
+		return nil, fmt.Errorf("container name is required")
+	}
+	out, err := a.output(ctx, "podman", "exec", name, "gateway-health-probe", "mesh")
+	if err != nil {
+		return out, fmt.Errorf("inspect mesh peer in podman container %s: %w", name, err)
+	}
+	return out, nil
+}
+
+func (a *Adapter) ProbeLAN(ctx context.Context, container, device, address string) error {
+	if container == "" || device == "" || address == "" {
+		return fmt.Errorf("LAN probe requires a container, device, and address")
+	}
+	_, err := a.output(ctx, "podman", "exec", container, "ping", "-n", "-c", "1", "-W", "1", "-I", device, address)
+	if err != nil {
+		return fmt.Errorf("LAN probe from %s to %s failed: %w", container, address, err)
+	}
+	return nil
+}
+
+type StationObservation struct {
+	BSSID         string
+	Authenticated bool
+	IPv4          netip.Prefix
+}
+
+func (a *Adapter) ObserveStation(ctx context.Context, container, device string) (StationObservation, error) {
+	if container == "" || device == "" {
+		return StationObservation{}, fmt.Errorf("station observation requires a container and device")
+	}
+	read := func(args ...string) ([]byte, error) {
+		out, err := a.output(ctx, "podman", append([]string{"exec", container}, args...)...)
+		if err != nil {
+			return nil, fmt.Errorf("observe station %s: %w", container, err)
+		}
+		return out, nil
+	}
+	status, err := read("wpa_cli", "-i", device, "status")
+	if err != nil {
+		return StationObservation{}, err
+	}
+	fields := map[string]string{}
+	for _, line := range strings.Split(string(status), "\n") {
+		key, value, ok := strings.Cut(line, "=")
+		if ok {
+			fields[key] = value
+		}
+	}
+	link, err := read("iw", "dev", device, "link")
+	if err != nil {
+		return StationObservation{}, err
+	}
+	var linkBSSID string
+	for _, line := range strings.Split(string(link), "\n") {
+		if after, ok := strings.CutPrefix(strings.TrimSpace(line), "Connected to "); ok {
+			if parts := strings.Fields(after); len(parts) > 0 {
+				linkBSSID = parts[0]
+			}
+			break
+		}
+	}
+	addresses, err := read("ip", "-j", "-4", "addr", "show", "dev", device)
+	if err != nil {
+		return StationObservation{}, err
+	}
+	var interfaces []struct {
+		AddressInfo []struct {
+			Local     string `json:"local"`
+			PrefixLen int    `json:"prefixlen"`
+		} `json:"addr_info"`
+	}
+	if err := json.Unmarshal(addresses, &interfaces); err != nil {
+		return StationObservation{}, fmt.Errorf("decode station IPv4 address: %w", err)
+	}
+	if len(interfaces) != 1 || len(interfaces[0].AddressInfo) != 1 {
+		return StationObservation{}, fmt.Errorf("station %s must have exactly one IPv4 address", container)
+	}
+	address := interfaces[0].AddressInfo[0]
+	ipv4, err := netip.ParsePrefix(fmt.Sprintf("%s/%d", address.Local, address.PrefixLen))
+	if err != nil || !ipv4.Addr().Is4() {
+		return StationObservation{}, fmt.Errorf("station %s has invalid IPv4 address", container)
+	}
+	observed := StationObservation{IPv4: ipv4}
+	if fields["wpa_state"] != "COMPLETED" {
+		return observed, nil
+	}
+	bssid, parseErr := net.ParseMAC(fields["bssid"])
+	linkMAC, linkErr := net.ParseMAC(linkBSSID)
+	if parseErr != nil || linkErr != nil || !strings.EqualFold(bssid.String(), linkMAC.String()) {
+		return observed, nil
+	}
+	observed.BSSID = bssid.String()
+	observed.Authenticated = true
+	return observed, nil
 }
 
 func (a *Adapter) EnsureNetwork(ctx context.Context, spec NetworkSpec) error {
@@ -259,6 +422,31 @@ func (a *Adapter) ImageExists(ctx context.Context, reference string) (bool, erro
 		return false, fmt.Errorf("check podman image %s: %w", reference, err)
 	}
 	return true, nil
+}
+
+func (a *Adapter) VerifyMeshGatewayImage(ctx context.Context, reference string) error {
+	out, err := a.output(ctx, "podman", "image", "inspect", reference)
+	if err != nil {
+		return fmt.Errorf("inspect mesh Gateway image %q: %w", reference, err)
+	}
+	var images []struct {
+		RepoDigests []string          `json:"RepoDigests"`
+		RepoTags    []string          `json:"RepoTags"`
+		Labels      map[string]string `json:"Labels"`
+	}
+	if err := json.Unmarshal(out, &images); err != nil || len(images) != 1 {
+		return fmt.Errorf("mesh Gateway image %q has invalid inspection metadata", reference)
+	}
+	identities := images[0].RepoDigests
+	if reference == "ghcr.io/gdcs-dev/gateway:dev" {
+		identities = images[0].RepoTags
+	}
+	for _, identity := range identities {
+		if identity == reference && images[0].Labels["org.gdcs-dev.vcpe.gateway.mesh-sae"] == "1" {
+			return nil
+		}
+	}
+	return fmt.Errorf("mesh Gateway image %q is not verified for mesh and SAE", reference)
 }
 
 func (a *Adapter) BuildImage(ctx context.Context, req image.BuildRequest) error {

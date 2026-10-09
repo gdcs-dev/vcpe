@@ -36,6 +36,7 @@ type Options struct {
 	// status/service/diagnose commands. Down, status, and diagnose select the
 	// sole active deployment when this is omitted.
 	Name                string
+	Scenario            string
 	From                string
 	To                  string
 	ClientService       string
@@ -72,6 +73,7 @@ var topLevelCommands = map[string]struct{}{
 	"list":     {},
 	"manifest": {},
 	"service":  {},
+	"scenario": {},
 	"status":   {},
 	"diagnose": {},
 	"diag":     {},
@@ -88,7 +90,6 @@ var retiredWrappers = map[string]string{
 	"bng":     "vcpe up --manifest <path>",
 	"gateway": "vcpe up --manifest <path>",
 	"webpa":   "vcpe up --manifest <path>",
-	"routerd": "vcpe up --manifest <path>",
 	"xb10":    "vcpe up --manifest <path>",
 	"client":  "vcpe up --manifest <path>",
 }
@@ -291,6 +292,13 @@ func parseArgs(_ string, args []string) (Options, error) {
 			}
 			opts.Name = val
 			i = next
+		case arg == "--scenario":
+			val, next, err := takeValue(rest, i, "--scenario")
+			if err != nil {
+				return Options{}, err
+			}
+			opts.Scenario = val
+			i = next
 		case arg == "--from":
 			val, next, err := takeValue(rest, i, "--from")
 			if err != nil {
@@ -455,7 +463,14 @@ func parseArgs(_ string, args []string) (Options, error) {
 
 // validateCommandShape enforces per-command positional/flag grammar.
 func validateCommandShape(opts *Options) error {
+	if opts.Scenario != "" && opts.Command != "scenario" {
+		return fmt.Errorf("--scenario is only supported for scenario run")
+	}
 	switch opts.Command {
+	case "scenario":
+		if len(opts.CommandArgs) != 1 || opts.CommandArgs[0] != "run" || opts.Name == "" || opts.Scenario == "" || opts.ManifestPath != "" {
+			return fmt.Errorf("scenario run requires --name <deployment> and --scenario <name>, without --manifest")
+		}
 	case "up", "apply", "build", "plan", "push":
 		if opts.ManifestPath == "" {
 			return fmt.Errorf("%s requires --manifest <path>; run `vcpe %s --help` for usage", opts.Command, opts.Command)

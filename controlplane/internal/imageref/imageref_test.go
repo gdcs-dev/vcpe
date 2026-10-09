@@ -17,6 +17,7 @@ func TestFormat(t *testing.T) {
 		{name: "omitted tag", image: manifest.Image{Repository: "example.test/workload"}, want: "example.test/workload:latest"},
 		{name: "whitespace tag", image: manifest.Image{Repository: "example.test/workload", Tag: "  "}, want: "example.test/workload:latest"},
 		{name: "explicit tag", image: manifest.Image{Repository: "example.test/workload", Tag: "v2"}, want: "example.test/workload:v2"},
+		{name: "pinned digest", image: manifest.Image{Repository: "example.test/workload@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}, want: "example.test/workload@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"},
 		{name: "preserves nonempty input", image: manifest.Image{Repository: " example.test/workload ", Tag: " v2 "}, want: " example.test/workload : v2 "},
 	}
 	for _, testCase := range tests {

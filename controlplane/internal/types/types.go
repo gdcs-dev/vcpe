@@ -9,7 +9,6 @@ import (
 	"github.com/gdcs-dev/vcpe/controlplane/internal/types/gateway"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/types/genericcontainer"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/types/oktopus"
-	"github.com/gdcs-dev/vcpe/controlplane/internal/types/routerd"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/types/telemetrygateway"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/types/webconfig"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/types/webpa"
@@ -42,7 +41,6 @@ func Register() {
 	diagnostic.Register(diagnostic.NewCPEWebPACallbackProvider("xb10"))
 	diagnostic.Register(diagnostic.NewParodusClientsProvider("xb10"))
 	genericcontainer.Register()
-	routerd.Register()
 	telemetrygateway.Register()
 	registered = true
 }

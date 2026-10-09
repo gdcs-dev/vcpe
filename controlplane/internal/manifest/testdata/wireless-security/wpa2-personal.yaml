@@ -1,0 +1,18 @@
+apiVersion: vcpe.dev/v1
+kind: Deployment
+metadata: {name: edge}
+spec:
+  networks: []
+  wirelessMedia:
+    - {name: rf24, band: 2.4ghz, channel: 1, widthMHz: 20}
+  wirelessNetworks:
+    - {name: home, ssid: vcpe-lab, security: wpa2-personal, passphraseSecretRef: home-wifi}
+  secrets:
+    - {name: home-wifi, provider: env, key: VCPE_HOME_WIFI}
+  services:
+    - name: gateway
+      type: gateway
+      replicas: 1
+      image: {repository: gateway}
+      bridges: [{name: brlan0}]
+      radios: [{name: ap, medium: rf24, device: wlan0, mode: ap, vaps: [{slot: 0, network: home, bridge: brlan0}]}]

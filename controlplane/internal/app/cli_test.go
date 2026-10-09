@@ -57,6 +57,23 @@ func TestParsePublicCommands(t *testing.T) {
 	}
 }
 
+func TestParseScenarioRun(t *testing.T) {
+	opts, err := parseArgs("vcpe", []string{"scenario", "run", "--name", "mesh-roaming", "--scenario", "crossover"})
+	if err != nil || opts.Command != "scenario" || opts.Name != "mesh-roaming" || opts.Scenario != "crossover" || len(opts.CommandArgs) != 1 || opts.CommandArgs[0] != "run" {
+		t.Fatalf("scenario invocation = %+v, error = %v", opts, err)
+	}
+	for _, args := range [][]string{
+		{"scenario", "run", "--name", "mesh-roaming"},
+		{"scenario", "run", "--scenario", "crossover"},
+		{"scenario", "run", "--name", "mesh-roaming", "--scenario", "crossover", "--manifest", tempManifest(t)},
+		{"scenario", "run", "extra", "--name", "mesh-roaming", "--scenario", "crossover"},
+	} {
+		if _, err := parseArgs("vcpe", args); err == nil {
+			t.Fatalf("accepted invalid scenario invocation %v", args)
+		}
+	}
+}
+
 func TestParseDiagnose(t *testing.T) {
 	opts, err := parseArgs("vcpe", []string{"diagnose", "--name", "edge", "--from", "gateway", "--to", "webpa", "--client-service", "config", "--replica", "1", "--json"})
 	if err != nil {

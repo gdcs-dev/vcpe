@@ -1,6 +1,6 @@
 Usage: vcpe up --manifest <path> [flags]
 
-Reconciles networks, images, IPAM allocation, and compose lifecycle in a single journaled operation. Alias: apply
+Reconciles networks, images, IPAM allocation, and compose lifecycle in a single journaled operation. Wireless personal credentials are resolved from manifest env/file secret references; never pass credential values as command arguments. Alias: apply
 
 Required flags:
   --manifest <path>       Path to deployment manifest YAML

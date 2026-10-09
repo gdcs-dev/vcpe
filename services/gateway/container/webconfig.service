@@ -1,0 +1,20 @@
+[Unit]
+Description=Gateway WebConfig client
+After=rbus.service rbus-elements.service
+Requires=rbus.service rbus-elements.service
+
+[Service]
+Type=simple
+# rbus-elements is Type=simple, so After= only orders process start, not readiness;
+# wait for its PSM/data-element registration marker to avoid the startup race.
+ExecStartPre=/bin/sh -c 'for i in $(seq 1 60); do [ -f "${RBUS_ELEMENTS_READY_PATH:-/tmp/pam_initialized}" ] && exit 0; sleep 0.5; done; echo "rbus-elements not ready after 30s" >&2; exit 1'
+# /usr/bin/webconfig reads its subdoc map from /tmp/webconfig.properties (not
+# /etc/), and /tmp is not guaranteed to survive a container restart; refresh
+# it from the build-time copy on every start.
+ExecStartPre=/bin/cp /etc/webconfig.properties /tmp/webconfig.properties
+ExecStart=/usr/bin/webconfig
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

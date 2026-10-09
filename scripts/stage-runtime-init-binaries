@@ -53,12 +53,12 @@ By default builds for Linux and auto-detects the target architecture. Override w
     TARGET_GOOS=<goos> TARGET_GOARCH=<goarch>
 
 If no services are provided, stages all known services.
-Known services: bng event-sink gateway oktopus routerd webpa xb10 client
+Known services: bng event-sink gateway oktopus webconfig webpa xb10 client
 EOF
 }
 
-runtime_init_services=(bng event-sink gateway routerd webpa xb10 client)
-health_services=(bng event-sink gateway oktopus routerd webpa xb10)
+runtime_init_services=(bng event-sink gateway webpa xb10 client)
+health_services=(bng event-sink gateway oktopus webconfig webpa xb10)
 
 is_known_service() {
     local name=$1

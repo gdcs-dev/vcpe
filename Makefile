@@ -53,8 +53,17 @@ logs-webpa:
 
 release-gate:
 	cd controlplane && go test ./...
+	cd extensions/vcpe-visual-editor && npm test -- --run && npm run build
 	bash services/bng/assets/dhcpd-notify_test.sh
+	bash tests/smoke/bng-management-dns.sh
 	bash tests/smoke/cross-network-device-dns.sh
+	bash tests/smoke/controlplane-wireless-fake-manager.sh
+	bash tests/smoke/gateway-wireless-image-content.sh
+	bash tests/smoke/gateway-wireless-entrypoint.sh
+	bash tests/smoke/gateway-hostapd-wrapper.sh
+	bash tests/smoke/wireless-client-bootstrap.sh
+	bash tests/smoke/wireless-static-checks.sh
+	bash tests/smoke/controlplane-mesh-roaming-machine.sh
 
 build-extension:
 	cd extensions/vcpe-visual-editor && npm install && npm run build && npm run package

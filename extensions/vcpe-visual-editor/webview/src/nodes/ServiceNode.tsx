@@ -1,6 +1,7 @@
 import React from 'react';
 import { Handle, Position, NodeProps } from '@xyflow/react';
 import { roleColor } from '../utils/roleColor';
+import type { Radio } from '../yaml/parse';
 
 export interface NetworkChip {
   role: string;
@@ -19,6 +20,7 @@ export interface ServiceNodeData {
   type: string;
   replicas: number;
   items: ServiceItem[];  // interfaces and bridge groups sorted together
+  radios: Radio[];
 }
 
 /**
@@ -64,13 +66,13 @@ export function ServiceNode({ data, selected }: NodeProps<ServiceNodeData>) {
         style={{ width: 8, height: 8, background: '#666', left: '65%' }} />
 
       {/* Header */}
-      <div style={{ padding: '6px 10px', borderBottom: data.items.length ? '1px solid #2a2a2a' : undefined }}>
+      <div style={{ padding: '6px 10px', borderBottom: data.items.length || data.radios.length ? '1px solid #2a2a2a' : undefined }}>
         <div style={{ fontWeight: 700, fontSize: 13 }}>{data.name}</div>
         <div style={{ fontSize: 10, color: '#888' }}>{data.type} · ×{data.replicas}</div>
       </div>
 
       {/* Placeholder row shown when the service has no interfaces yet. */}
-      {data.items.length === 0 && (
+      {data.items.length === 0 && data.radios.length === 0 && (
         <div style={{
           position: 'relative', display: 'flex', alignItems: 'center',
           padding: '4px 28px 4px 10px', gap: 6,
@@ -146,6 +148,17 @@ export function ServiceNode({ data, selected }: NodeProps<ServiceNodeData>) {
           </React.Fragment>
         );
       })}
+      {data.radios.map(radio => <div key={radio.name} style={{ borderTop: '1px solid #333', fontSize: 11 }}>
+        <div style={{ padding: '5px 10px', color: '#b4d2ac' }}>{radio.name} · {radio.medium} · {radio.mode}</div>
+        {radio.mode === 'station' ? <div style={{ position: 'relative', padding: '3px 28px', color: '#bbb' }}>
+          <Handle type="source" position={Position.Left} id={`station-${radio.name}`} style={{ left: 4, width: 10, height: 10, background: '#76ae80' }} />
+          {radio.network}
+        </div> : radio.vaps?.map(vap => <div key={vap.slot} style={{ position: 'relative', padding: '3px 28px', color: '#bbb' }}>
+          <Handle type="source" position={Position.Right} id={`vap-${radio.name}-${vap.slot}`}
+            style={{ right: 4, width: 10, height: 10, background: '#76ae80' }} />
+          {vap.slot} · {vap.network} · {vap.bridge}
+        </div>)}
+      </div>)}
     </div>
   );
 }

@@ -13,7 +13,7 @@ import (
 // vcpe-healthd binary under services/<name>/container/platforms/<os>-<arch>/.
 var runtimeInitServices = map[string]bool{
 	"bng": true, "event-sink": true, "gateway": true, "oktopus": true,
-	"routerd": true, "webconfig": true, "webpa": true, "xb10": true, "client": true,
+	"webconfig": true, "webpa": true, "xb10": true, "client": true,
 }
 
 // ServiceNameFromContext derives the service name from a build context path

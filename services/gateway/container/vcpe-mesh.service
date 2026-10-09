@@ -1,0 +1,16 @@
+[Unit]
+Description=vCPE Gateway mesh backhaul
+After=network.target
+ConditionPathExists=/etc/vcpe/gateway-network-ready
+ConditionPathExistsGlob=/etc/vcpe/mesh/*.conf
+StartLimitIntervalSec=120
+StartLimitBurst=3
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/vcpe-mesh
+Restart=on-failure
+RestartSec=2s
+
+[Install]
+WantedBy=multi-user.target

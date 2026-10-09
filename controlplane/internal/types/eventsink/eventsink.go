@@ -84,7 +84,7 @@ func renderInstance(_ context.Context, input render.Input, cfg Config) (render.R
 	svc, networks := servicetemplate.BuildComposeService(input, instance, alwaysPinAttachment)
 	svc["privileged"] = true
 	svc["cap_add"] = []string{"NET_ADMIN", "NET_RAW"}
-	instanceName := fmt.Sprintf("%s-%d", input.Service.Name, instance.Index+1)
+	instanceName := instance.ComposeServiceName(input.Service.Name)
 	ports := append([]string(nil), input.Service.Ports...)
 	if len(ports) > 0 {
 		svc["ports"] = ports

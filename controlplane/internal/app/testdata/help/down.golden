@@ -1,6 +1,6 @@
 Usage: vcpe down [flags]
 
-Stops compose services and releases all IPAM leases for the named deployment. Alias: destroy (destroy also requires --force).
+Stops compose services, removes their protected wireless credential files, and releases all IPAM leases for the named deployment. Credentials are removed only after consumers stop. Alias: destroy (destroy also requires --force).
 
 Optional flags:
   --name <deployment>     Name of the deployment to tear down (metadata.name from the manifest)

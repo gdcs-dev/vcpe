@@ -9,6 +9,7 @@ touch /var/log/bng/services.log
 touch /var/lib/dhcp/dhcpd.leases /var/lib/dhcp/dhcpd6.leases
 
 dnsmasq --keep-in-foreground --conf-file=/etc/dnsmasq.conf &
+/usr/local/bin/management-dns.sh &
 apachectl start
 mosquitto -d
 ntpd -g -u ntp:ntp || true

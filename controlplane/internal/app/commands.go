@@ -9,9 +9,12 @@ import (
 
 	"github.com/gdcs-dev/vcpe/controlplane/internal/app/wizard"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/daemon"
+	"github.com/gdcs-dev/vcpe/controlplane/internal/hwsim"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/manifest"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/persist"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/planner"
+	"github.com/gdcs-dev/vcpe/controlplane/internal/secrets"
+	"github.com/gdcs-dev/vcpe/controlplane/internal/state"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/typeregistry"
 	"gopkg.in/yaml.v3"
 )
@@ -268,6 +271,12 @@ func runList(opts Options) (daemon.CommandResponse, error) {
 // selected automatically. If multiple deployments exist the names are listed and
 // the user is asked to re-run with --name.
 func runDown(opts Options) (daemon.CommandResponse, error) {
+	lock, err := state.AcquireWriterLock(opts.StateRoot)
+	if err != nil {
+		return daemon.CommandResponse{}, err
+	}
+	defer lock.Release()
+
 	ps, err := persist.Open(opts.StateRoot)
 	if err != nil {
 		return daemon.CommandResponse{}, err
@@ -315,24 +324,72 @@ func runDown(opts Options) (daemon.CommandResponse, error) {
 	if err != nil {
 		return daemon.CommandResponse{}, err
 	}
+	var previous manifest.Document
+	if raw, exists, err := ps.LatestDesiredSnapshot(opts.Name); err != nil {
+		return daemon.CommandResponse{}, err
+	} else if exists {
+		if err := yaml.Unmarshal(raw, &previous); err != nil {
+			return daemon.CommandResponse{}, fmt.Errorf("decode deployment RF snapshot %s: %w", opts.Name, err)
+		}
+	}
 
 	opID, err := ps.StartOperation(opts.Command, "")
 	if err != nil {
 		return daemon.CommandResponse{}, err
 	}
 
-	// Tear down containers first, then networks, then clear leases so state
-	// reflects reality in dependency order.
+	// Tear down containers first so their PHYs return to the machine namespace.
 	if !skipRuntime() {
 		if err := teardownComposeLifecycle(context.Background(), opts.StateRoot, opts.Name, serviceNames); err != nil {
 			_ = ps.FinishOperation(opID, "failed", err.Error())
 			return daemon.CommandResponse{}, err
 		}
+		if err := secrets.RemoveDeploymentCredentials(opts.StateRoot, opts.Name); err != nil {
+			_ = ps.FinishOperation(opID, "failed", err.Error())
+			return daemon.CommandResponse{}, err
+		}
+		radios, err := ps.ListWirelessRadios(opts.Name)
+		if err != nil {
+			_ = ps.FinishOperation(opID, "failed", err.Error())
+			return daemon.CommandResponse{}, err
+		}
+		if len(radios) > 0 {
+			manager, err := newWirelessManager(context.Background())
+			if err != nil {
+				_ = ps.FinishOperation(opID, "failed", err.Error())
+				return daemon.CommandResponse{}, err
+			}
+			if err := releaseDeploymentRadios(context.Background(), ps, opts.Name, manager); err != nil {
+				_ = ps.FinishOperation(opID, "failed", err.Error())
+				return daemon.CommandResponse{}, err
+			}
+		}
 		// Remove Podman networks after all containers are stopped. Failures are
 		// best-effort — a warning is logged and teardown continues.
 		teardownNetworks(context.Background(), ps, opts.Name, newNetworkProvisioner())
+	} else if err := secrets.RemoveDeploymentCredentials(opts.StateRoot, opts.Name); err != nil {
+		_ = ps.FinishOperation(opID, "failed", err.Error())
+		return daemon.CommandResponse{}, err
+	}
+	if !skipRuntime() {
+		plans, err := rfBaselinePlansAfterDown(ps, opts.Name)
+		if err == nil {
+			err = reconcileRFAfterDown(context.Background(), plans, len(previous.Spec.WirelessScenarios) > 0, newRFBaselineInstaller(), newHWSIMClient)
+		}
+		if err != nil {
+			_ = ps.FinishOperation(opID, "failed", err.Error())
+			return daemon.CommandResponse{}, fmt.Errorf("reconcile RF after down %s: %w", opts.Name, err)
+		}
 	}
 
+	if err := ps.DeleteWirelessRadios(opts.Name); err != nil {
+		_ = ps.FinishOperation(opID, "failed", err.Error())
+		return daemon.CommandResponse{}, err
+	}
+	if err := ps.ReleaseWirelessGroup(opts.Name); err != nil {
+		_ = ps.FinishOperation(opID, "failed", err.Error())
+		return daemon.CommandResponse{}, err
+	}
 	if err := ps.ReplaceCustomerLeases(opts.Name, nil); err != nil {
 		_ = ps.FinishOperation(opID, "failed", err.Error())
 		return daemon.CommandResponse{}, err
@@ -343,6 +400,7 @@ func runDown(opts Options) (daemon.CommandResponse, error) {
 	}
 	// Clear persisted replica counts so a future apply starts fresh.
 	_ = ps.DeleteReplicaCounts(opts.Name)
+	_ = ps.DeletePendingCredentialRecreate(opts.Name)
 	if err := ps.DeleteHealthEndpoints(opts.Name); err != nil {
 		_ = ps.FinishOperation(opID, "failed", err.Error())
 		return daemon.CommandResponse{}, err
@@ -351,6 +409,23 @@ func runDown(opts Options) (daemon.CommandResponse, error) {
 		return daemon.CommandResponse{}, err
 	}
 	return daemon.CommandResponse{Message: fmt.Sprintf("tore down deployment %q (operation %s)", opts.Name, opID)}, nil
+}
+
+func releaseDeploymentRadios(ctx context.Context, store *persist.Store, deployment string, manager wirelessRadioManager) error {
+	if store == nil || manager == nil {
+		return fmt.Errorf("wireless release requires a store and manager")
+	}
+	radios, err := store.ListWirelessRadios(deployment)
+	if err != nil {
+		return err
+	}
+	for _, radio := range radios {
+		if _, err := manager.Release(ctx, radio.ManagerName); err != nil && !hwsim.IsErrorCode(err, "not_managed") {
+			_ = store.UpdateWirelessRadioStatus(deployment, radio.ManagerName, "release-failed: "+err.Error())
+			return fmt.Errorf("release wireless radio %s: %w", radio.ManagerName, err)
+		}
+	}
+	return nil
 }
 
 // serviceNamesFromSnapshot returns the ordered service names from the latest

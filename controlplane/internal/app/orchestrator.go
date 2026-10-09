@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -18,6 +19,7 @@ import (
 	"github.com/gdcs-dev/vcpe/controlplane/internal/compose"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/daemon"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/hostnet"
+	"github.com/gdcs-dev/vcpe/controlplane/internal/hwsim"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/image"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/ipam"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/manifest"
@@ -26,6 +28,7 @@ import (
 	"github.com/gdcs-dev/vcpe/controlplane/internal/plan"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/planner"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/render"
+	"github.com/gdcs-dev/vcpe/controlplane/internal/rfmedium"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/runtimeinit/contract"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/secrets"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/state"
@@ -59,6 +62,11 @@ func runApply(opts Options) (daemon.CommandResponse, error) {
 	if err := Preflight(doc); err != nil {
 		return daemon.CommandResponse{}, err
 	}
+	if !skipRuntime() {
+		if err := requirePinnedMeshGatewayImages(doc); err != nil {
+			return daemon.CommandResponse{}, err
+		}
+	}
 
 	lock, err := state.AcquireWriterLock(opts.StateRoot)
 	if err != nil {
@@ -84,7 +92,14 @@ func runApply(opts Options) (daemon.CommandResponse, error) {
 	if err != nil {
 		return daemon.CommandResponse{}, err
 	}
-
+	var previousDesired manifest.Document
+	previousDesiredRaw, hasPreviousDesired, err := ps.LatestDesiredSnapshot(name)
+	if err != nil {
+		return daemon.CommandResponse{}, err
+	}
+	if hasPreviousDesired {
+		_ = yaml.Unmarshal(previousDesiredRaw, &previousDesired)
+	}
 	// Guard: disruptive changes (CIDR modifications) are blocked unless the
 	// operator explicitly opts in with --allow-disruptive.
 	disruptive, reasons, err := classifyDisruptive(ps, doc)
@@ -105,9 +120,19 @@ func runApply(opts Options) (daemon.CommandResponse, error) {
 		_ = ps.FinishOperation(opID, "failed", "secret resolution failed")
 		return daemon.CommandResponse{}, err
 	}
+	if err := secrets.ValidateWirelessPassphrases(doc.Spec.WirelessNetworks, secretValues); err != nil {
+		_ = ps.FinishOperation(opID, "failed", "wireless credential validation failed")
+		return daemon.CommandResponse{}, err
+	}
+	if err := secrets.ValidateMeshPassphrases(doc.Spec.Services, secretValues); err != nil {
+		_ = ps.FinishOperation(opID, "failed", "mesh credential validation failed")
+		return daemon.CommandResponse{}, err
+	}
 
 	ctx := context.Background()
 	allocated := false
+	var rollbackWireless func() error
+	var obsoleteRadios []persist.WirelessRadio
 	// livePodmanState becomes true once the compose-lifecycle phase begins, the
 	// point after which a failure may leave real containers/networks running.
 	// From that point on, fail() must not erase persisted state (IPAM leases,
@@ -116,11 +141,25 @@ func runApply(opts Options) (daemon.CommandResponse, error) {
 	// tear down. Failures before that point are rolled back as before, since
 	// nothing has touched Podman yet.
 	livePodmanState := false
+	createdCredentialNetworks := []string{}
+	createdCredentialMeshes := []string{}
 	fail := func(phase string, cause error) (daemon.CommandResponse, error) {
+		cause = secrets.RedactError(cause, secretValues)
 		_ = ps.RecordPhase(opID, phase, "failed", cause.Error())
 		if livePodmanState {
 			_ = ps.RecordPhase(opID, "rollback", "skipped", "compose lifecycle may have partially applied; state preserved so `vcpe down --name "+name+"` can tear it down")
 		} else if allocated {
+			if cleanupErr := cleanupCreatedWirelessCredentials(opts.StateRoot, name, createdCredentialNetworks); cleanupErr != nil {
+				cause = errors.Join(cause, fmt.Errorf("rollback wireless credentials: %w", cleanupErr))
+			}
+			if cleanupErr := cleanupCreatedMeshCredentials(opts.StateRoot, name, createdCredentialMeshes); cleanupErr != nil {
+				cause = errors.Join(cause, fmt.Errorf("rollback mesh credentials: %w", cleanupErr))
+			}
+			if rollbackWireless != nil {
+				if rollbackErr := rollbackWireless(); rollbackErr != nil {
+					cause = errors.Join(cause, fmt.Errorf("rollback wireless ownership: %w", rollbackErr))
+				}
+			}
 			rollback(ps, opID, name)
 		}
 		_ = ps.FinishOperation(opID, "failed", cause.Error())
@@ -151,6 +190,14 @@ func runApply(opts Options) (daemon.CommandResponse, error) {
 	if _, err := imgMgr.EnsureForApply(ctx, doc); err != nil && !skipRuntime() {
 		return fail("images", err)
 	}
+	if !skipRuntime() {
+		if err := verifyMeshGatewayImages(ctx, doc, newMeshGatewayImageVerifier()); err != nil {
+			return fail("images", err)
+		}
+		if err := preflightWirelessForApply(ctx, ps, doc, resolved, newHWSIMClient, newRFBaselineInstaller()); err != nil {
+			return fail("preflight", err)
+		}
+	}
 	_ = ps.RecordPhase(opID, "images", "succeeded", "image lifecycle resolved")
 
 	// Phase: IPAM allocation. This is the first persistent mutation; failures
@@ -164,6 +211,10 @@ func runApply(opts Options) (daemon.CommandResponse, error) {
 	}
 	allocated = true
 	if err := ipam.AllocateInterfaces(&resolved); err != nil {
+		return fail("allocation", err)
+	}
+	rollbackWireless, obsoleteRadios, err = prepareWirelessOwnership(ps, &resolved)
+	if err != nil {
 		return fail("allocation", err)
 	}
 	if failPhase("allocation") {
@@ -189,7 +240,7 @@ func runApply(opts Options) (daemon.CommandResponse, error) {
 	if failPhase("render") {
 		return fail("render", fmt.Errorf("VCPE_FAIL_PHASE=render"))
 	}
-	if err := renderAll(ctx, opts.StateRoot, opID, resolved, secretValues, healthPorts); err != nil {
+	if err := renderAll(ctx, opts.StateRoot, opID, resolved, healthPorts); err != nil {
 		return fail("render", err)
 	}
 	_ = ps.RecordPhase(opID, "render", "succeeded", "typed artifacts rendered")
@@ -210,6 +261,30 @@ func runApply(opts Options) (daemon.CommandResponse, error) {
 	}
 	_ = ps.RecordPhase(opID, "runtime-init-verify", "succeeded", "startup contracts verified")
 
+	credentialChanges, err := prepareWirelessCredentials(opts.StateRoot, previousDesired, hasPreviousDesired, doc, resolved, secretValues)
+	createdCredentialNetworks = credentialChanges.CreatedNetworks
+	createdCredentialMeshes = credentialChanges.CreatedMeshIDs
+	if err != nil {
+		return fail("credentials", err)
+	}
+	if failPhase("credentials") {
+		return fail("credentials", fmt.Errorf("VCPE_FAIL_PHASE=credentials"))
+	}
+	pendingServices, err := ps.PendingCredentialRecreate(name)
+	if err != nil {
+		return fail("credentials", err)
+	}
+	for _, service := range pendingServices {
+		credentialChanges.ForceRecreate[service] = true
+	}
+	forcedServices := sortedTrueKeys(credentialChanges.ForceRecreate)
+	if len(forcedServices) > 0 {
+		if err := ps.SetPendingCredentialRecreate(name, forcedServices); err != nil {
+			return fail("credentials", err)
+		}
+	}
+	_ = ps.RecordPhase(opID, "credentials", "succeeded", fmt.Sprintf("%d service(s) require credential recreation", len(forcedServices)))
+
 	// Phase: compose lifecycle. Beyond this point a failure may leave real
 	// containers/networks created, so fail() stops rolling back persisted state.
 	livePodmanState = true
@@ -217,11 +292,53 @@ func runApply(opts Options) (daemon.CommandResponse, error) {
 		return fail("lifecycle", fmt.Errorf("VCPE_FAIL_PHASE=lifecycle"))
 	}
 	if !skipRuntime() {
-		if err := applyComposeLifecycle(ctx, opts.StateRoot, opID, resolved); err != nil {
+		if err := applyComposeLifecycle(ctx, opts.StateRoot, opID, resolved, credentialChanges.ForceRecreate); err != nil {
 			return fail("lifecycle", err)
 		}
 	}
 	_ = ps.RecordPhase(opID, "lifecycle", "succeeded", "compose lifecycle applied")
+	if err := secrets.RemoveObsoleteWirelessCredentials(opts.StateRoot, name, desiredPersonalWirelessNetworks(doc)); err != nil {
+		return fail("credentials-cleanup", err)
+	}
+	if err := secrets.RemoveObsoleteMeshCredentials(opts.StateRoot, name, desiredMeshIDs(doc)); err != nil {
+		return fail("credentials-cleanup", err)
+	}
+
+	// Phase: late-attach wireless radios after target containers are running.
+	if failPhase("wireless") {
+		return fail("wireless", fmt.Errorf("VCPE_FAIL_PHASE=wireless"))
+	}
+	if !skipRuntime() && (radioCount(resolved) > 0 || len(obsoleteRadios) > 0) {
+		client, err := newWirelessManager(ctx)
+		if err != nil {
+			return fail("wireless", err)
+		}
+		if err := reconcileWireless(ctx, ps, resolved, obsoleteRadios, client, newContainerPIDInspector()); err != nil {
+			return fail("wireless", err)
+		}
+		if err := garbageCollectWireless(ctx, ps, client); err != nil {
+			return fail("wireless", err)
+		}
+	}
+	_ = ps.RecordPhase(opID, "wireless", "succeeded", fmt.Sprintf("%d radio(s) reconciled", radioCount(resolved)))
+	if !skipRuntime() {
+		inspector := newWirelessReadinessInspector()
+		if err := waitForGatewayVAPs(ctx, resolved, inspector); err != nil {
+			return fail("wireless-vaps", err)
+		}
+		_ = ps.RecordPhase(opID, "wireless-vaps", "succeeded", "all declared VAPs are ready")
+		if err := waitForGatewayMeshes(ctx, resolved, inspector); err != nil {
+			return fail("wireless-mesh", err)
+		}
+		_ = ps.RecordPhase(opID, "wireless-mesh", "succeeded", "all declared mesh peers are ready")
+		if err := waitForWirelessAuthentication(ctx, resolved, inspector); err != nil {
+			return fail("wireless-authentication", err)
+		}
+		if err := waitForRemoteMeshDHCP(ctx, resolved, inspector); err != nil {
+			return fail("wireless-mesh-dhcp", err)
+		}
+	}
+	_ = ps.RecordPhase(opID, "wireless-authentication", "succeeded", "personal wireless stations are ready")
 
 	// Persist the applied replica count per service so future applies can
 	// compute a delta instead of unconditionally re-deploying all replicas.
@@ -230,6 +347,9 @@ func runApply(opts Options) (daemon.CommandResponse, error) {
 			return fail("record", fmt.Errorf("persist replica count for %s: %w", svc.Name, err))
 		}
 	}
+	if err := ps.DeletePendingCredentialRecreate(name); err != nil {
+		return fail("record", err)
+	}
 
 	if err := ps.FinishOperation(opID, "succeeded", "apply converged"); err != nil {
 		return daemon.CommandResponse{}, err
@@ -237,6 +357,17 @@ func runApply(opts Options) (daemon.CommandResponse, error) {
 	observability.Log(observability.Event{OperationID: opID, CustomerID: name, Phase: "operation", Result: "succeeded", Message: "apply converged"})
 
 	return daemon.CommandResponse{Message: fmt.Sprintf("applied deployment %q (operation %s)", name, opID)}, nil
+}
+
+func sortedTrueKeys(values map[string]bool) []string {
+	keys := []string{}
+	for key, value := range values {
+		if value {
+			keys = append(keys, key)
+		}
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // rollback reverses the allocation phase. The journal/operation semantics are
@@ -340,7 +471,7 @@ func hostIntents(dep plan.Deployment) []hostnet.Intent {
 // renderAll dispatches each service to its registered renderer, writes every
 // artifact to <opArtifactsDir>/runtime/<serviceName>/<key>, and mirrors a copy
 // to the deployment artifacts dir so the env files survive beyond the operation.
-func renderAll(ctx context.Context, stateRoot, opID string, dep plan.Deployment, secretValues map[string]string, healthPorts map[string]map[int]int) error {
+func renderAll(ctx context.Context, stateRoot, opID string, dep plan.Deployment, healthPorts map[string]map[int]int) error {
 	opDir := state.OperationArtifactsDir(stateRoot, opID)
 	depDir := state.DeploymentArtifactsDir(stateRoot, dep.Name)
 	for _, svc := range dep.Services {
@@ -351,7 +482,12 @@ func renderAll(ctx context.Context, stateRoot, opID string, dep plan.Deployment,
 		if !ok {
 			return fmt.Errorf("service %q has unregistered type %q", svc.Name, svc.Type)
 		}
-		result, err := st.Renderer().Render(ctx, render.Input{Deployment: dep, Service: svc, HealthPorts: healthPorts[svc.Name], Secrets: secretValues})
+		result, err := st.Renderer().Render(ctx, render.Input{
+			Deployment:              dep,
+			Service:                 svc,
+			HealthPorts:             healthPorts[svc.Name],
+			WirelessCredentialFiles: wirelessCredentialFiles(stateRoot, dep, svc),
+		})
 		if err != nil {
 			return fmt.Errorf("render service %q: %w", svc.Name, err)
 		}
@@ -384,6 +520,39 @@ func renderAll(ctx context.Context, stateRoot, opID string, dep plan.Deployment,
 		}
 	}
 	return nil
+}
+
+func wirelessCredentialFiles(stateRoot string, dep plan.Deployment, svc plan.Service) map[string]render.SecretFileHandle {
+	handles := map[string]render.SecretFileHandle{}
+	addProfile := func(profileName string) {
+		if _, exists := handles[profileName]; exists {
+			return
+		}
+		wireless := dep.WirelessNetwork(profileName)
+		if wireless == nil || !isPersonalWireless(wireless.Security) {
+			return
+		}
+		handles[profileName] = render.SecretFileHandle{
+			HostPath:      secrets.WirelessCredentialPath(stateRoot, dep.Name, profileName),
+			ContainerPath: secrets.WirelessCredentialContainerPath(profileName),
+		}
+	}
+	for _, instance := range svc.Instances {
+		for _, radio := range instance.Radios {
+			if radio.Mesh != nil {
+				meshID := radio.Mesh.ID
+				handles["mesh:"+meshID] = render.SecretFileHandle{
+					HostPath:      secrets.MeshCredentialPath(stateRoot, dep.Name, meshID),
+					ContainerPath: secrets.MeshCredentialContainerPath(meshID),
+				}
+			}
+			addProfile(radio.Network)
+			for _, vap := range radio.VAPs {
+				addProfile(vap.Network)
+			}
+		}
+	}
+	return handles
 }
 
 func healthNetworkName(deployment string) string {
@@ -467,7 +636,7 @@ func stageGenericHealthd(opDir, depDir, service string) error {
 	if err != nil {
 		return err
 	}
-	source := filepath.Join(repoRoot, "services", "bng", "container", "vcpe-healthd")
+	source := filepath.Join(repoRoot, "services", "bng", "container", "platforms", "linux-"+runtime.GOARCH, "vcpe-healthd")
 	binary, err := os.ReadFile(source)
 	if err != nil {
 		return fmt.Errorf("read staged vcpe-healthd: %w", err)
@@ -485,7 +654,7 @@ func stageGenericHealthd(opDir, depDir, service string) error {
 // dependency order. Curated types (bng, gateway, webpa) use the checked-in
 // services/<type>/compose.yaml; services that render their own compose.yaml
 // (generic-container) use the artifact from the render phase.
-func applyComposeLifecycle(ctx context.Context, stateRoot, opID string, dep plan.Deployment) error {
+func applyComposeLifecycle(ctx context.Context, stateRoot, opID string, dep plan.Deployment, forceRecreate map[string]bool) error {
 	repoRoot, err := resolveRepoRoot()
 	if err != nil {
 		return err
@@ -554,12 +723,13 @@ func applyComposeLifecycle(ctx context.Context, stateRoot, opID string, dep plan
 		usesIndexedNames := !isCurated
 
 		req := compose.Request{
-			ComposeGroup: svc.Type,
-			ProjectName:  dep.Name + "-" + svc.Name,
-			WorkingDir:   repoRoot,
-			ComposeFile:  composeFile,
-			EnvFile:      envFile,
-			Timeout:      2 * time.Minute,
+			ComposeGroup:  svc.Type,
+			ProjectName:   dep.Name + "-" + svc.Name,
+			WorkingDir:    repoRoot,
+			ComposeFile:   composeFile,
+			EnvFile:       envFile,
+			Timeout:       2 * time.Minute,
+			ForceRecreate: forceRecreate[svc.Name],
 			// Only indexed-naming types (generic-container) need --remove-orphans
 			// to clean up scaled-down replicas. Other types use plain service
 			// names and orphan removal is handled by removeIndexedOrphans above.
@@ -574,26 +744,19 @@ func applyComposeLifecycle(ctx context.Context, stateRoot, opID string, dep plan
 		}
 
 		// Delta-aware compose up:
-		//   - If nothing changed (empty delta with tracked previous state), skip.
 		//   - If only scale-up (no removals), pass new service names so compose
 		//     only starts the new replicas; existing ones are untouched.
-		//   - If scale-down (or first deploy), run compose up with
+		//   - If unchanged, scale-down, or first deploy, run compose up with
 		//     --remove-orphans to remove excess replicas and start missing ones.
+		//     Compose leaves already-running unchanged containers in place.
 		delta := svc.Delta
-		// noChange is true only when the delta is empty AND we have a prior
-		// apply baseline (PreviousReplicaCount > 0). An empty delta with
-		// PreviousReplicaCount=0 means either a first deploy or a plan built
-		// without delta tracking — always run compose in that case.
-		noChange := len(delta.ToAdd) == 0 && len(delta.ToRemove) == 0 &&
-			(svc.PreviousReplicaCount > 0 || svc.Replicas == 0)
-		healthTransport, err := serviceHealthTransportRequired(svc)
-		if err != nil {
-			return err
-		}
-		if noChange && !healthTransport {
-			continue // nothing to do for this service
-		}
-		if len(delta.ToRemove) == 0 && len(delta.ToAdd) > 0 && usesIndexedNames {
+		if req.ForceRecreate && usesIndexedNames {
+			replicas := make([]string, 0, len(svc.Instances))
+			for _, instance := range svc.Instances {
+				replicas = append(replicas, instance.ComposeServiceName(svc.Name))
+			}
+			req.Services = replicas
+		} else if len(delta.ToRemove) == 0 && len(delta.ToAdd) > 0 && usesIndexedNames {
 			// Scale-up only for indexed-naming types (generic-container): pass
 			// just the new services so existing replicas are untouched.
 			newServices := make([]string, 0, len(delta.ToAdd))
@@ -686,6 +849,7 @@ func teardownComposeLifecycle(ctx context.Context, stateRoot, depName string, se
 	}
 	adapter := newComposeRunner()
 	depDir := state.DeploymentArtifactsDir(stateRoot, depName)
+	var teardownErrors []error
 	// Tear down in reverse order.
 	for i := len(serviceNames) - 1; i >= 0; i-- {
 		svcName := serviceNames[i]
@@ -693,21 +857,21 @@ func teardownComposeLifecycle(ctx context.Context, stateRoot, depName string, se
 		generated := filepath.Join(depDir, "runtime", svcName, "compose.yaml")
 		composeFile := generated
 		if _, statErr := os.Stat(generated); errors.Is(statErr, os.ErrNotExist) {
-			// We don't know the type anymore from just the name; try the env file
-			// neighbour to infer the curated path, or skip gracefully.
-			if _, statErr2 := os.Stat(envFile); statErr2 != nil {
-				continue
-			}
-			// Infer compose file by scanning curated services dirs.
-			for _, candidate := range []string{"bng", "event-sink", "gateway", "webpa", "routerd", "xb10"} {
-				cf := filepath.Join(repoRoot, "services", candidate, "compose.yaml")
-				if _, statErr3 := os.Stat(cf); statErr3 == nil {
-					// Match service name suffix against candidate type.
-					if svcName == candidate || len(svcName) > len(candidate) {
+			if _, envErr := os.Stat(envFile); envErr == nil {
+				for _, candidate := range []string{"bng", "event-sink", "gateway", "webpa", "xb10"} {
+					if svcName != candidate && !strings.HasPrefix(svcName, candidate+"-") {
+						continue
+					}
+					cf := filepath.Join(repoRoot, "services", candidate, "compose.yaml")
+					if _, err := os.Stat(cf); err == nil {
 						composeFile = cf
 						break
 					}
 				}
+			}
+			if composeFile == generated {
+				teardownErrors = append(teardownErrors, fmt.Errorf("missing compose.yaml for service %q: recover %s from saved deployment artifacts or run down with the previous version", svcName, generated))
+				continue
 			}
 		}
 		req := compose.Request{
@@ -718,11 +882,11 @@ func teardownComposeLifecycle(ctx context.Context, stateRoot, depName string, se
 			Timeout:     2 * time.Minute,
 		}
 		if _, err := adapter.Down(ctx, req); err != nil {
-			// Best-effort: log and continue so remaining services are torn down.
 			fmt.Fprintf(os.Stderr, "warn: compose down %s: %v\n", svcName, err)
+			teardownErrors = append(teardownErrors, fmt.Errorf("compose down %s: %w", svcName, err))
 		}
 	}
-	return nil
+	return errors.Join(teardownErrors...)
 }
 
 // resolveRepoRoot walks parent directories from the working directory looking
@@ -810,6 +974,440 @@ type composeLifecycleRunner interface {
 // tests can substitute stubs without a container runtime.
 var newNetworkProvisioner = func() networkProvisioner { return podman.New() }
 var newComposeRunner = func() composeLifecycleRunner { return compose.New() }
+var newMeshGatewayImageVerifier = func() meshGatewayImageVerifier { return podman.New() }
+var newRFBaselineInstaller = func() rfBaselineController { return rfmedium.NewHost() }
+var newContainerPIDInspector = func() hwsim.ContainerPIDInspector { return podman.New() }
+var newWirelessReadinessInspector = func() wirelessReadinessInspector { return podman.New() }
+var newHWSIMClient hwsim.ClientFactory = func(ctx context.Context) (*hwsim.Client, error) {
+	transport, err := hwsim.NewCommandTransport(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return hwsim.NewClient(transport), nil
+}
+var newWirelessManager = func(ctx context.Context) (wirelessRadioManager, error) {
+	return newHWSIMClient(ctx)
+}
+
+type rfBaselineInstaller interface {
+	InstallBaseline(context.Context, string) error
+}
+
+type rfBaselineController interface {
+	rfBaselineInstaller
+	ClearBaseline(context.Context) error
+}
+
+func reconcileRFAfterDown(ctx context.Context, plans []plan.Deployment, departingRF bool, controller rfBaselineController, factory hwsim.ClientFactory) error {
+	remainingRF := false
+	count, mesh := 0, false
+	for _, deployment := range plans {
+		remainingRF = remainingRF || len(deployment.WirelessScenarios) > 0
+		count += radioCount(deployment)
+		mesh = mesh || hasMeshRadios(deployment)
+	}
+	if !remainingRF && !departingRF {
+		return nil
+	}
+	if controller == nil {
+		return fmt.Errorf("RF baseline controller is not configured")
+	}
+	if !remainingRF {
+		return controller.ClearBaseline(ctx)
+	}
+	baseline, err := rfmedium.BuildBaseline(plans)
+	if err != nil {
+		return err
+	}
+	if err := controller.InstallBaseline(ctx, baseline); err != nil {
+		return fmt.Errorf("reconcile surviving RF baseline: %w", err)
+	}
+	return hwsim.PreflightRequirements(ctx, count, mesh, true, factory)
+}
+
+func preflightWirelessForApply(ctx context.Context, store *persist.Store, doc manifest.Document, deployment plan.Deployment, factory hwsim.ClientFactory, installer rfBaselineInstaller) error {
+	count := radioCount(deployment)
+	mesh := hasMeshRadios(deployment)
+	if err := hwsim.PreflightFeatures(ctx, count, mesh, factory); err != nil {
+		return err
+	}
+	plans, err := rfBaselinePlans(store, deployment)
+	if err != nil {
+		return err
+	}
+	requireRF := len(doc.Spec.WirelessScenarios) > 0
+	for _, active := range plans {
+		requireRF = requireRF || len(active.WirelessScenarios) > 0
+		if active.Name != deployment.Name {
+			count += radioCount(active)
+			mesh = mesh || hasMeshRadios(active)
+		}
+	}
+	if !requireRF {
+		return nil
+	}
+	if installer == nil {
+		return fmt.Errorf("RF baseline installer is not configured")
+	}
+	baseline, err := rfmedium.BuildBaseline(plans)
+	if err != nil {
+		return err
+	}
+	if err := installer.InstallBaseline(ctx, baseline); err != nil {
+		return fmt.Errorf("install RF baseline: %w", err)
+	}
+	return hwsim.PreflightRequirements(ctx, count, mesh, true, factory)
+}
+
+func radioCount(deployment plan.Deployment) int {
+	count := 0
+	for _, service := range deployment.Services {
+		for _, instance := range service.Instances {
+			count += len(instance.Radios)
+		}
+	}
+	return count
+}
+
+func hasMeshRadios(deployment plan.Deployment) bool {
+	for _, service := range deployment.Services {
+		for _, instance := range service.Instances {
+			for _, radio := range instance.Radios {
+				if radio.Mode == manifest.RadioModeMesh {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+func prepareWirelessOwnership(store *persist.Store, deployment *plan.Deployment) (func() error, []persist.WirelessRadio, error) {
+	if store == nil || deployment == nil {
+		return nil, nil, fmt.Errorf("wireless ownership requires a store and deployment")
+	}
+	_, hadGroup, err := store.WirelessGroup(deployment.Name)
+	if err != nil {
+		return nil, nil, err
+	}
+	previous, err := store.ListWirelessRadios(deployment.Name)
+	if err != nil {
+		return nil, nil, err
+	}
+	if radioCount(*deployment) == 0 {
+		if !hadGroup {
+			return nil, nil, nil
+		}
+		if len(previous) == 0 {
+			return nil, nil, store.ReleaseWirelessGroup(deployment.Name)
+		}
+		obsolete := append([]persist.WirelessRadio(nil), previous...)
+		sort.Slice(obsolete, func(i, j int) bool { return obsolete[i].ManagerName < obsolete[j].ManagerName })
+		if err := store.ReplaceWirelessRadios(deployment.Name, nil); err != nil {
+			return nil, nil, err
+		}
+		return func() error {
+			return store.ReplaceWirelessRadios(deployment.Name, previous)
+		}, obsolete, nil
+	}
+	group, err := store.AllocateWirelessGroup(deployment.Name)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	desired := make([]persist.WirelessRadio, 0, radioCount(*deployment))
+	for serviceIndex := range deployment.Services {
+		service := &deployment.Services[serviceIndex]
+		for instanceIndex := range service.Instances {
+			instance := &service.Instances[instanceIndex]
+			for radioIndex := range instance.Radios {
+				radio := &instance.Radios[radioIndex]
+				radio.GroupMask = group.Mask()
+				containerName := radio.ContainerName
+				if containerName == "" {
+					containerName = instance.PodmanContainerName(deployment.Name, service.Name)
+				}
+				desired = append(desired, persist.WirelessRadio{
+					Deployment:    deployment.Name,
+					Service:       service.Name,
+					Replica:       instance.Index,
+					LogicalName:   radio.Name,
+					ManagerName:   radio.ManagerName,
+					MAC:           radio.MAC,
+					Network:       radio.Network,
+					Device:        radio.Device,
+					Mode:          radio.Mode,
+					Bridge:        radio.Bridge,
+					ContainerName: containerName,
+					GroupBit:      group.Bit,
+					Status:        "planned",
+				})
+			}
+		}
+	}
+	desiredByName := make(map[string]persist.WirelessRadio, len(desired))
+	for _, radio := range desired {
+		desiredByName[radio.ManagerName] = radio
+	}
+	obsolete := make([]persist.WirelessRadio, 0)
+	for _, radio := range previous {
+		desiredRadio, exists := desiredByName[radio.ManagerName]
+		if !exists || !sameWirelessContract(radio, desiredRadio) {
+			obsolete = append(obsolete, radio)
+		}
+	}
+	sort.Slice(obsolete, func(i, j int) bool { return obsolete[i].ManagerName < obsolete[j].ManagerName })
+	if err := store.ReplaceWirelessRadios(deployment.Name, desired); err != nil {
+		if !hadGroup {
+			return nil, nil, errors.Join(err, store.ReleaseWirelessGroup(deployment.Name))
+		}
+		return nil, nil, err
+	}
+
+	if hadGroup {
+		return func() error {
+			return store.ReplaceWirelessRadios(deployment.Name, previous)
+		}, obsolete, nil
+	}
+	return func() error {
+		return errors.Join(
+			store.DeleteWirelessRadios(deployment.Name),
+			store.ReleaseWirelessGroup(deployment.Name),
+		)
+	}, obsolete, nil
+}
+
+func sameWirelessContract(left, right persist.WirelessRadio) bool {
+	return left.Deployment == right.Deployment &&
+		left.Service == right.Service &&
+		left.Replica == right.Replica &&
+		left.LogicalName == right.LogicalName &&
+		left.ManagerName == right.ManagerName &&
+		left.MAC == right.MAC &&
+		left.Network == right.Network &&
+		left.Device == right.Device &&
+		left.Mode == right.Mode &&
+		left.Bridge == right.Bridge &&
+		left.ContainerName == right.ContainerName &&
+		left.GroupBit == right.GroupBit
+}
+
+type wirelessRadioManager interface {
+	EnsureForContainer(context.Context, hwsim.ContainerPIDInspector, string, hwsim.EnsureRequest) (hwsim.EnsureResult, error)
+	List(context.Context) ([]hwsim.ListEntry, error)
+	Release(context.Context, string) (hwsim.ReleaseResult, error)
+	GC(context.Context, []string, bool) (hwsim.GCResult, error)
+}
+
+type wirelessEnsureIntent struct {
+	containerName string
+	request       hwsim.EnsureRequest
+}
+
+func reconcileWireless(ctx context.Context, store *persist.Store, deployment plan.Deployment, obsolete []persist.WirelessRadio, manager wirelessRadioManager, inspector hwsim.ContainerPIDInspector) error {
+	if store == nil || manager == nil || inspector == nil {
+		return fmt.Errorf("wireless reconciliation requires store, manager, and container inspector")
+	}
+	obsolete = append([]persist.WirelessRadio(nil), obsolete...)
+	sort.Slice(obsolete, func(i, j int) bool { return obsolete[i].ManagerName < obsolete[j].ManagerName })
+	for _, radio := range obsolete {
+		if _, err := manager.Release(ctx, radio.ManagerName); err != nil && !hwsim.IsErrorCode(err, "not_managed") {
+			return fmt.Errorf("release obsolete wireless radio %s: %w", radio.ManagerName, err)
+		}
+	}
+	intents := make([]wirelessEnsureIntent, 0, radioCount(deployment))
+	for _, service := range deployment.Services {
+		for _, instance := range service.Instances {
+			for _, radio := range instance.Radios {
+				containerName := radio.ContainerName
+				if containerName == "" {
+					containerName = instance.PodmanContainerName(deployment.Name, service.Name)
+				}
+				intents = append(intents, wirelessEnsureIntent{
+					containerName: containerName,
+					request: hwsim.EnsureRequest{
+						Name:          radio.ManagerName,
+						MAC:           radio.MAC,
+						GroupMask:     radio.GroupMask,
+						InterfaceName: radio.Device,
+						RadioType:     radio.Mode,
+					},
+				})
+			}
+		}
+	}
+	sort.Slice(intents, func(i, j int) bool {
+		return intents[i].request.Name < intents[j].request.Name
+	})
+	entries, err := manager.List(ctx)
+	if err != nil {
+		return fmt.Errorf("list wireless radios before ensure: %w", err)
+	}
+	returned := make(map[string]bool)
+	for _, entry := range entries {
+		if entry.Record.Lifecycle == "returned" {
+			returned[entry.Record.Name] = true
+		}
+	}
+	for _, intent := range intents {
+		if returned[intent.request.Name] {
+			if _, err := manager.Release(ctx, intent.request.Name); err != nil {
+				return fmt.Errorf("release returned wireless radio %s: %w", intent.request.Name, err)
+			}
+		}
+		_, err := manager.EnsureForContainer(ctx, inspector, intent.containerName, intent.request)
+		if err != nil {
+			statusErr := store.UpdateWirelessRadioStatus(deployment.Name, intent.request.Name, "failed: "+err.Error())
+			return errors.Join(fmt.Errorf("ensure wireless radio %s: %w", intent.request.Name, err), statusErr)
+		}
+		if err := store.UpdateWirelessRadioStatus(deployment.Name, intent.request.Name, "ready"); err != nil {
+			return err
+		}
+	}
+	if len(intents) == 0 && len(obsolete) > 0 {
+		if err := store.ReleaseWirelessGroup(deployment.Name); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func garbageCollectWireless(ctx context.Context, store *persist.Store, manager wirelessRadioManager) error {
+	keep, err := globalWirelessKeepSet(store)
+	if err != nil {
+		return fmt.Errorf("build global wireless keep set: %w", err)
+	}
+	if _, err := manager.GC(ctx, keep, len(keep) == 0); err != nil {
+		return fmt.Errorf("garbage-collect wireless radios: %w", err)
+	}
+	return nil
+}
+
+func rfBaselinePlans(store *persist.Store, incoming plan.Deployment) ([]plan.Deployment, error) {
+	plans, err := rfBaselinePlansAfterDown(store, incoming.Name)
+	if err != nil {
+		return nil, err
+	}
+	plans = append(plans, incoming)
+	sort.Slice(plans, func(left, right int) bool { return plans[left].Name < plans[right].Name })
+	return plans, nil
+}
+
+func rfBaselinePlansAfterDown(store *persist.Store, excluded string) ([]plan.Deployment, error) {
+	active, err := store.ListKnownDeployments()
+	if err != nil {
+		return nil, fmt.Errorf("list active RF deployments: %w", err)
+	}
+	plans := []plan.Deployment{}
+	for _, name := range active {
+		if name == excluded {
+			continue
+		}
+		raw, exists, err := store.LatestDesiredSnapshot(name)
+		if err != nil {
+			return nil, fmt.Errorf("read active RF deployment %s: %w", name, err)
+		}
+		if !exists {
+			return nil, fmt.Errorf("active RF deployment %s has no desired snapshot", name)
+		}
+		document, err := manifest.Parse(raw)
+		if err != nil {
+			return nil, fmt.Errorf("decode active RF deployment %s: %w", name, err)
+		}
+		if document.Metadata.Name != name {
+			return nil, fmt.Errorf("active RF deployment %s has mismatched snapshot name %s", name, document.Metadata.Name)
+		}
+		if err := manifest.Validate(document); err != nil {
+			return nil, fmt.Errorf("validate active RF deployment %s: %w", name, err)
+		}
+		resolved, err := planner.Build(document, nil)
+		if err != nil {
+			return nil, fmt.Errorf("plan active RF deployment %s: %w", name, err)
+		}
+		owned, err := store.ListWirelessRadios(name)
+		if err != nil {
+			return nil, fmt.Errorf("read active RF ownership %s: %w", name, err)
+		}
+		expected := make([]string, 0, radioCount(resolved))
+		for _, service := range resolved.Services {
+			for _, instance := range service.Instances {
+				for _, radio := range instance.Radios {
+					expected = append(expected, radio.ManagerName)
+				}
+			}
+		}
+		actual := make([]string, 0, len(owned))
+		for _, radio := range owned {
+			actual = append(actual, radio.ManagerName)
+		}
+		sort.Strings(expected)
+		sort.Strings(actual)
+		if strings.Join(expected, "\x00") != strings.Join(actual, "\x00") {
+			return nil, fmt.Errorf("active RF deployment %s wireless ownership does not match its desired snapshot", name)
+		}
+		plans = append(plans, resolved)
+	}
+	sort.Slice(plans, func(left, right int) bool { return plans[left].Name < plans[right].Name })
+	return plans, nil
+}
+
+func globalWirelessKeepSet(store *persist.Store) ([]string, error) {
+	if store == nil {
+		return nil, fmt.Errorf("wireless keep set requires a store")
+	}
+	deployments, err := store.ListKnownDeployments()
+	if err != nil {
+		return nil, err
+	}
+	keep := make([]string, 0)
+	for _, deploymentName := range deployments {
+		raw, exists, err := store.LatestDesiredSnapshot(deploymentName)
+		if err != nil {
+			return nil, err
+		}
+		if !exists {
+			return nil, fmt.Errorf("active deployment %s has no desired snapshot", deploymentName)
+		}
+		document, err := manifest.Parse(raw)
+		if err != nil {
+			return nil, fmt.Errorf("decode active deployment %s: %w", deploymentName, err)
+		}
+		if document.Metadata.Name != deploymentName {
+			return nil, fmt.Errorf("active deployment key %s does not match snapshot name %s", deploymentName, document.Metadata.Name)
+		}
+		if err := manifest.Validate(document); err != nil {
+			return nil, fmt.Errorf("validate active deployment %s: %w", deploymentName, err)
+		}
+		resolved, err := planner.Build(document, nil)
+		if err != nil {
+			return nil, fmt.Errorf("plan active deployment %s: %w", deploymentName, err)
+		}
+		expected := make([]string, 0, radioCount(resolved))
+		for _, service := range resolved.Services {
+			for _, instance := range service.Instances {
+				for _, radio := range instance.Radios {
+					expected = append(expected, radio.ManagerName)
+				}
+			}
+		}
+		sort.Strings(expected)
+		owned, err := store.ListWirelessRadios(deploymentName)
+		if err != nil {
+			return nil, err
+		}
+		actual := make([]string, 0, len(owned))
+		for _, radio := range owned {
+			actual = append(actual, radio.ManagerName)
+		}
+		sort.Strings(actual)
+		if strings.Join(actual, "\x00") != strings.Join(expected, "\x00") {
+			return nil, fmt.Errorf("active deployment %s wireless ownership does not match its desired snapshot", deploymentName)
+		}
+		keep = append(keep, actual...)
+	}
+	sort.Strings(keep)
+	return keep, nil
+}
 
 // skipRuntime reports whether Podman-dependent phases (images, lifecycle)
 // should be treated as no-ops. Set VCPE_SKIP_RUNTIME=1 in tests that exercise

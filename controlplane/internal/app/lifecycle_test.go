@@ -125,7 +125,7 @@ func TestLifecycleStagesCuratedEnvFile(t *testing.T) {
 		},
 	}
 
-	if err := applyComposeLifecycle(context.Background(), stateRoot, opID, dep); err != nil {
+	if err := applyComposeLifecycle(context.Background(), stateRoot, opID, dep, nil); err != nil {
 		t.Fatalf("applyComposeLifecycle: %v", err)
 	}
 
@@ -172,7 +172,7 @@ func TestTelemetryGatewayLifecycleUsesOperationArtifacts(t *testing.T) {
 			Instances: []plan.Instance{{Index: 0, Interfaces: []plan.Interface{{Role: "mgmt", Network: "edge-mgmt"}}}},
 		}},
 	}
-	if err := applyComposeLifecycle(context.Background(), stateRoot, opID, deployment); err != nil {
+	if err := applyComposeLifecycle(context.Background(), stateRoot, opID, deployment, nil); err != nil {
 		t.Fatalf("applyComposeLifecycle: %v", err)
 	}
 	if len(composeStub.upRequests) != 1 || composeStub.upRequests[0].ComposeFile != generatedCompose {
@@ -214,7 +214,7 @@ func TestLifecycleEnsuresPodmanNetworksBeforeCompose(t *testing.T) {
 		},
 	}
 
-	if err := applyComposeLifecycle(context.Background(), stateRoot, opID, dep); err != nil {
+	if err := applyComposeLifecycle(context.Background(), stateRoot, opID, dep, nil); err != nil {
 		t.Fatalf("applyComposeLifecycle: %v", err)
 	}
 
@@ -239,6 +239,46 @@ func TestLifecycleEnsuresPodmanNetworksBeforeCompose(t *testing.T) {
 	// Compose up must also have run.
 	if len(cmpStub.upCalls) != 1 {
 		t.Errorf("expected 1 compose up call, got %v", cmpStub.upCalls)
+	}
+}
+
+func TestLifecycleForceRecreatesOnlyTargetedServicesAndAllReplicas(t *testing.T) {
+	stateRoot := t.TempDir()
+	opID := "op-rotation"
+	makeRepoRoot(t, "gateway", "bng")
+	_, composeStub := stubLifecycle(t)
+
+	for _, service := range []string{"gateway", "station", "bng"} {
+		artifactDirectory := filepath.Dir(writeArtifactEnv(t, stateRoot, opID, service))
+		if service == "station" {
+			if err := os.WriteFile(filepath.Join(artifactDirectory, "compose.yaml"), []byte("services: {}\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	deployment := plan.Deployment{
+		Name: "edge",
+		Services: []plan.Service{
+			{Name: "gateway", Type: "gateway", Instances: []plan.Instance{{Index: 0}}},
+			{Name: "station", Type: "generic-container", Instances: []plan.Instance{{Index: 0}, {Index: 1}}},
+			{Name: "bng", Type: "bng", Instances: []plan.Instance{{Index: 0}}},
+		},
+	}
+
+	if err := applyComposeLifecycle(context.Background(), stateRoot, opID, deployment, map[string]bool{"gateway": true, "station": true}); err != nil {
+		t.Fatal(err)
+	}
+	if len(composeStub.upRequests) != 3 {
+		t.Fatalf("compose requests = %#v", composeStub.upRequests)
+	}
+	if request := composeStub.upRequests[0]; !request.ForceRecreate || len(request.Services) != 0 {
+		t.Errorf("gateway request = %#v, want forced curated project", request)
+	}
+	if request := composeStub.upRequests[1]; !request.ForceRecreate || strings.Join(request.Services, ",") != "station-1,station-2" {
+		t.Errorf("station request = %#v, want every replica forced", request)
+	}
+	if request := composeStub.upRequests[2]; request.ForceRecreate || len(request.Services) != 0 {
+		t.Errorf("unrelated request = %#v, want unforced project", request)
 	}
 }
 
@@ -321,6 +361,63 @@ func TestTeardownCallsComposeDown(t *testing.T) {
 	// Teardown is reverse order: gateway then bng.
 	if cmpStub.downCalls[0] != "edge-gateway" || cmpStub.downCalls[1] != "edge-bng" {
 		t.Errorf("expected reverse-order teardown [edge-gateway, edge-bng], got %v", cmpStub.downCalls)
+	}
+}
+
+func TestDownSavedUnsupportedService(t *testing.T) {
+	for _, missingArtifact := range []bool{false, true} {
+		name := "saved compose"
+		if missingArtifact {
+			name = "missing compose"
+		}
+		t.Run(name, func(t *testing.T) {
+			stateRoot := t.TempDir()
+			makeRepoRoot(t)
+			_, runner := stubLifecycle(t)
+			store, err := persist.Open(stateRoot)
+			if err != nil {
+				t.Fatal(err)
+			}
+			const snapshot = "apiVersion: vcpe.dev/v1\nkind: Deployment\nmetadata: {name: edge}\nspec:\n  services:\n    - {name: routerd, type: routerd, replicas: 1, image: {repository: example/routerd}}\n"
+			if err := store.SaveDesiredSnapshot("edge", []byte(snapshot)); err != nil {
+				t.Fatal(err)
+			}
+			store.Close()
+			if !missingArtifact {
+				artifactDir := filepath.Join(stateRoot, "artifacts", "v1", "deployments", "edge", "runtime", "routerd")
+				if err := os.MkdirAll(artifactDir, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(artifactDir, "compose.yaml"), []byte("services:\n  routerd:\n    image: example/routerd\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			_, err = executeLocal(Options{Command: "down", Name: "edge", StateRoot: stateRoot})
+			if missingArtifact {
+				if err == nil || !strings.Contains(err.Error(), "compose.yaml") || !strings.Contains(err.Error(), "recover") {
+					t.Fatalf("missing artifact error = %v, want recovery guidance", err)
+				}
+				if len(runner.downCalls) != 0 {
+					t.Fatalf("compose down calls after missing artifact = %v", runner.downCalls)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(runner.downCalls) != 1 || runner.downCalls[0] != "edge-routerd" {
+				t.Fatalf("compose down calls = %v", runner.downCalls)
+			}
+			store, err = persist.Open(stateRoot)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer store.Close()
+			if names, err := store.ListKnownDeployments(); err != nil || len(names) != 0 {
+				t.Fatalf("deployments after down = %v, error = %v", names, err)
+			}
+		})
 	}
 }
 

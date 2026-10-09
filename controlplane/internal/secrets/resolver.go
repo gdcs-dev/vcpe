@@ -19,6 +19,8 @@ func Resolve(refs []manifest.SecretRef) (map[string]string, error) {
 			value, err = fromEnv(ref.Key)
 		case "file":
 			value, err = fromFile(ref.Key)
+		case "literal":
+			value = ref.Value
 		default:
 			err = fmt.Errorf("unsupported secret provider %q for ref %q", ref.Provider, ref.Name)
 		}
@@ -28,6 +30,51 @@ func Resolve(refs []manifest.SecretRef) (map[string]string, error) {
 		resolved[ref.Name] = value
 	}
 	return resolved, nil
+}
+
+func ValidateWirelessPassphrases(networks []manifest.WirelessNetwork, resolved map[string]string) error {
+	for _, network := range networks {
+		if network.Security != manifest.WirelessWPA2Personal && network.Security != manifest.WirelessWPA3Personal {
+			continue
+		}
+		value, exists := resolved[network.PassphraseSecretRef]
+		if !exists {
+			return fmt.Errorf("wireless credential ref %q was not resolved", network.PassphraseSecretRef)
+		}
+		if len(value) < 8 || len(value) > 63 {
+			return fmt.Errorf("wireless credential ref %q has invalid length: expected 8 through 63 printable ASCII characters", network.PassphraseSecretRef)
+		}
+		for index := 0; index < len(value); index++ {
+			if value[index] < 0x20 || value[index] > 0x7e {
+				return fmt.Errorf("wireless credential ref %q contains non-printable ASCII", network.PassphraseSecretRef)
+			}
+		}
+	}
+	return nil
+}
+
+func ValidateMeshPassphrases(services []manifest.Service, resolved map[string]string) error {
+	for _, service := range services {
+		for _, radio := range service.Radios {
+			if radio.Mesh == nil {
+				continue
+			}
+			ref := radio.Mesh.SAESecretRef
+			value, exists := resolved[ref]
+			if !exists {
+				return fmt.Errorf("mesh credential ref %q was not resolved", ref)
+			}
+			if len(value) < 8 || len(value) > 63 {
+				return fmt.Errorf("mesh credential ref %q has invalid length: expected 8 through 63 printable ASCII characters", ref)
+			}
+			for index := 0; index < len(value); index++ {
+				if value[index] < 0x20 || value[index] > 0x7e {
+					return fmt.Errorf("mesh credential ref %q contains non-printable ASCII", ref)
+				}
+			}
+		}
+	}
+	return nil
 }
 
 func fromEnv(key string) (string, error) {

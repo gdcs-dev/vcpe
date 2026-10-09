@@ -38,6 +38,7 @@ COPY container/platforms/${TARGETOS}-${TARGETARCH}/runtime-init-bng /usr/local/b
 COPY container/platforms/${TARGETOS}-${TARGETARCH}/vcpe-healthd /usr/local/bin/vcpe-healthd
 COPY container/entrypoint.sh /usr/local/bin/bng-legacy-entrypoint.sh
 COPY container/start-services.sh /usr/local/bin/start-services.sh
+COPY container/management-dns.sh /usr/local/bin/management-dns.sh
 COPY container/health-probe.sh /usr/local/bin/bng-health-probe
 COPY container/healthcheck.sh /usr/local/bin/healthcheck.sh
 COPY assets/dhcpd-notify.sh /etc/dhcpd-notify.sh
@@ -46,6 +47,7 @@ RUN chmod +x /usr/local/bin/runtime-init-bng /usr/local/bin/vcpe-healthd \
    /usr/local/bin/bng-health-probe \
    /usr/local/bin/bng-legacy-entrypoint.sh \
    /usr/local/bin/start-services.sh \
+   /usr/local/bin/management-dns.sh \
    /usr/local/bin/healthcheck.sh \
    /etc/dhcpd-notify.sh
 

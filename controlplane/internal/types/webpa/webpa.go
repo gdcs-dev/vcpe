@@ -5,7 +5,6 @@ package webpa
 
 import (
 	"context"
-	"fmt"
 	"sort"
 	"strings"
 	"sync"
@@ -154,7 +153,7 @@ func renderWebPACompose(input render.Input, inst plan.Instance) string {
 	// convention used elsewhere (bng.go) to avoid ambiguity across replicas.
 	servicetemplate.AddFirstInstanceNetworkAliases(inst, svcNets, "mgmt", virtualHosts)
 	servicetemplate.AttachHealthPublication(input, inst, input.HealthPorts[inst.Index], 9878, topNets, svcNets, svc)
-	instanceName := fmt.Sprintf("%s-%d", input.Service.Name, inst.Index+1)
+	instanceName := inst.ComposeServiceName(input.Service.Name)
 	doc := map[string]any{"services": map[string]any{instanceName: svc}, "networks": topNets}
 	out, _ := yaml.Marshal(doc)
 	return string(out)

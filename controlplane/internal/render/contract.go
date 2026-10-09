@@ -8,6 +8,7 @@ package render
 import (
 	"context"
 	"fmt"
+	"sort"
 
 	"github.com/gdcs-dev/vcpe/controlplane/internal/plan"
 )
@@ -18,10 +19,27 @@ type Input struct {
 	Service    plan.Service
 	// HealthPorts maps each 0-based replica index to its reserved loopback host
 	// port. Renderers omit a health mapping for service types without an entry.
-	HealthPorts map[int]int
-	// Secrets maps secret ref name to its resolved value. File-provider secrets
-	// carry the on-host path; env-provider secrets carry the host env var name.
-	Secrets map[string]string
+	HealthPorts             map[int]int
+	WirelessCredentialFiles map[string]SecretFileHandle
+}
+
+type SecretFileHandle struct {
+	HostPath      string
+	ContainerPath string
+}
+
+func SecretFileMounts(files map[string]SecretFileHandle) []string {
+	keys := make([]string, 0, len(files))
+	for key := range files {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	mounts := make([]string, 0, len(keys))
+	for _, key := range keys {
+		handle := files[key]
+		mounts = append(mounts, handle.HostPath+":"+handle.ContainerPath+":ro")
+	}
+	return mounts
 }
 
 // Artifact is a single rendered file keyed by a relative path.

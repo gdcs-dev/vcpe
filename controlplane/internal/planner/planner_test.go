@@ -2,6 +2,7 @@ package planner_test
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/gdcs-dev/vcpe/controlplane/internal/manifest"
@@ -256,5 +257,95 @@ func TestReplicaDeltaFirstDeploy(t *testing.T) {
 		if !reflect.DeepEqual(svc.Delta, want) {
 			t.Fatalf("first-deploy delta: want %+v, got %+v", want, svc.Delta)
 		}
+	}
+}
+
+func TestBuildResolvesWirelessContractsWithoutPodmanAttachments(t *testing.T) {
+	doc := sampleDoc()
+	doc.Spec.WirelessMedia = []manifest.WirelessMedium{{Name: "rf24", Band: "2.4ghz", Channel: 1, WidthMHz: 20}}
+	doc.Spec.WirelessNetworks = []manifest.WirelessNetwork{{Name: "home", SSID: "vcpe-lab", Security: manifest.WirelessOpen}}
+	doc.Spec.Services[0].Bridges = []manifest.BridgeSpec{{Name: "brlan0"}}
+	doc.Spec.Services[0].Radios = []manifest.Radio{{Name: "ap", Medium: "rf24", Device: "wlan0", Mode: manifest.RadioModeAP, VAPs: []manifest.VAP{{Slot: 0, Network: "home", Bridge: "brlan0"}}}}
+	doc.Spec.Services[1].Radios = []manifest.Radio{{Name: "station", Medium: "rf24", Network: "home", Device: "wlan0", Mode: manifest.RadioModeStation}}
+
+	first, err := planner.Build(doc, nil)
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	second, err := planner.Build(doc, nil)
+	if err != nil {
+		t.Fatalf("second build: %v", err)
+	}
+	if !reflect.DeepEqual(first, second) {
+		t.Fatal("wireless plan is not deterministic")
+	}
+	if len(first.WirelessNetworks) != 1 || first.WirelessNetworks[0].SSID != "vcpe-lab" {
+		t.Fatalf("wireless medium not resolved: %+v", first.WirelessNetworks)
+	}
+	instance := first.Services[0].Instances[0]
+	if len(instance.Radios) != 1 {
+		t.Fatalf("radios = %+v", instance.Radios)
+	}
+	radio := instance.Radios[0]
+	if radio.Device != "wlan0" || radio.Addressing != manifest.AddressingDHCP || radio.GroupMask != 0 {
+		t.Fatalf("radio contract = %+v", radio)
+	}
+	if radio.ContainerName != instance.ContainerName || instance.ContainerName != "edge-bng-1" {
+		t.Fatalf("container identity mismatch: radio=%q instance=%q", radio.ContainerName, instance.ContainerName)
+	}
+	if len(instance.Interfaces) != 2 || len(first.Networks) != 2 {
+		t.Fatalf("wireless planning altered Podman attachments: interfaces=%d networks=%d", len(instance.Interfaces), len(first.Networks))
+	}
+}
+
+func TestBuildRejectsStationWithoutMatchingAP(t *testing.T) {
+	doc := sampleDoc()
+	doc.Spec.WirelessMedia = []manifest.WirelessMedium{{Name: "rf6", Band: "6ghz", Channel: 5, WidthMHz: 20}}
+	doc.Spec.WirelessNetworks = []manifest.WirelessNetwork{{Name: "home", SSID: "Home", Security: manifest.WirelessWPA3Personal}}
+	doc.Spec.Services[0].Radios = []manifest.Radio{{Name: "station", Medium: "rf6", Network: "home", Device: "wlan0", Mode: manifest.RadioModeStation}}
+	_, err := planner.Build(doc, nil)
+	if err == nil || !strings.Contains(err.Error(), "has no AP") {
+		t.Fatalf("Build() error = %v, want missing AP", err)
+	}
+}
+
+func TestBuildPreservesWirelessPersonalSecurityPolicy(t *testing.T) {
+	doc := sampleDoc()
+	doc.Spec.WirelessNetworks = []manifest.WirelessNetwork{{
+		Name:                "home",
+		SSID:                "vcpe-lab",
+		Security:            manifest.WirelessWPA3Personal,
+		PassphraseSecretRef: "home-wifi",
+	}}
+
+	resolved, err := planner.Build(doc, nil)
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	if len(resolved.WirelessNetworks) != 1 {
+		t.Fatalf("wireless networks = %+v", resolved.WirelessNetworks)
+	}
+	wireless := resolved.WirelessNetworks[0]
+	if wireless.Security != manifest.WirelessWPA3Personal || wireless.PassphraseSecretRef != "home-wifi" {
+		t.Fatalf("wireless security policy = %+v", wireless)
+	}
+}
+
+func TestBuildGivesRadioReplicasDistinctIdentities(t *testing.T) {
+	doc := sampleDoc()
+	doc.Spec.Services[0].Replicas = 2
+	doc.Spec.WirelessMedia = []manifest.WirelessMedium{{Name: "rf24", Band: "2.4ghz", Channel: 1, WidthMHz: 20}}
+	doc.Spec.Services[0].Bridges = []manifest.BridgeSpec{{Name: "brlan0"}}
+	doc.Spec.Services[0].Radios = []manifest.Radio{{Name: "ap", Medium: "rf24", Device: "wlan0", Mode: manifest.RadioModeAP, VAPs: []manifest.VAP{{Slot: 0, Network: "home", Bridge: "brlan0"}}}}
+	doc.Spec.Services[1].Radios = []manifest.Radio{{Name: "station", Medium: "rf24", Network: "home", Device: "wlan0", Mode: manifest.RadioModeStation}}
+	doc.Spec.WirelessNetworks = []manifest.WirelessNetwork{{Name: "home", SSID: "vcpe-lab", Security: manifest.WirelessOpen}}
+	resolved, err := planner.Build(doc, nil)
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	a := resolved.Services[1].Instances[0].Radios[0]
+	b := resolved.Services[1].Instances[1].Radios[0]
+	if a.ManagerName == b.ManagerName || a.MAC == b.MAC || a.ContainerName == b.ContainerName {
+		t.Fatalf("replica radio identities collide: a=%+v b=%+v", a, b)
 	}
 }

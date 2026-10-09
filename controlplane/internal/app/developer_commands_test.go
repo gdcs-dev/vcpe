@@ -192,11 +192,19 @@ func TestRunStamp_EmptyGlob(t *testing.T) {
 
 func TestRunRelease_CoherenceFailure(t *testing.T) {
 	t.Setenv("VCPE_SKIP_RUNTIME", "1")
-	dir := t.TempDir()
+	dir := initTempRepo(t)
 	// Manifest with tag: dev (not stamped).
 	p := writeTestManifest(t, dir, "a.yaml", minimalManifest)
+	originalDirectory, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("get working directory: %v", err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("change working directory: %v", err)
+	}
+	defer os.Chdir(originalDirectory) //nolint:errcheck
 
-	_, err := executeLocal(Options{
+	_, err = executeLocal(Options{
 		Command:       "release",
 		ManifestPaths: []string{p},
 		Version:       "v5.0.0",

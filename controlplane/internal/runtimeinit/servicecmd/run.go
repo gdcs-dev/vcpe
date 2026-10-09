@@ -8,15 +8,19 @@ import (
 	"os/exec"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/gdcs-dev/vcpe/controlplane/internal/runtimeinit"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/runtimeinit/contract"
 )
 
 type Config struct {
-	Service     string
-	DefaultExec []string
-	RunCommand  func(context.Context, []string) error
+	Service                string
+	DefaultExec            []string
+	RunCommand             func(context.Context, []string) error
+	RadioReadyTimeout      time.Duration
+	RadioReadyPollInterval time.Duration
+	DeviceExists           func(string) bool
 }
 
 func Run(ctx context.Context, cfg Config, args []string) error {
@@ -28,10 +32,28 @@ func Run(ctx context.Context, cfg Config, args []string) error {
 		return err
 	}
 
+	radioReadyTimeout := cfg.RadioReadyTimeout
+	if radioReadyTimeout <= 0 {
+		radioReadyTimeout = 30 * time.Second
+	}
+	var startupContract contract.Document
 	runner := runtimeinit.Runner{
 		Phases: runtimeinit.StandardPhases(
-			func(context.Context) error { return validateStartupContract(cfg.Service) },
-			func(context.Context) error { return nil },
+			func(context.Context) error {
+				loaded, loadErr := loadStartupContract(cfg.Service)
+				startupContract = loaded
+				return loadErr
+			},
+			func(inner context.Context) error {
+				devices := make([]string, 0, len(startupContract.Radios))
+				for _, radio := range startupContract.Radios {
+					devices = append(devices, radio.Device)
+				}
+				return (runtimeinit.DeviceWaiter{
+					Exists:       cfg.DeviceExists,
+					PollInterval: cfg.RadioReadyPollInterval,
+				}).Wait(inner, devices, radioReadyTimeout)
+			},
 			func(context.Context) error { return nil },
 			func(context.Context) error { return validateRuntimeConfig(cfg.Service) },
 			func(context.Context) error { return nil },
@@ -47,22 +69,26 @@ func Run(ctx context.Context, cfg Config, args []string) error {
 	return runner.Run(ctx)
 }
 
-func validateStartupContract(service string) error {
+func loadStartupContract(service string) (contract.Document, error) {
 	contractPath := strings.TrimSpace(os.Getenv("VCPE_STARTUP_CONTRACT"))
 	if contractPath == "" {
 		if os.Getenv("VCPE_REQUIRE_STARTUP_CONTRACT") == "1" {
-			return fmt.Errorf("runtime-init service %s missing VCPE_STARTUP_CONTRACT", service)
+			return contract.Document{}, fmt.Errorf("runtime-init service %s missing VCPE_STARTUP_CONTRACT", service)
 		}
-		return nil
+		return contract.Document{}, nil
 	}
 	loaded, err := contract.Load(contractPath)
 	if err != nil {
-		return fmt.Errorf("runtime-init service %s startup contract %s: %w", service, contractPath, err)
+		return contract.Document{}, fmt.Errorf("runtime-init service %s startup contract %s: %w", service, contractPath, err)
 	}
-	if loaded.Service != service {
-		return fmt.Errorf("runtime-init service %s startup contract service mismatch: %s", service, loaded.Service)
+	serviceName := strings.TrimSpace(os.Getenv("SERVICE_NAME"))
+	if serviceName == "" {
+		serviceName = service
 	}
-	return nil
+	if loaded.Service != serviceName {
+		return contract.Document{}, fmt.Errorf("runtime-init service %s startup contract service mismatch: %s", service, loaded.Service)
+	}
+	return loaded, nil
 }
 
 func validateRuntimeConfig(service string) error {

@@ -1,13 +1,14 @@
 Usage: vcpe status [flags]
 
-Reports reconcile metrics, active IPAM leases, and recent operation history. With --name, shows the desired state snapshot for that deployment; if exactly one deployment is active, it is used by default.
+Reports reconcile metrics, active IPAM leases, wireless ownership, and recent operation history without displaying resolved credential values. With --name, shows the wireless group, per-radio medium, and planned VAP slot/interface/BSSID/bridge with observed readiness; if exactly one deployment is active, it is used by default.
 
 Optional flags:
   --name <deployment>     Filter output to a specific deployment
   --state-root <path>     Override the default state root directory
-  --json                  Emit structured JSON with metrics, timeline, desired, planned, observed, and runtimeInitDiagnostics keys
+  --json                  Emit structured JSON with metrics, timeline, desired, wireless (including nested radio/VAP topology), health, and runtimeInitDiagnostics keys
 
 Examples:
   vcpe status
   vcpe status --name bng-7
+  vcpe status --name wireless --json
   vcpe status --json

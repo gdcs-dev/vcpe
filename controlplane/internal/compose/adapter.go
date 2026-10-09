@@ -28,6 +28,9 @@ type Request struct {
 	// Only set this for generated compose files where service names are
 	// controlled; curated compose files have fixed service names.
 	RemoveOrphans bool
+	// ForceRecreate replaces targeted containers even when their rendered
+	// Compose configuration is unchanged.
+	ForceRecreate bool
 }
 
 type OperationRecord struct {
@@ -108,6 +111,9 @@ func commandArgs(command string, req Request) ([]string, error) {
 		args = append(args, "-d")
 		if req.RemoveOrphans {
 			args = append(args, "--remove-orphans")
+		}
+		if req.ForceRecreate {
+			args = append(args, "--force-recreate")
 		}
 		// Append specific service names when provided (scale-up optimisation).
 		args = append(args, req.Services...)

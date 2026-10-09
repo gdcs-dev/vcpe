@@ -119,7 +119,7 @@ func generateCompose(input render.Input, inst plan.Instance) string {
 	// convention used elsewhere (bng.go) to avoid ambiguity across replicas.
 	servicetemplate.AddFirstInstanceNetworkAliases(inst, svcNets, "mgmt", []string{"oktopus"})
 	servicetemplate.AttachHealthPublication(input, inst, input.HealthPorts[inst.Index], 9878, networks, svcNets, svc)
-	instanceName := fmt.Sprintf("%s-%d", input.Service.Name, inst.Index+1)
+	instanceName := inst.ComposeServiceName(input.Service.Name)
 	out, _ := yaml.Marshal(map[string]any{"services": map[string]any{instanceName: svc}, "networks": networks})
 	return string(out)
 }

@@ -2,12 +2,62 @@ package plan
 
 import (
 	"crypto/sha1"
+	"crypto/sha256"
 	"fmt"
 )
 
 // ifnameMax is the usable length of a Linux network interface name. The kernel
 // IFNAMSIZ constant is 16 including the trailing NUL, leaving 15 usable bytes.
 const ifnameMax = 15
+
+const managerNameMax = 31
+
+// InstanceName is the stable 1-based external name for a service replica.
+func InstanceName(service string, index int) string {
+	return fmt.Sprintf("%s-%d", service, index+1)
+}
+
+// ContainerName is the stable Podman container name for a service replica.
+func ContainerName(deployment, service string, index int) string {
+	return deployment + "-" + InstanceName(service, index)
+}
+
+// RadioManagerName derives a stable manager identity within the manager's
+// 31-character name limit.
+func RadioManagerName(deployment, service string, index int, logicalName string) string {
+	sum := radioIdentityHash("manager", deployment, service, index, logicalName)
+	return "vcpe-" + fmt.Sprintf("%x", sum[:13])
+}
+
+// CanonicalRadioMAC derives a domain-separated locally administered unicast
+// MAC for a radio identity.
+func CanonicalRadioMAC(deployment, service string, index int, logicalName string) string {
+	sum := radioIdentityHash("mac", deployment, service, index, logicalName)
+	first := (sum[0] | 0x02) & 0xfe
+	return fmt.Sprintf("%02x:%02x:%02x:%02x:%02x:%02x", first, sum[1], sum[2], sum[3], sum[4], sum[5])
+}
+
+// VAPDeviceName derives a Linux interface name for a secondary BSS slot.
+// Slot 0 uses the manager-created primary radio device instead.
+func VAPDeviceName(deployment, service string, index int, radioName string, slot int) string {
+	sum := radioIdentityHash(fmt.Sprintf("vap-device/%d", slot), deployment, service, index, radioName)
+	return fmt.Sprintf("vap%x", sum[:6])
+}
+
+// CanonicalVAPBSSID derives a slot-stable locally administered unicast BSSID.
+func CanonicalVAPBSSID(deployment, service string, index int, radioName string, slot int) string {
+	if slot == 0 {
+		return CanonicalRadioMAC(deployment, service, index, radioName)
+	}
+	sum := radioIdentityHash(fmt.Sprintf("vap-bssid/%d", slot), deployment, service, index, radioName)
+	first := (sum[0] | 0x02) & 0xfe
+	return fmt.Sprintf("%02x:%02x:%02x:%02x:%02x:%02x", first, sum[1], sum[2], sum[3], sum[4], sum[5])
+}
+
+func radioIdentityHash(domain, deployment, service string, index int, logicalName string) [sha256.Size]byte {
+	key := fmt.Sprintf("vcpe-radio/%s\x00%s\x00%s\x00%d\x00%s", domain, deployment, service, index, logicalName)
+	return sha256.Sum256([]byte(key))
+}
 
 // CanonicalMAC derives a stable, locally-administered unicast MAC address from
 // the deployment-scoped identity tuple. The key is always

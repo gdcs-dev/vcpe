@@ -11,10 +11,14 @@ const artifactSchemaVersion = "v1"
 
 func ResolveStateRoot(override string) (string, error) {
 	if override != "" {
-		if err := os.MkdirAll(override, 0o755); err != nil {
+		stateRoot, err := filepath.Abs(override)
+		if err != nil {
+			return "", fmt.Errorf("resolve state root: %w", err)
+		}
+		if err := os.MkdirAll(stateRoot, 0o755); err != nil {
 			return "", fmt.Errorf("create state root: %w", err)
 		}
-		return override, nil
+		return stateRoot, nil
 	}
 
 	home, err := os.UserHomeDir()
