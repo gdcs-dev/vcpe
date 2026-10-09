@@ -1,0 +1,169 @@
+apiVersion: vcpe.dev/v1
+kind: Deployment
+metadata:
+  name: mesh-roaming
+  labels:
+    environment: development
+  annotations:
+    description: Two Gateway nodes with a wireless-only mesh backhaul and same-channel roaming.
+spec:
+  networks:
+    - role: mgmt
+      ipv4:
+        cidr: 10.10.30.0/24
+        gateway: 10.10.30.1
+        pool: {start: 10.10.30.10, end: 10.10.30.250}
+    - role: wan
+      nat: true
+      firewall: true
+      ipamDriver: none
+      ipv4:
+        cidr: 10.7.210.0/24
+        gateway: 10.7.210.1
+        pool: {start: 10.7.210.10, end: 10.7.210.250}
+  wirelessMedia:
+    - {name: mesh-backhaul, band: 2.4ghz, channel: 6, widthMHz: 20}
+    - {name: root-access, band: 5ghz, channel: 36, widthMHz: 20}
+    - {name: remote-access, band: 5ghz, channel: 36, widthMHz: 20}
+  wirelessNetworks:
+    - {name: home, ssid: mesh-lab, security: wpa3-personal, passphraseSecretRef: wlan-key}
+  secrets:
+    - {name: mesh-key, provider: literal, value: mesh-lab-dev-sae-only}
+    - {name: wlan-key, provider: literal, value: mesh-lab-dev-wlan-only}
+  services:
+    - name: bng
+      type: bng
+      replicas: 1
+      image:
+        repository: ghcr.io/gdcs-dev/bng
+        tag: dev
+        pullPolicy: build-if-missing
+        buildContext: services/bng
+      interfaces:
+        - {role: mgmt, device: mgmt0}
+        - {role: wan, device: wan0, defaultRoute: true, ipv4: 10.7.210.1, addressing: static}
+      config:
+        access:
+          - role: wan
+            dhcp4:
+              subnet: 10.7.210.0/24
+              ranges:
+                - {start: 10.7.210.100, end: 10.7.210.200}
+              options:
+                routers: 10.7.210.1
+              leaseSeconds: 3600
+    - name: webpa
+      type: webpa
+      replicas: 1
+      image:
+        repository: ghcr.io/gdcs-dev/webpa
+        tag: dev
+        pullPolicy: build-if-missing
+        buildContext: services/webpa
+      interfaces:
+        - {role: mgmt}
+      dependsOn: [bng]
+    - name: root
+      type: gateway
+      replicas: 1
+      image:
+        repository: ghcr.io/gdcs-dev/gateway
+        tag: dev
+        pullPolicy: build-if-missing
+        buildContext: services/gateway
+      interfaces:
+        - {role: wan, device: erouter0, addressing: dhcp, defaultRoute: true}
+      bridges:
+        - {name: brlan0, ipv4: 10.0.0.1/24, dhcpStart: 10.0.0.100, dhcpEnd: 10.0.0.200}
+      radios:
+        - name: backhaul
+          medium: mesh-backhaul
+          device: mesh0
+          mode: mesh
+          mesh: {id: mesh-lab, bridge: brlan0, saeSecretRef: mesh-key}
+        - name: access
+          medium: root-access
+          device: wlan0
+          mode: ap
+          vaps:
+            - {slot: 0, network: home, bridge: brlan0}
+      dependsOn: [bng, webpa]
+    - name: remote
+      type: gateway
+      replicas: 1
+      image:
+        repository: ghcr.io/gdcs-dev/gateway
+        tag: dev
+        pullPolicy: build-if-missing
+        buildContext: services/gateway
+      interfaces:
+        - {role: wan, device: erouter0, addressing: dhcp, defaultRoute: true}
+      bridges:
+        - {name: brlan0}
+      radios:
+        - name: backhaul
+          medium: mesh-backhaul
+          device: mesh0
+          mode: mesh
+          mesh: {id: mesh-lab, bridge: brlan0, saeSecretRef: mesh-key}
+        - name: access
+          medium: remote-access
+          device: wlan0
+          mode: ap
+          vaps:
+            - {slot: 0, network: home, bridge: brlan0}
+      dependsOn: [bng, webpa]
+    - name: station
+      type: generic-container
+      replicas: 1
+      image:
+        repository: ghcr.io/gdcs-dev/wireless-client
+        tag: dev
+        pullPolicy: build-if-missing
+        buildContext: services/wireless-client
+      radios:
+        - name: wifi
+          device: wlan0
+          mode: station
+          network: home
+          roaming: {media: [root-access, remote-access]}
+          addressing: dhcp
+          defaultRoute: true
+      config:
+        command: ["/usr/local/bin/wireless-client"]
+      dependsOn: [root, remote]
+    - name: remote-probe
+      type: generic-container
+      replicas: 1
+      image:
+        repository: ghcr.io/gdcs-dev/wireless-client
+        tag: dev
+        pullPolicy: build-if-missing
+        buildContext: services/wireless-client
+      radios:
+        - name: wifi
+          device: wlan0
+          mode: station
+          medium: remote-access
+          network: home
+          addressing: dhcp
+      config:
+        command: ["/usr/local/bin/wireless-client"]
+      dependsOn: [root, remote]
+  wirelessScenarios:
+    - name: crossover
+      station: {service: station, replica: 1, radio: wifi}
+      aps:
+        - {service: root, replica: 1, radio: access, slot: 0}
+        - {service: remote, replica: 1, radio: access, slot: 0}
+      steps:
+        - {atMs: 0, ap: {service: root, replica: 1, radio: access, slot: 0}, snrDb: 35}
+        - {atMs: 0, ap: {service: remote, replica: 1, radio: access, slot: 0}, snrDb: -100}
+        - {atMs: 1000, ap: {service: root, replica: 1, radio: access, slot: 0}, snrDb: -100}
+        - {atMs: 1000, ap: {service: remote, replica: 1, radio: access, slot: 0}, snrDb: 35}
+      assertions:
+        initialAp: {service: root, replica: 1, radio: access, slot: 0}
+        finalAp: {service: remote, replica: 1, radio: access, slot: 0}
+        sameIPv4: true
+        maxRoamMs: 15000
+        maxGapMs: 3000

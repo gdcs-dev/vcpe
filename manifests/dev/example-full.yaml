@@ -5,14 +5,14 @@ metadata:
   labels:
     scenario: example-full
   annotations:
-    description: "Full vCPE lab — BNG, WebPA, Gateway, event-sink, and Alpine client over a bridge WAN network."
+    description: "Full vCPE lab — BNG, WebPA, WebConfig, telemetry gateway, Gateway, event-sink, and Alpine client over a bridge WAN network."
 spec:
   maxReplicasPerService: 3
   maxActiveDeployments: 10
   #
   #   [internet / host]
   #        |
-  #   mgmt-bridge (10.10.10.0/24)  ── BNG eth0, WebPA eth0
+  #   mgmt-bridge (10.10.10.0/24)  ── BNG eth0, WebPA eth0, WebConfig eth0
   #        |
   #   wan-bridge  (10.7.200.0/24)  ── BNG eth1 (DHCP server)
   #        |                              GATEWAY wan (DHCP client, erouter0)
@@ -99,6 +99,35 @@ spec:
         - { role: mgmt }
       dependsOn:
         - bng
+    # Development-only WebConfig server for Gateway's bundled webcfg client.
+    # Its SQLite fixture state is ephemeral and its API has no authentication.
+    - name: webconfig
+      type: webconfig
+      replicas: 1
+      image:
+        repository: ghcr.io/gdcs-dev/webconfig
+        tag: dev
+        pullPolicy: build-if-missing
+        buildContext: services/webconfig
+      interfaces:
+        - { role: mgmt }
+      dependsOn:
+        - bng
+    # ── Telemetry Gateway ────────────────────────────────────────────────────
+    # Embedded local-development gateway with PostgreSQL, Collector,
+    # Prometheus, and Grafana. Credentials come from image development defaults.
+    - name: telemetry-gateway
+      type: telemetry-gateway
+      replicas: 1
+      image:
+        repository: ghcr.io/gdcs-dev/telemetry-gateway
+        tag: dev
+        pullPolicy: build-if-missing
+        buildContext: services/telemetry-gateway
+      interfaces:
+        - { role: mgmt }
+      dependsOn:
+        - webpa
     # ── GATEWAY ─────────────────────────────────────────────────────────────────
     # Cable-modem / CPE simulator. Gets a DHCP lease from BNG on WAN (erouter0),
     # bridges LAN ports for attached clients. LAN gateway IP is statically
@@ -128,6 +157,7 @@ spec:
           LAN_DNS: "10.0.0.1"
       dependsOn:
         - bng
+        - webconfig
     # ── Event Sink ────────────────────────────────────────────────────────────
     # Generic XMiDT webhook consumer. Registers a Caduceus webhook via Argus
     # and logs all matching WRP events as structured JSON to stdout.

@@ -5,14 +5,14 @@ metadata:
   labels:
     scenario: example
   annotations:
-    description: "Full vCPE lab — BNG, WebPA, Gateway, event-sink, and Alpine client over a bridge WAN network."
+    description: "Full vCPE lab — BNG, WebPA, WebConfig, telemetry gateway, and Gateway over a bridge WAN network."
 spec:
   maxReplicasPerService: 3
   maxActiveDeployments: 10
   #
   #   [internet / host]
   #        |
-  #   mgmt-bridge (10.10.10.0/24)  ── BNG eth0, WebPA eth0
+  #   mgmt-bridge (10.10.10.0/24)  ── BNG eth0, WebPA eth0, WebConfig eth0
   #        |
   #   wan-bridge  (10.7.200.0/24)  ── BNG eth1 (DHCP server)
   #        |                              GATEWAY wan (DHCP client, erouter0)
@@ -99,35 +99,6 @@ spec:
         - { role: mgmt }
       dependsOn:
         - bng
-    # ── Event Sink ────────────────────────────────────────────────────────────
-    # Generic XMiDT webhook consumer. Registers a Caduceus webhook via Argus
-    # and logs all matching WRP events as structured JSON to stdout.
-    # Default filter: apparmor/.* (captures AppArmor simulator events).
-    # Override WEBHOOK_EVENTS_REGEX to capture any other event type.
-    - name: event-sink
-      type: event-sink
-      replicas: 1
-      image:
-        repository: ghcr.io/gdcs-dev/event-sink
-        tag: dev
-        pullPolicy: build-if-missing
-        buildContext: services/event-sink
-        containerfile: services/event-sink/Containerfile
-      interfaces:
-        - { role: mgmt }
-      config:
-        env:
-          # Must match webpa's baked-in dev Argus credentials
-          # (services/webpa/assets/argus.yaml authx.inbound.basic).
-          ARGUS_URL: "http://argus:6600"
-          ARGUS_BASIC_AUTH: "dXNlcjpwYXNz"
-          WEBHOOK_URL: "http://event-sink:8080/webhook"
-          WEBHOOK_EVENTS_REGEX: ".*"
-          WEBHOOK_DEVICE_MATCHER: ".*"
-          WEBHOOK_SECRET: "vcpe-dev-webhook-secret"
-          LISTEN_ADDR: ":8080"
-      dependsOn:
-        - bng
     # ── GATEWAY ─────────────────────────────────────────────────────────────────
     # Cable-modem / CPE simulator. Gets a DHCP lease from BNG on WAN (erouter0),
     # bridges LAN ports for attached clients. LAN gateway IP is statically
@@ -155,5 +126,24 @@ spec:
       config:
         env:
           LAN_DNS: "10.0.0.1"
+      #volumes:
+      #  - /mnt/docker_disk/shared/xb10-dev:/root/xb10-dev:rw
+      #  - /mnt/docker_disk/shared/downloads:/root/shared/downloads:rw
       dependsOn:
         - bng
+    - name: client
+      type: generic-container
+      replicas: 1
+      image:
+        repository: docker.io/library/alpine
+        tag: "3.19"
+        pullPolicy: always-pull
+      interfaces:
+        - role: lan-p1
+          defaultRoute: true
+      config:
+        env:
+          VCPE_INIT_NAMESERVER_FROM_ROUTE: "1"
+        command: ["sleep", "infinity"]
+      dependsOn:
+        - gateway
