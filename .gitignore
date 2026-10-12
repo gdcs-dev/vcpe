@@ -36,4 +36,5 @@ services/client/compose.yaml
 notes*.txt
 notes*.md
 temp/
+openspec/
 
