@@ -4,7 +4,7 @@ trap 'printf "Gateway smoke failed at line %s\n" "$LINENO" >&2' ERR
 
 manager=/usr/libexec/vcpe/vcpe-hwsim
 image=localhost/vcpe-gateway:tri-band-capability
-client_image=ghcr.io/gdcs-dev/wireless-client:dev
+client_image=ghcr.io/gdcs-dev/client:dev
 namespace=vcpe-vap-probe
 unit=vcpe-vap-probe.service
 container=vcpe-vap-gateway
@@ -233,10 +233,10 @@ for attachment in '0 0 2.4ghz 1 wpa3-personal' '0 1 2.4ghz 1 wpa2-personal' '0 2
         -e "RADIO_WIFI_MEDIUM=rf$radio" -e "RADIO_WIFI_BAND=$band" -e "RADIO_WIFI_CHANNEL=$channel" \
         -e "RADIO_WIFI_AP_BSSID=$bssid" -e "RADIO_WIFI_SECURITY=$security" \
         -e RADIO_WIFI_PASSPHRASE_FILE=/etc/vcpe/credentials/home \
-        --entrypoint /usr/local/bin/wireless-client "$client_image" >/dev/null
+        --entrypoint /usr/local/bin/client "$client_image" >/dev/null
     station_ready=false
     for attempt in {1..45}; do
-        if podman exec "$client_container" sh -c "grep -qx state=ready /run/vcpe/wireless-client/status && ip -4 -o addr show dev wlan0 | grep -q 10.252.$index."; then
+        if podman exec "$client_container" sh -c "grep -qx state=ready /run/vcpe/client/status && ip -4 -o addr show dev wlan0 | grep -q 10.252.$index."; then
             station_ready=true
             break
         fi
@@ -246,7 +246,7 @@ for attachment in '0 0 2.4ghz 1 wpa3-personal' '0 1 2.4ghz 1 wpa2-personal' '0 2
         podman logs "$client_container" | tail -15 >&2
         exit 1
     fi
-    podman exec "$client_container" sh -c "grep -qx bssid=$bssid /run/vcpe/wireless-client/status && grep -qx band=$band /run/vcpe/wireless-client/status"
+    podman exec "$client_container" sh -c "grep -qx bssid=$bssid /run/vcpe/client/status && grep -qx band=$band /run/vcpe/client/status"
     station_status=$(podman exec "$client_container" wpa_cli -i wlan0 status)
     case "$security" in
         wpa3-personal) expected_key_mgmt=SAE ;;
@@ -290,7 +290,7 @@ for rejection in 'wrong-bssid 6ghz 5 02:76:63:70:26:11 wpa3-personal' \
         -e RADIO_WIFI_MEDIUM=rf6 -e "RADIO_WIFI_BAND=$band" -e "RADIO_WIFI_CHANNEL=$channel" \
         -e "RADIO_WIFI_AP_BSSID=$bssid" -e "RADIO_WIFI_SECURITY=$security" \
         -e RADIO_WIFI_PASSPHRASE_FILE=/etc/vcpe/credentials/home \
-        --entrypoint /usr/local/bin/wireless-client "$client_image" >"$work_dir/$scenario.log" 2>&1; then
+        --entrypoint /usr/local/bin/client "$client_image" >"$work_dir/$scenario.log" 2>&1; then
         echo "Wireless client accepted $scenario" >&2
         exit 1
     fi

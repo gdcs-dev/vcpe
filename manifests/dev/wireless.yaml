@@ -195,10 +195,10 @@ spec:
       type: generic-container
       replicas: 1
       image:
-        repository: ghcr.io/gdcs-dev/wireless-client
+        repository: ghcr.io/gdcs-dev/client
         tag: dev
         pullPolicy: build-if-missing
-        buildContext: services/wireless-client
+        buildContext: services/client
       radios:
         - name: wifi
           medium: rf24
@@ -208,32 +208,32 @@ spec:
           addressing: dhcp
           defaultRoute: true
       config:
-        command: ["/usr/local/bin/wireless-client"]
+        command: ["/usr/local/bin/client"]
       dependsOn:
         - gateway
     - name: client-5
       type: generic-container
       replicas: 1
       image:
-        repository: ghcr.io/gdcs-dev/wireless-client
+        repository: ghcr.io/gdcs-dev/client
         tag: dev
         pullPolicy: build-if-missing
-        buildContext: services/wireless-client
+        buildContext: services/client
       radios:
         - {name: wifi, medium: rf5, network: home, device: wlan0, mode: station, addressing: dhcp, defaultRoute: true}
       config:
-        command: ["/usr/local/bin/wireless-client"]
+        command: ["/usr/local/bin/client"]
       dependsOn: [gateway]
     - name: client-6
       type: generic-container
       replicas: 1
       image:
-        repository: ghcr.io/gdcs-dev/wireless-client
+        repository: ghcr.io/gdcs-dev/client
         tag: dev
         pullPolicy: build-if-missing
-        buildContext: services/wireless-client
+        buildContext: services/client
       radios:
         - {name: wifi, medium: rf6, network: home, device: wlan0, mode: station, addressing: dhcp, defaultRoute: true}
       config:
-        command: ["/usr/local/bin/wireless-client"]
+        command: ["/usr/local/bin/client"]
       dependsOn: [gateway]

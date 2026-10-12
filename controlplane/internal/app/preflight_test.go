@@ -389,7 +389,7 @@ func TestLegacyApplyPreservesAnotherActiveRFScenario(t *testing.T) {
 	otherAP.Name, otherAP.Device = "other-ap", "wlan1"
 	doc.Spec.Services[0].Radios = append(doc.Spec.Services[0].Radios, otherAP)
 	doc.Spec.Services = append(doc.Spec.Services, manifest.Service{
-		Name: "station", Type: "generic-container", Replicas: 1, Image: manifest.Image{Repository: "wireless-client"},
+		Name: "station", Type: "generic-container", Replicas: 1, Image: manifest.Image{Repository: "ghcr.io/gdcs-dev/client"},
 		Radios: []manifest.Radio{{Name: "station", Mode: manifest.RadioModeStation, Network: "home", Device: "wlan0", Addressing: manifest.AddressingDHCP, Roaming: &manifest.Roaming{Media: []string{"rf24"}}}},
 	})
 	slot, first, next, strong, weak := 0, 0, 1000, 35, -100

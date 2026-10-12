@@ -103,7 +103,7 @@ func scenarioTarget(deployment plan.Deployment, scenario plan.WirelessScenario) 
 				root = prefix.Addr().String()
 			}
 		}
-		if service.Name != scenario.Station.Service || !isPurposeBuiltWirelessClient(service.Image.Repository) {
+		if service.Name != scenario.Station.Service || !isClientImage(service.Image.Repository) {
 			continue
 		}
 		for _, instance := range service.Instances {
@@ -119,7 +119,7 @@ func scenarioTarget(deployment plan.Deployment, scenario plan.WirelessScenario) 
 		}
 	}
 	if container == "" || device == "" || root == "" {
-		return "", "", "", fmt.Errorf("scenario requires a roaming wireless-client and one root DHCP bridge")
+		return "", "", "", fmt.Errorf("scenario requires a roaming client and one root DHCP bridge")
 	}
 	return container, device, root, nil
 }

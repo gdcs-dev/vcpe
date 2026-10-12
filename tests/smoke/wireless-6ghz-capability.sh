@@ -3,7 +3,7 @@ set -euo pipefail
 
 manager=/usr/libexec/vcpe/vcpe-hwsim
 image=localhost/vcpe-gateway:tri-band-capability
-client_image=ghcr.io/gdcs-dev/wireless-client:dev
+client_image=ghcr.io/gdcs-dev/client:dev
 namespace=vcpe-cap6-ap
 unit=vcpe-cap6-ap.service
 container=vcpe-cap6-hostapd

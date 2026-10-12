@@ -18,21 +18,6 @@ Health endpoint and status behavior is documented in [docs/health.md](docs/healt
 
 ## Build
 
-Initialize the telemetry-gateway source submodule after cloning:
-
-```bash
-git submodule update --init --recursive services/telemetry-gateway
-```
-
-Developers whose `~/.ssh/config` selects the required GitHub identity through
-the `github-gdcs` host alias can keep the canonical repository URL and add a
-workstation-local rewrite:
-
-```bash
-git config --local url."git@github-gdcs:".insteadOf "git@github.com:"
-git submodule sync -- services/telemetry-gateway
-```
-
 ```bash
 cd controlplane
 go build -o bin/vcpe ./cmd/vcpe
@@ -69,9 +54,16 @@ vcpe status --name wireless
 vcpe down --name wireless
 ```
 
-The three stations use `services/wireless-client` through the existing
-`generic-container` type; `wireless-client` is an image, not a registered
-service type. The development passphrase must contain 8 through 63 printable
+The three stations use `ghcr.io/gdcs-dev/client` built from `services/client`
+through the existing `generic-container` type. Wired clients in
+`manifests/dev/example.yaml` select the same image with `interfaces[]` instead
+of `radios[]`; a client can declare both. Every client manifest sets
+`config.command: ["/usr/local/bin/client"]` because the generated Compose
+entrypoint overrides the image CMD. The former `wireless-client` image, command,
+and status path are not supported; update existing manifests to the new image,
+build context, and command. `vcpe build --manifest <path>` builds the image
+selected by that manifest, and `vcpe stamp` pins its release tag with the other
+first-party services. The development passphrase must contain 8 through 63 printable
 ASCII characters. This development-only manifest carries a literal credential
 so it runs without environment setup; use an `env` or `file` provider for
 non-development deployments. Credentials are not written to ordinary generated
@@ -147,16 +139,12 @@ before apply.
 | `webpa` | WebPA / WebConfig device-management server |
 | `webconfig` | Development-only WebConfig server for Gateway's bundled `webcfg` client |
 | `event-sink` | XMiDT webhook consumer; logs matching WRP events as structured JSON |
-| `telemetry-gateway` | Embedded local telemetry gateway, PostgreSQL, and observability stack |
 | `xb10` | XB10 CPE simulator |
 | `oktopus` | Oktopus USP controller |
 | `generic-container` | Arbitrary container with configurable command |
 
 New workloads are added by registering a new service type in the control plane,
 not by editing the planner or renderer.
-
-The embedded telemetry-gateway development topology is documented in
-[docs/telemetry-gateway.md](docs/telemetry-gateway.md).
 
 ### WebConfig Development Service
 

@@ -1,0 +1,14 @@
+FROM docker.io/library/ubuntu:24.04
+
+RUN apt-get update && \
+   DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+   net-tools dnsutils ca-certificates iproute2 iputils-ping isc-dhcp-client udhcpc iw wpasupplicant && \
+   command -v udhcpc && \
+   rm -rf /var/lib/apt/lists/*
+
+COPY --chmod=755 bootstrap.sh /usr/local/bin/client
+
+CMD ["/usr/local/bin/client"]
+
+LABEL org.opencontainers.image.source=https://github.com/gdcs-dev/vcpe
+LABEL org.opencontainers.image.description="Wired and wireless client for the vCPE project"

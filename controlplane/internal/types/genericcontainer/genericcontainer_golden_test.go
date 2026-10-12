@@ -230,6 +230,50 @@ func TestGenericContainerEntrypointWithoutRadiosDoesNotWait(t *testing.T) {
 	}
 }
 
+func TestGenericContainerClientWiredInitialization(t *testing.T) {
+	entrypoint := renderEntrypoint(t)
+	for _, test := range []struct {
+		name        string
+		environment []string
+		wantDHCP    bool
+	}{
+		{
+			name: "unmanaged wired",
+			environment: []string{
+				"IFACE_LAN_DEVICE=eth0", "IFACE_LAN_ADDRESSING=dhcp", "IFACE_LAN_DEFAULT_ROUTE=1",
+			},
+			wantDHCP: true,
+		},
+		{
+			name: "podman managed wired",
+			environment: []string{
+				"IFACE_LAN_DEVICE=eth0", "IFACE_LAN_ADDRESSING=dhcp", "IFACE_LAN_NETWORK_MANAGED=1",
+			},
+		},
+		{
+			name: "mixed with radio",
+			environment: []string{
+				"RADIO_WIFI_DEVICE=wlan0", "VCPE_TEST_IP_READY_AFTER=2",
+				"IFACE_LAN_DEVICE=eth0", "IFACE_LAN_ADDRESSING=dhcp", "IFACE_LAN_DEFAULT_ROUTE=1",
+			},
+			wantDHCP: true,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			output, err := runEntrypoint(t, entrypoint, test.environment)
+			if err != nil {
+				t.Fatalf("entrypoint failed: %v\n%s", err, output)
+			}
+			if count := strings.Count(output, "udhcpc-called"); (count == 1) != test.wantDHCP || count > 1 {
+				t.Fatalf("DHCP calls = %d, want one = %t; output: %s", count, test.wantDHCP, output)
+			}
+			if !strings.Contains(output, "workload-started") || test.wantDHCP && strings.Index(output, "udhcpc-called") > strings.Index(output, "workload-started") {
+				t.Fatalf("wired initialization did not complete before client command: %s", output)
+			}
+		})
+	}
+}
+
 func TestGenericContainerRadioOnlyUsesNoNetworkMode(t *testing.T) {
 	compose := renderGenericCompose(t, plan.Instance{
 		Radios: []plan.Radio{{Name: "wifi", Network: "home", Device: "wlan0", Mode: "station"}},
@@ -243,6 +287,23 @@ func TestGenericContainerRadioOnlyUsesNoNetworkMode(t *testing.T) {
 	}
 	if _, exists := compose["networks"]; exists {
 		t.Fatalf("radio-only compose has top-level networks: %#v", compose["networks"])
+	}
+}
+
+func TestGenericContainerWiredOnlyUsesManifestCommand(t *testing.T) {
+	compose := renderGenericCompose(t, plan.Instance{
+		Interfaces: []plan.Interface{{Role: "lan", Network: "edge-lan", Device: "eth0"}},
+	})
+	service := composeService(t, compose, "station-1")
+	if _, exists := service["network_mode"]; exists {
+		t.Fatalf("wired client has network_mode: %#v", service["network_mode"])
+	}
+	if _, exists := service["networks"]; !exists {
+		t.Fatal("wired client has no network attachment")
+	}
+	command, ok := service["command"].([]any)
+	if !ok || len(command) != 1 || command[0] != "/usr/local/bin/client" {
+		t.Fatalf("wired client is missing manifest command: %#v", service["command"])
 	}
 }
 
@@ -268,9 +329,14 @@ func renderGenericCompose(t *testing.T, instance plan.Instance) map[string]any {
 	genericcontainer.Register()
 	serviceType, _ := typeregistry.Lookup("generic-container")
 	instance.Index = 0
+	var config yaml.Node
+	if err := yaml.Unmarshal([]byte("command: [/usr/local/bin/client]"), &config); err != nil {
+		t.Fatal(err)
+	}
 	service := plan.Service{
 		Name: "station", Type: "generic-container", Replicas: 1,
-		Image:     manifest.Image{Repository: "example/station", Tag: "test"},
+		Image:     manifest.Image{Repository: "ghcr.io/gdcs-dev/client", Tag: "dev"},
+		Config:    config,
 		Instances: []plan.Instance{instance},
 	}
 	result, err := serviceType.Renderer().Render(context.Background(), render.Input{Deployment: plan.Deployment{Name: "edge"}, Service: service})
@@ -342,6 +408,9 @@ count=$(wc -l < "$VCPE_TEST_IP_CALLS")
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(directory, "sleep"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(directory, "udhcpc"), []byte("#!/bin/sh\nprintf 'udhcpc-called %s\\n' \"$*\"\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	command := exec.Command("/bin/sh", entrypointPath, "/bin/sh", "-c", "echo workload-started")

@@ -40,20 +40,20 @@ fi
 bash -n \
     services/gateway/container/entrypoint.sh \
     services/gateway/container/hostapd-wrapper.sh \
-    services/wireless-client/bootstrap.sh \
+    services/client/bootstrap.sh \
     tests/smoke/controlplane-wireless-fake-manager.sh \
     tests/smoke/controlplane-mesh-roaming-machine.sh \
     tests/smoke/gateway-wireless-entrypoint.sh \
     tests/smoke/gateway-hostapd-wrapper.sh \
     tests/smoke/gateway-vap-container.sh \
     tests/smoke/gateway-wireless-image-content.sh \
-    tests/smoke/wireless-client-bootstrap.sh \
+    tests/smoke/client-bootstrap.sh \
     tests/smoke/wireless-credential-container-leak.sh \
     tests/smoke/wireless-security-image-capabilities.sh
 
 bash tests/smoke/gateway-wireless-image-content.sh
 bash tests/smoke/gateway-hostapd-wrapper.sh
-bash tests/smoke/wireless-client-bootstrap.sh
+bash tests/smoke/client-bootstrap.sh
 bash tests/smoke/controlplane-wireless-fake-manager.sh
 bash tests/smoke/wireless-credential-container-leak.sh
 bash tests/smoke/wireless-security-image-capabilities.sh

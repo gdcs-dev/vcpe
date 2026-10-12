@@ -67,11 +67,11 @@ func TestContainerFileReadsRuntimeContractWithoutLeakingFailureOutput(t *testing
 		gotArgs = append([]string(nil), args...)
 		return []byte("state=ready\n"), nil
 	}}
-	contents, err := adapter.ContainerFile(context.Background(), "wireless-client-1", "/run/vcpe/wireless-client/status")
+	contents, err := adapter.ContainerFile(context.Background(), "client-1", "/run/vcpe/client/status")
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantArgs := []string{"exec", "wireless-client-1", "cat", "/run/vcpe/wireless-client/status"}
+	wantArgs := []string{"exec", "client-1", "cat", "/run/vcpe/client/status"}
 	if string(contents) != "state=ready\n" || !reflect.DeepEqual(gotArgs, wantArgs) {
 		t.Fatalf("contents/command = %q %#v", contents, gotArgs)
 	}
@@ -79,7 +79,7 @@ func TestContainerFileReadsRuntimeContractWithoutLeakingFailureOutput(t *testing
 	adapter.run = func(context.Context, string, ...string) ([]byte, error) {
 		return []byte("SENTINEL-runtime-output"), errors.New("exit status 1")
 	}
-	_, err = adapter.ContainerFile(context.Background(), "wireless-client-1", "/run/vcpe/wireless-client/status")
+	_, err = adapter.ContainerFile(context.Background(), "client-1", "/run/vcpe/client/status")
 	if err == nil || strings.Contains(err.Error(), "SENTINEL") {
 		t.Fatalf("bounded read error = %v", err)
 	}

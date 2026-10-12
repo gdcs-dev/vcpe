@@ -4,9 +4,9 @@ set -euo pipefail
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 images=()
 [[ -n "${VCPE_GATEWAY_IMAGE:-}" ]] && images+=("$VCPE_GATEWAY_IMAGE")
-[[ -n "${VCPE_WIRELESS_CLIENT_IMAGE:-}" ]] && images+=("$VCPE_WIRELESS_CLIENT_IMAGE")
+[[ -n "${VCPE_CLIENT_IMAGE:-}" ]] && images+=("$VCPE_CLIENT_IMAGE")
 if [[ ${#images[@]} -eq 0 ]]; then
-    echo 'wireless credential container leak: skipped (set VCPE_GATEWAY_IMAGE and/or VCPE_WIRELESS_CLIENT_IMAGE)'
+    echo 'wireless credential container leak: skipped (set VCPE_GATEWAY_IMAGE and/or VCPE_CLIENT_IMAGE)'
     exit 0
 fi
 

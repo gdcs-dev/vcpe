@@ -76,15 +76,6 @@ func TestBuiltInMetadata(t *testing.T) {
 			renderer:    "oktopus-renderer",
 		},
 		{
-			name:         "telemetry-gateway",
-			health:       typeregistry.HealthBehavior{Mode: typeregistry.HealthModeCurated, ContainerPort: 8080},
-			imagePolicy:  "build",
-			description:  "Embedded telemetry gateway with local PostgreSQL and observability services",
-			defaultImage: "ghcr.io/gdcs-dev/telemetry-gateway",
-			roles:        []typeregistry.RoleRequirement{{Role: "mgmt", Required: true}},
-			renderer:     "telemetry-gateway-renderer",
-		},
-		{
 			name:         "webconfig",
 			health:       typeregistry.HealthBehavior{Mode: typeregistry.HealthModeCurated, ContainerPort: 9878},
 			imagePolicy:  "build",

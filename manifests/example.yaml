@@ -5,7 +5,7 @@ metadata:
   labels:
     scenario: example
   annotations:
-    description: "Full vCPE lab — BNG, WebPA, Gateway, event-sink, and Alpine client over a bridge WAN network."
+    description: "vCPE lab with BNG, WebPA, Gateway, and event-sink over a bridge WAN network."
 spec:
     maxReplicasPerService: 3
     maxActiveDeployments: 10

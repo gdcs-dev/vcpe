@@ -13,7 +13,7 @@ import (
 	"github.com/gdcs-dev/vcpe/controlplane/internal/plan"
 )
 
-const wirelessClientStatusPath = "/run/vcpe/wireless-client/status"
+const clientStatusPath = "/run/vcpe/client/status"
 
 var wirelessAuthenticationTimeout = 45 * time.Second
 var wirelessAuthenticationPoll = 250 * time.Millisecond
@@ -110,7 +110,7 @@ func waitForRemoteMeshDHCP(ctx context.Context, deployment plan.Deployment, insp
 	for _, scenario := range deployment.WirelessScenarios {
 		var container, device, radioName string
 		for _, service := range deployment.Services {
-			if !isPurposeBuiltWirelessClient(service.Image.Repository) {
+			if !isClientImage(service.Image.Repository) {
 				continue
 			}
 			for _, instance := range service.Instances {
@@ -136,7 +136,7 @@ func waitForRemoteMeshDHCP(ctx context.Context, deployment plan.Deployment, insp
 		ready := false
 		lastFailure := "station status unavailable"
 		for !ready {
-			status, err := inspector.ContainerFile(waitCtx, container, wirelessClientStatusPath)
+			status, err := inspector.ContainerFile(waitCtx, container, clientStatusPath)
 			if err == nil {
 				fields := map[string]string{}
 				for _, line := range strings.Split(string(status), "\n") {
@@ -269,7 +269,7 @@ func waitForWirelessAuthentication(ctx context.Context, deployment plan.Deployme
 	defer ticker.Stop()
 	for {
 		for container := range pending {
-			status, err := inspector.ContainerFile(waitCtx, container, wirelessClientStatusPath)
+			status, err := inspector.ContainerFile(waitCtx, container, clientStatusPath)
 			if err == nil && strings.Contains(string(status), "state=ready\n") {
 				delete(pending, container)
 			}
@@ -288,7 +288,7 @@ func waitForWirelessAuthentication(ctx context.Context, deployment plan.Deployme
 func personalWirelessClientContainers(deployment plan.Deployment) []string {
 	containers := map[string]bool{}
 	for _, service := range deployment.Services {
-		if !isPurposeBuiltWirelessClient(service.Image.Repository) {
+		if !isClientImage(service.Image.Repository) {
 			continue
 		}
 		for _, instance := range service.Instances {
@@ -304,6 +304,6 @@ func personalWirelessClientContainers(deployment plan.Deployment) []string {
 	return sortedTrueKeys(containers)
 }
 
-func isPurposeBuiltWirelessClient(repository string) bool {
-	return repository == "wireless-client" || strings.HasSuffix(repository, "/wireless-client")
+func isClientImage(repository string) bool {
+	return repository == "ghcr.io/gdcs-dev/client"
 }

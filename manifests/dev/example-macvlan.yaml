@@ -5,7 +5,7 @@ metadata:
   labels:
     scenario: example-macvlan
   annotations:
-    description: "Full vCPE lab using macvlan WAN — BNG, WebPA, Gateway, event-sink, and Alpine client"
+    description: "Full vCPE lab using macvlan WAN — BNG, WebPA, Gateway, event-sink, and client"
 spec:
   maxReplicasPerService: 3
   maxActiveDeployments: 10
@@ -144,15 +144,16 @@ spec:
       type: generic-container
       replicas: 1
       image:
-        repository: docker.io/library/alpine
-        tag: "3.19"
-        pullPolicy: always-pull
+        repository: ghcr.io/gdcs-dev/client
+        tag: dev
+        pullPolicy: build-if-missing
+        buildContext: services/client
       interfaces:
         - role: lan-p1
           defaultRoute: true
       config:
         env:
           VCPE_INIT_NAMESERVER_FROM_ROUTE: "1"
-        command: ["sleep", "infinity"]
+        command: ["/usr/local/bin/client"]
       dependsOn:
         - gateway

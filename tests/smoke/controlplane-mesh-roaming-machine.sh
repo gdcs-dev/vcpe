@@ -76,7 +76,7 @@ cleanup() {
         podman exec "$primary-remote-1" ping -n -c 1 -W 2 -I brlan0 10.0.0.1 >"$work_dir/remote-bridge-ping.log" 2>&1 || true
         for client in station remote-probe; do
             podman logs "$primary-$client-1" >"$work_dir/$client-container.log" 2>&1 || true
-            podman exec "$primary-$client-1" cat /run/vcpe/wireless-client/status >"$work_dir/$client-status.log" 2>&1 || true
+            podman exec "$primary-$client-1" cat /run/vcpe/client/status >"$work_dir/$client-status.log" 2>&1 || true
             podman exec "$primary-$client-1" wpa_cli -i wlan0 status >"$work_dir/$client-wpa.log" 2>&1 || true
             podman exec "$primary-$client-1" ip -j -4 addr show dev wlan0 >"$work_dir/$client-address.log" 2>&1 || true
             podman exec "$primary-$client-1" ping -n -c 1 -W 2 -I wlan0 10.0.0.1 >"$work_dir/$client-root-ping.log" 2>&1 || true
@@ -164,13 +164,13 @@ check_remote_path() {
     local probe="$deployment-remote-probe-1"
     local client_status client_ipv4 client_mac
     for attempt in {1..45}; do
-        client_status=$(podman exec "$probe" cat /run/vcpe/wireless-client/status 2>/dev/null) || client_status=
+        client_status=$(podman exec "$probe" cat /run/vcpe/client/status 2>/dev/null) || client_status=
         client_ipv4=$(printf '%s\n' "$client_status" | sed -n 's@^ipv4=\([^/]*\)/24$@\1@p')
         client_mac=$(podman exec "$probe" cat /sys/class/net/wlan0/address 2>/dev/null) || client_mac=
         if podman exec "$remote" gateway-health-probe mesh 2>/dev/null |
             jq -e '.radio == "backhaul" and .interface == "mesh0" and .bridge == "brlan0" and .joined and .peers > 0' >/dev/null 2>&1 &&
-            podman exec "$probe" grep -Fxq 'state=ready' /run/vcpe/wireless-client/status &&
-            podman exec "$probe" grep -Eq '^ipv4=10\.0\.0\.(1[0-9][0-9]|200)/24$' /run/vcpe/wireless-client/status &&
+            podman exec "$probe" grep -Fxq 'state=ready' /run/vcpe/client/status &&
+            podman exec "$probe" grep -Eq '^ipv4=10\.0\.0\.(1[0-9][0-9]|200)/24$' /run/vcpe/client/status &&
             [[ "$client_ipv4" =~ ^10\.0\.0\.(1[0-9][0-9]|200)$ && "$client_mac" =~ ^[[:xdigit:]:]+$ ]] &&
             podman exec "$deployment-root-1" cat /var/lib/misc/dnsmasq.leases 2>/dev/null |
                 awk -v mac="$client_mac" -v ip="$client_ipv4" '$2 == mac && $3 == ip { found = 1 } END { exit !found }' &&

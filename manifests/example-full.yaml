@@ -5,7 +5,7 @@ metadata:
   labels:
     scenario: example-full
   annotations:
-    description: "Full vCPE lab — BNG, WebPA, Gateway, event-sink, and Alpine client over a bridge WAN network."
+    description: "Full vCPE lab — BNG, WebPA, Gateway, event-sink, and client over a bridge WAN network."
 spec:
     maxReplicasPerService: 3
     maxActiveDeployments: 10
@@ -168,15 +168,16 @@ spec:
           type: generic-container
           replicas: 1
           image:
-            repository: docker.io/library/alpine
-            tag: "3.19"
+            repository: ghcr.io/gdcs-dev/client
+            tag: v0.3.3
             pullPolicy: always-pull
+            buildContext: services/client
           interfaces:
             - role: lan-p1
               defaultRoute: true
           config:
             env:
                 VCPE_INIT_NAMESERVER_FROM_ROUTE: "1"
-            command: ["sleep", "infinity"]
+            command: ["/usr/local/bin/client"]
           dependsOn:
             - gateway

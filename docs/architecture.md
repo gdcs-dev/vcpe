@@ -77,6 +77,8 @@ and bridge-name helpers, so they never diverge.
 
 ## State
 
-Persisted state is stamped `schemaVersion: vcpe.dev/v1`. A non-empty state root
+Persisted state is stamped `schemaVersion: vcpe.dev/state/v3`. A non-empty state root
 with a missing or mismatched stamp is refused with an actionable error directing
-the operator to run `vcpe state reset`; there is no automatic migration.
+the operator to run `vcpe state reset`; there is no automatic migration. Reset
+first garbage-collects all manager-owned radios and refuses to erase state when
+that external cleanup fails.

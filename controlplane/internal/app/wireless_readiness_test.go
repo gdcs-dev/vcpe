@@ -55,7 +55,10 @@ func TestWaitForGatewayMeshesRequiresPeerAndBridge(t *testing.T) {
 	}
 }
 
-func (stub readinessInspectorStub) ContainerFile(context.Context, string, string) ([]byte, error) {
+func (stub readinessInspectorStub) ContainerFile(_ context.Context, _, path string) ([]byte, error) {
+	if path != "/run/vcpe/client/status" {
+		return nil, fmt.Errorf("unexpected client status path %q", path)
+	}
 	if stub.clientStatus != nil {
 		return stub.clientStatus, nil
 	}
@@ -154,7 +157,7 @@ func TestWaitForGatewayVAPsRequiresEveryPlannedSlot(t *testing.T) {
 
 func TestWaitForWirelessAuthenticationSelectsPersonalWirelessClient(t *testing.T) {
 	deployment := credentialPlan()
-	deployment.Services[1].Image.Repository = "ghcr.io/gdcs-dev/wireless-client"
+	deployment.Services[1].Image.Repository = "ghcr.io/gdcs-dev/client"
 	deployment.WirelessNetworks = []plan.WirelessNetwork{{Name: "home", Security: manifest.WirelessWPA3Personal}}
 	for index := range deployment.Services[1].Instances {
 		deployment.Services[1].Instances[index].Radios[0].Mode = "station"
@@ -165,6 +168,15 @@ func TestWaitForWirelessAuthenticationSelectsPersonalWirelessClient(t *testing.T
 	}
 	if err := waitForWirelessAuthentication(context.Background(), deployment, readinessInspectorStub{ready: true}); err != nil {
 		t.Fatal(err)
+	}
+	for index := range deployment.Services[1].Instances {
+		deployment.Services[1].Instances[index].Radios = nil
+	}
+	if containers := personalWirelessClientContainers(deployment); len(containers) != 0 {
+		t.Fatalf("wired-only client selected for wireless readiness: %v", containers)
+	}
+	if err := waitForWirelessAuthentication(context.Background(), deployment, readinessInspectorStub{}); err != nil {
+		t.Fatalf("wired-only client waited for station: %v", err)
 	}
 }
 
@@ -191,7 +203,7 @@ func TestAuthenticationFailurePreservesCredentialAndRetryState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	contents = []byte(strings.Replace(string(contents), "example/station", "ghcr.io/gdcs-dev/wireless-client", 1))
+	contents = []byte(strings.Replace(string(contents), "example/station", "ghcr.io/gdcs-dev/client", 1))
 	if err := os.WriteFile(manifestPath, contents, 0o644); err != nil {
 		t.Fatal(err)
 	}

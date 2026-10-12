@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,7 +11,6 @@ import (
 	"github.com/gdcs-dev/vcpe/controlplane/internal/compose"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/persist"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/plan"
-	"github.com/gdcs-dev/vcpe/controlplane/internal/types"
 )
 
 // --- stubs ---
@@ -33,9 +31,10 @@ func (r *recordingNetworkProvisioner) RemoveNetwork(_ context.Context, name stri
 }
 
 type recordingComposeRunner struct {
-	upCalls    []string
-	downCalls  []string
-	upRequests []compose.Request
+	upCalls      []string
+	downCalls    []string
+	downRequests []compose.Request
+	upRequests   []compose.Request
 }
 
 func (r *recordingComposeRunner) Up(_ context.Context, req compose.Request) (compose.OperationRecord, error) {
@@ -46,6 +45,7 @@ func (r *recordingComposeRunner) Up(_ context.Context, req compose.Request) (com
 
 func (r *recordingComposeRunner) Down(_ context.Context, req compose.Request) (compose.OperationRecord, error) {
 	r.downCalls = append(r.downCalls, req.ProjectName)
+	r.downRequests = append(r.downRequests, req)
 	return compose.OperationRecord{}, nil
 }
 
@@ -144,52 +144,6 @@ func TestLifecycleStagesCuratedEnvFile(t *testing.T) {
 		t.Errorf("expected compose up for edge-bng, got %v", cmpStub.upCalls)
 	}
 	_ = netStub // network provisioning verified in separate test
-}
-
-func TestTelemetryGatewayLifecycleUsesOperationArtifacts(t *testing.T) {
-	stateRoot := t.TempDir()
-	opID := "op-telemetry-001"
-	repoRoot := makeRepoRoot(t, "telemetry-gateway")
-	_, composeStub := stubLifecycle(t)
-	types.Register()
-
-	submoduleCompose := filepath.Join(repoRoot, "services", "telemetry-gateway", "compose.yaml")
-	originalCompose, err := os.ReadFile(submoduleCompose)
-	if err != nil {
-		t.Fatal(err)
-	}
-	artifactDirectory := filepath.Dir(writeArtifactEnv(t, stateRoot, opID, "telemetry-gateway"))
-	generatedCompose := filepath.Join(artifactDirectory, "compose.yaml")
-	if err := os.WriteFile(generatedCompose, []byte("services:\n  telemetry-gateway-1:\n    image: test:latest\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	deployment := plan.Deployment{
-		Name:     "edge",
-		Networks: []plan.Network{{Role: "mgmt", Bridge: "edge-mgmt"}},
-		Services: []plan.Service{{
-			Name: "telemetry-gateway", Type: "telemetry-gateway", Replicas: 1,
-			Instances: []plan.Instance{{Index: 0, Interfaces: []plan.Interface{{Role: "mgmt", Network: "edge-mgmt"}}}},
-		}},
-	}
-	if err := applyComposeLifecycle(context.Background(), stateRoot, opID, deployment, nil); err != nil {
-		t.Fatalf("applyComposeLifecycle: %v", err)
-	}
-	if len(composeStub.upRequests) != 1 || composeStub.upRequests[0].ComposeFile != generatedCompose {
-		t.Fatalf("compose requests = %#v, want operation artifact %q", composeStub.upRequests, generatedCompose)
-	}
-	currentCompose, err := os.ReadFile(submoduleCompose)
-	if err != nil || string(currentCompose) != string(originalCompose) {
-		t.Fatalf("submodule compose changed: error=%v content=%q", err, currentCompose)
-	}
-	for _, generatedPath := range []string{
-		filepath.Join(repoRoot, "services", "telemetry-gateway", "compose.env"),
-		filepath.Join(repoRoot, "services", "telemetry-gateway", "runtime"),
-	} {
-		if _, err := os.Stat(generatedPath); !errors.Is(err, os.ErrNotExist) {
-			t.Errorf("generated submodule path exists: %s", generatedPath)
-		}
-	}
 }
 
 // TestLifecycleEnsuresPodmanNetworksBeforeCompose verifies that all Podman
@@ -365,59 +319,72 @@ func TestTeardownCallsComposeDown(t *testing.T) {
 }
 
 func TestDownSavedUnsupportedService(t *testing.T) {
-	for _, missingArtifact := range []bool{false, true} {
-		name := "saved compose"
-		if missingArtifact {
-			name = "missing compose"
-		}
-		t.Run(name, func(t *testing.T) {
-			stateRoot := t.TempDir()
-			makeRepoRoot(t)
-			_, runner := stubLifecycle(t)
-			store, err := persist.Open(stateRoot)
-			if err != nil {
-				t.Fatal(err)
-			}
-			const snapshot = "apiVersion: vcpe.dev/v1\nkind: Deployment\nmetadata: {name: edge}\nspec:\n  services:\n    - {name: routerd, type: routerd, replicas: 1, image: {repository: example/routerd}}\n"
-			if err := store.SaveDesiredSnapshot("edge", []byte(snapshot)); err != nil {
-				t.Fatal(err)
-			}
-			store.Close()
-			if !missingArtifact {
-				artifactDir := filepath.Join(stateRoot, "artifacts", "v1", "deployments", "edge", "runtime", "routerd")
-				if err := os.MkdirAll(artifactDir, 0o755); err != nil {
-					t.Fatal(err)
-				}
-				if err := os.WriteFile(filepath.Join(artifactDir, "compose.yaml"), []byte("services:\n  routerd:\n    image: example/routerd\n"), 0o644); err != nil {
-					t.Fatal(err)
-				}
-			}
-
-			_, err = executeLocal(Options{Command: "down", Name: "edge", StateRoot: stateRoot})
+	for _, serviceType := range []string{"routerd", "telemetry-gateway"} {
+		for _, missingArtifact := range []bool{false, true} {
+			name := serviceType + "/saved compose"
 			if missingArtifact {
-				if err == nil || !strings.Contains(err.Error(), "compose.yaml") || !strings.Contains(err.Error(), "recover") {
-					t.Fatalf("missing artifact error = %v, want recovery guidance", err)
+				name = serviceType + "/missing compose"
+			}
+			t.Run(name, func(t *testing.T) {
+				stateRoot := t.TempDir()
+				makeRepoRoot(t)
+				_, runner := stubLifecycle(t)
+				store, err := persist.Open(stateRoot)
+				if err != nil {
+					t.Fatal(err)
 				}
-				if len(runner.downCalls) != 0 {
-					t.Fatalf("compose down calls after missing artifact = %v", runner.downCalls)
+				snapshot := "apiVersion: vcpe.dev/v1\nkind: Deployment\nmetadata: {name: edge}\nspec:\n  services:\n    - {name: " + serviceType + ", type: " + serviceType + ", replicas: 1, image: {repository: example/" + serviceType + "}}\n"
+				if err := store.SaveDesiredSnapshot("edge", []byte(snapshot)); err != nil {
+					t.Fatal(err)
 				}
-				return
-			}
-			if err != nil {
-				t.Fatal(err)
-			}
-			if len(runner.downCalls) != 1 || runner.downCalls[0] != "edge-routerd" {
-				t.Fatalf("compose down calls = %v", runner.downCalls)
-			}
-			store, err = persist.Open(stateRoot)
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer store.Close()
-			if names, err := store.ListKnownDeployments(); err != nil || len(names) != 0 {
-				t.Fatalf("deployments after down = %v, error = %v", names, err)
-			}
-		})
+				store.Close()
+				artifactDir := filepath.Join(stateRoot, "artifacts", "v1", "deployments", "edge", "runtime", serviceType)
+				if !missingArtifact {
+					if err := os.MkdirAll(artifactDir, 0o755); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.WriteFile(filepath.Join(artifactDir, "compose.yaml"), []byte("services:\n  "+serviceType+":\n    image: example/"+serviceType+"\n    volumes:\n      - postgres-data:/data\nvolumes:\n  postgres-data: {}\n"), 0o644); err != nil {
+						t.Fatal(err)
+					}
+				}
+
+				_, err = executeLocal(Options{Command: "down", Name: "edge", StateRoot: stateRoot})
+				if missingArtifact {
+					if err == nil || !strings.Contains(err.Error(), "compose.yaml") || !strings.Contains(err.Error(), "recover") {
+						t.Fatalf("missing artifact error = %v, want recovery guidance", err)
+					}
+					if len(runner.downCalls) != 0 {
+						t.Fatalf("compose down calls after missing artifact = %v", runner.downCalls)
+					}
+					store, err = persist.Open(stateRoot)
+					if err != nil {
+						t.Fatal(err)
+					}
+					defer store.Close()
+					if names, err := store.ListKnownDeployments(); err != nil || len(names) != 1 || names[0] != "edge" {
+						t.Fatalf("deployments after failed down = %v, error = %v", names, err)
+					}
+					return
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(runner.downCalls) != 1 || runner.downCalls[0] != "edge-"+serviceType {
+					t.Fatalf("compose down calls = %v", runner.downCalls)
+				}
+				if runner.downRequests[0].ComposeFile != filepath.Join(artifactDir, "compose.yaml") {
+					t.Fatalf("compose down did not use saved artifact: %+v", runner.downRequests[0])
+				}
+				store, err = persist.Open(stateRoot)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer store.Close()
+				if names, err := store.ListKnownDeployments(); err != nil || len(names) != 0 {
+					t.Fatalf("deployments after down = %v, error = %v", names, err)
+				}
+			})
+		}
 	}
 }
 

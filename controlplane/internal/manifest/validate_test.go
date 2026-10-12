@@ -350,7 +350,7 @@ func wirelessDoc() Document {
 		Name:     "station",
 		Type:     "generic-container",
 		Replicas: 1,
-		Image:    Image{Repository: "wireless-client"},
+		Image:    Image{Repository: "ghcr.io/gdcs-dev/client"},
 		Radios:   []Radio{{Name: "home-station", Medium: "rf24", Network: "home", Device: "wlan0", Mode: RadioModeStation, Addressing: AddressingDHCP}},
 	})
 	return doc
@@ -830,7 +830,7 @@ func TestLoadAndValidateMixedWirelessManifest(t *testing.T) {
 		"      bridges: [{name: brlan0}]",
 		"      radios: [{name: home-ap, medium: rf24, device: wlan0, mode: ap, vaps: [{slot: 0, network: home, bridge: brlan0}]}]",
 		"    - name: station", "      type: generic-container", "      replicas: 1",
-		"      image: {repository: wireless-client}",
+		"      image: {repository: ghcr.io/gdcs-dev/client}",
 		"      radios: [{name: home-station, medium: rf24, network: home, device: wlan0, mode: station, addressing: dhcp}]",
 	}, "\n")
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {

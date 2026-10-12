@@ -12,8 +12,8 @@ func TestRegisterAddsWebhookDiagnosticProvider(t *testing.T) {
 	if _, ok := diagnostic.DefaultRegistry().Lookup(diagnostic.JourneyWebhook, "event-sink", "webpa"); !ok {
 		t.Fatal("webhook diagnostic provider is not registered")
 	}
-	if _, ok := diagnostic.DefaultRegistry().Lookup(diagnostic.JourneyWebhook, "telemetry-gateway", "webpa"); !ok {
-		t.Fatal("telemetry-gateway webhook diagnostic provider is not registered")
+	if _, ok := diagnostic.DefaultRegistry().Lookup(diagnostic.JourneyWebhook, "telemetry-gateway", "webpa"); ok {
+		t.Fatal("removed telemetry-gateway webhook diagnostic provider is registered")
 	}
 	if _, ok := diagnostic.DefaultRegistry().Lookup(diagnostic.JourneyParodusClients, "gateway", "parodus"); !ok {
 		t.Fatal("Parodus client-list diagnostic provider is not registered")

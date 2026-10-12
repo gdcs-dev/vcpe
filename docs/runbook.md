@@ -83,6 +83,32 @@ controlplane/bin/vcpe diagnose --name example-full --from gateway --to webpa --c
 controlplane/bin/vcpe diagnose --name example-full --from gateway --to webpa --client-service my-test-app --json
 ```
 
+To inspect deployment-local DNS from a management service:
+
+```bash
+podman inspect example-webpa-1 --format '{{json .HostConfig.Dns}}'
+podman exec example-webpa-1 getent hosts gateway gateway-1 gateway-1-wan
+podman exec example-webpa-1 ip route get "$(podman exec example-webpa-1 getent hosts gateway | awk 'NR == 1 { print $1 }')"
+podman exec example-bng-1 cat /etc/dnsmasq.dhcp-hosts.map
+podman exec example-bng-1 cat /etc/dnsmasq.dhcp.hosts
+podman exec example-bng-1 cat /var/log/dhcpd-notify.log
+```
+
+The first DNS entry in Podman metadata should be BNG's management address and
+the second should be the management-network gateway used by Aardvark. Podman
+may still show only Aardvark in the container's `/etc/resolv.conf`; Netavark
+applies the configured upstream chain behind that listener.
+
+The route lookup for a Gateway or XB10 access address should report BNG's
+management address as its next hop. WebPA installs these routes before starting
+Caduceus so resolved webhook destinations are reachable over TCP as well as
+DNS.
+
+If a Gateway or XB10 alias does not resolve, verify that its lease is active,
+its MAC appears in `dnsmasq.dhcp-hosts.map`, and the corresponding address and
+aliases appear in `dnsmasq.dhcp.hosts`. Client-provided DHCP hostnames are
+diagnostic only and do not control published names.
+
 To send one explicit, bounded diagnostic event from a supported Gateway or XB10
 source through WebPA to an event-sink callback, use:
 
@@ -122,6 +148,49 @@ controlplane/bin/vcpe status --name bng-7
 controlplane/bin/vcpe status --name bng-7 --json
 ```
 
+For wireless deployments, selected-deployment status also shows the allocated
+group bit, each radio's manager name, device, medium, and reconciliation status,
+and every planned AP VAP's slot, interface, BSSID, bridge, and observed readiness
+(`ready`, `missing`, `mismatch`, or `unknown` if the container cannot be probed). A
+`failed:` or `release-failed:` status is retained for retry. Run `vcpe down`
+again after correcting manager or machine availability; do not delete the state
+root manually.
+
+```bash
+controlplane/bin/vcpe status --name wireless --json
+```
+
+The `wireless.topology[]` entries include `medium`, `band`, `channel`,
+`widthMHz`, and `vaps[]` (`slot`, `interface`, `bssid`, `bridge`, `state`).
+Station radios have an empty `vaps` list. No profile credential or protected
+file contents are included.
+
+### Wireless Personal Credentials
+
+WPA2-Personal and WPA3-Personal networks use `passphraseSecretRef`; the value is
+resolved from the referenced secret provider during apply. The maintained
+development manifest is explicitly labeled `environment: development` and uses
+a development-only `literal` provider, so it applies without shell setup:
+
+```bash
+controlplane/bin/vcpe up --manifest manifests/dev/wireless.yaml
+```
+
+Use an `env` or `file` provider for manifests outside local development.
+
+Values must contain 8 through 63 printable ASCII characters. Changing the
+resolved value and applying again recreates only AP and station consumers, so a
+brief WLAN interruption is expected. If recreation fails, keep the environment
+value available and retry apply, or run `vcpe down --name <deployment>`; the
+control plane retains the new protected value and radio ownership for recovery.
+
+To return a network to open association, set `security: open`, remove
+`passphraseSecretRef`, and apply. Successful down removes that deployment's
+protected files after consumers stop. `state reset` stops known consumers,
+cleans all manager-owned radios, removes every protected credential, and then
+clears state. Status, logs, and command arguments never display credential
+values.
+
 ## Deployment Selection And Scaling Limits
 
 - Deployment-targeting commands (`status`, `diagnose`, `logs`, `down`, `destroy`, `service`)
@@ -132,15 +201,62 @@ controlplane/bin/vcpe status --name bng-7 --json
   with a cap-violation error.
 - Per-service replica count is bounded by `spec.maxReplicasPerService`.
 
+## Routerd Removal
+
+Routerd is no longer a supported service type. New and previously deployed
+manifests with `type: routerd` fail `vcpe plan` and `vcpe up` preflight without
+changing running workloads. Do not substitute Gateway or `generic-container`
+without separately validating the network topology and configuration.
+
+Before upgrading, run `vcpe list` and take down any routerd deployment whose
+saved generated Compose artifacts are missing or uncertain using the previous
+binary:
+
+```bash
+vcpe down --name <deployment-name>
+```
+
+After upgrading, `vcpe down --name <deployment-name>` still removes an existing
+routerd deployment if its saved per-service `compose.yaml` is present. If the
+artifact is missing, teardown reports an error instead of claiming success:
+restore the saved Compose artifact or use the previous compatible binary to
+take down the deployment. Do not reset state as a substitute for stopping the
+running project. Replace the old manifest with a separately validated supported
+service type before applying again.
+
 ## State Schema-Version Cutover
 
-Persisted state is stamped `schemaVersion: vcpe.dev/v1`. A state root written by
-an incompatible schema is refused with an actionable error. Reset and re-stamp
-the root before applying v1 manifests (there is no automatic migration):
+Persisted state is stamped `schemaVersion: vcpe.dev/state/v3`. Existing v2
+desired snapshots use the combined wireless-network shape and cannot be safely
+reinterpreted. A v2 or other incompatible state root is refused; there is no
+automatic migration. Tear down deployments with the v2 binary while it can
+still read its records. Then use the v3 binary to reset and re-stamp the root
+before applying the new media/profile/VAP manifests:
 
 ```bash
 controlplane/bin/vcpe state reset
 ```
+
+Reset invokes manager GC with an explicitly empty keep set before deleting any
+database rows. If manager initialization or cleanup fails, reset aborts and
+leaves leases, snapshots, radio records, and group allocations intact. Ensure
+the hwsim-enabled Podman machine is running before reset on macOS.
+
+Rollback to a v2 binary requires tearing down all deployments with the v3
+binary, confirming `vcpe-hwsim list` is empty, then resetting with the v2
+binary before another apply. Never reuse a v3 state root with a v2 binary. A reset destroys
+all desired snapshots and allocations; preserve any needed manifest source
+outside the state root before starting either cutover.
+
+Old wireless manifests must move channel/band/width into `wirelessMedia[]`, keep
+SSID/security in reusable `wirelessNetworks[]`, move AP bridge/profile selection
+to `radios[].vaps[]`, and give each station a medium/profile pair. To secure a
+profile, add a `spec.secrets[]` env/file declaration and set it to
+`wpa2-personal` or `wpa3-personal`, and reference only its name through
+`passphraseSecretRef`. A literal passphrase is permitted only in a manifest
+explicitly labeled `metadata.labels.environment: development`. Do not migrate
+production credentials into manifests, command arguments, Compose environment,
+or persisted desired-state fields.
 
 ## Homebrew Tap Sync
 
@@ -194,8 +310,13 @@ controlplane/bin/vcpe logs --name bng-7
 make release-gate
 ```
 
-This target enforces direct `vcpe` command coverage and control-plane integration
-smokes before release packaging.
+This target runs control-plane tests and the sandboxed DHCP-to-DNS lifecycle
+test. The deployed cross-network DNS smoke is included but opt-in because it
+rebuilds BNG and provisions a Podman deployment:
+
+```bash
+VCPE_RUN_CROSS_NETWORK_DNS=1 make release-gate
+```
 
 ## Publishing A Release
 

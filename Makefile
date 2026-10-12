@@ -61,7 +61,7 @@ release-gate:
 	bash tests/smoke/gateway-wireless-image-content.sh
 	bash tests/smoke/gateway-wireless-entrypoint.sh
 	bash tests/smoke/gateway-hostapd-wrapper.sh
-	bash tests/smoke/wireless-client-bootstrap.sh
+	bash tests/smoke/client-bootstrap.sh
 	bash tests/smoke/wireless-static-checks.sh
 	bash tests/smoke/controlplane-mesh-roaming-machine.sh
 

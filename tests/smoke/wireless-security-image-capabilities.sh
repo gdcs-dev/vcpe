@@ -6,8 +6,8 @@ fail() {
     exit 1
 }
 
-if [[ -z "${VCPE_GATEWAY_IMAGE:-}" && -z "${VCPE_WIRELESS_CLIENT_IMAGE:-}" ]]; then
-    echo 'wireless security image capabilities: skipped (set VCPE_GATEWAY_IMAGE and/or VCPE_WIRELESS_CLIENT_IMAGE)'
+if [[ -z "${VCPE_GATEWAY_IMAGE:-}" && -z "${VCPE_CLIENT_IMAGE:-}" ]]; then
+    echo 'wireless security image capabilities: skipped (set VCPE_GATEWAY_IMAGE and/or VCPE_CLIENT_IMAGE)'
     exit 0
 fi
 
@@ -53,8 +53,8 @@ if [[ -n "${VCPE_GATEWAY_IMAGE:-}" ]]; then
     ' || fail "Gateway image $VCPE_GATEWAY_IMAGE cannot parse WPA2-PSK/CCMP or SAE/CCMP with required PMF; install an Ubuntu hostapd package built with SAE and IEEE 802.11w support"
 fi
 
-if [[ -n "${VCPE_WIRELESS_CLIENT_IMAGE:-}" ]]; then
-    podman run --rm --cap-add NET_RAW --entrypoint /bin/bash "$VCPE_WIRELESS_CLIENT_IMAGE" -ceu '
+if [[ -n "${VCPE_CLIENT_IMAGE:-}" ]]; then
+    podman run --rm --cap-add NET_RAW --entrypoint /bin/bash "$VCPE_CLIENT_IMAGE" -ceu '
         wpa_supplicant -v
         printf "%s\n" \
             "ctrl_interface=/run/wpa_supplicant" \
@@ -72,7 +72,7 @@ if [[ -n "${VCPE_WIRELESS_CLIENT_IMAGE:-}" ]]; then
             exit 1
         fi
         grep -q "Successfully initialized wpa_supplicant" /tmp/wpa-supplicant.log
-    ' || fail "wireless-client image $VCPE_WIRELESS_CLIENT_IMAGE cannot parse SAE with required PMF; install an Ubuntu wpasupplicant package built with SAE and IEEE 802.11w support"
+    ' || fail "client image $VCPE_CLIENT_IMAGE cannot parse SAE with required PMF; install an Ubuntu wpasupplicant package built with SAE and IEEE 802.11w support"
 fi
 
 echo 'wireless security image capabilities: ok'

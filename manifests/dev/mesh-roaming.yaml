@@ -117,10 +117,10 @@ spec:
       type: generic-container
       replicas: 1
       image:
-        repository: ghcr.io/gdcs-dev/wireless-client
+        repository: ghcr.io/gdcs-dev/client
         tag: dev
         pullPolicy: build-if-missing
-        buildContext: services/wireless-client
+        buildContext: services/client
       radios:
         - name: wifi
           device: wlan0
@@ -130,16 +130,16 @@ spec:
           addressing: dhcp
           defaultRoute: true
       config:
-        command: ["/usr/local/bin/wireless-client"]
+        command: ["/usr/local/bin/client"]
       dependsOn: [root, remote]
     - name: remote-probe
       type: generic-container
       replicas: 1
       image:
-        repository: ghcr.io/gdcs-dev/wireless-client
+        repository: ghcr.io/gdcs-dev/client
         tag: dev
         pullPolicy: build-if-missing
-        buildContext: services/wireless-client
+        buildContext: services/client
       radios:
         - name: wifi
           device: wlan0
@@ -148,7 +148,7 @@ spec:
           network: home
           addressing: dhcp
       config:
-        command: ["/usr/local/bin/wireless-client"]
+        command: ["/usr/local/bin/client"]
       dependsOn: [root, remote]
   wirelessScenarios:
     - name: crossover

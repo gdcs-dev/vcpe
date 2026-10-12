@@ -99,7 +99,7 @@ func TestRootAloneServesClientLAN(t *testing.T) {
     case "$*" in
         *"gateway-health-probe mesh"*) printf '%s\n' '{"radio":"backhaul","interface":"mesh0","bridge":"brlan0","joined":true,"peers":1}' ;;
         *"grep -Fxq"*|*"grep -Eq"*|*"ping -n"*) return 0 ;;
-        *"cat /run/vcpe/wireless-client/status"*) printf '%s\n' 'state=ready' 'ipv4=10.0.0.120/24' ;;
+		*"cat /run/vcpe/client/status"*) printf '%s\n' 'state=ready' 'ipv4=10.0.0.120/24' ;;
         *"cat /sys/class/net/wlan0/address"*) printf '%s\n' '02:00:00:00:00:12' ;;
         *"cat /var/lib/misc/dnsmasq.leases"*) printf '%s\n' "$ROOT_LEASE" ;;
         *"ip -j -4 addr show dev brlan0"*) printf '%s\n' "$REMOTE_ADDRESS" ;;

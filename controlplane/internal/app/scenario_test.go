@@ -118,7 +118,10 @@ func (stub scenarioInspectorStub) ContainerMeshStatus(context.Context, string) (
 	return []byte(`{"radio":"backhaul","interface":"mesh0","bridge":"brlan0","joined":true,"peers":1}`), nil
 }
 
-func (stub scenarioInspectorStub) ContainerFile(_ context.Context, container, _ string) ([]byte, error) {
+func (stub scenarioInspectorStub) ContainerFile(_ context.Context, container, path string) ([]byte, error) {
+	if path != "/run/vcpe/client/status" {
+		return nil, fmt.Errorf("unexpected client status path %q", path)
+	}
 	if strings.Contains(container, "remote-probe") {
 		return []byte("radio=wifi\ndevice=wlan0\nbssid=" + stub.final + "\nipv4=10.0.0.100/24\nstate=ready\n"), nil
 	}
@@ -160,6 +163,22 @@ func newScenarioFixture(t *testing.T) (plan.Deployment, plan.WirelessScenario, *
 	scenario.Assertions.MaxRoamMs = 500
 	fixture := &scenarioFixture{initial: scenario.Assertions.InitialAP.BSSID, final: scenario.Assertions.FinalAP.BSSID, bssid: scenario.Assertions.InitialAP.BSSID}
 	return deployment, scenario, fixture, scenarioInspectorStub{fixture, deployment}
+}
+
+func TestScenarioTargetRequiresClientImage(t *testing.T) {
+	deployment, scenario, _, _ := newScenarioFixture(t)
+	container, device, root, err := scenarioTarget(deployment, scenario)
+	if err != nil || container != "mesh-roaming-station-1" || device != "wlan0" || root == "" {
+		t.Fatalf("new client scenario target = %q, %q, %q, %v", container, device, root, err)
+	}
+	for index := range deployment.Services {
+		if deployment.Services[index].Name == "station" {
+			deployment.Services[index].Image.Repository = "ghcr.io/gdcs-dev/wireless-client"
+		}
+	}
+	if _, _, _, err := scenarioTarget(deployment, scenario); err == nil {
+		t.Fatal("retired client image unexpectedly accepted for scenario")
+	}
 }
 
 func TestScenarioRunSchedulesStepsAndRestoresBaseline(t *testing.T) {
