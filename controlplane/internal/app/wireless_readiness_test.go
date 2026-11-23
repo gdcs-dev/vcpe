@@ -155,6 +155,28 @@ func TestWaitForGatewayVAPsRequiresEveryPlannedSlot(t *testing.T) {
 	}
 }
 
+func TestWaitForGatewayVAPsSkipsFirmwareManagedVAPs(t *testing.T) {
+	deployment := plan.Deployment{Name: "edge", Services: []plan.Service{{
+		Name: "xb10", Type: "xb10", Instances: []plan.Instance{{Radios: []plan.Radio{{
+			Name: "wifi24", Mode: manifest.RadioModeAP, Medium: "rf24", VAPs: []plan.VAP{
+				{Slot: 0, Device: "wl0", MAC: "02:00:00:00:00:10", Bridge: "brlan0"},
+			},
+		}}}},
+	}}}
+	originalTimeout, originalPoll := wirelessVAPTimeout, wirelessVAPPoll
+	wirelessVAPTimeout, wirelessVAPPoll = 5*time.Millisecond, time.Millisecond
+	t.Cleanup(func() { wirelessVAPTimeout, wirelessVAPPoll = originalTimeout, originalPoll })
+	// No gateway-health-probe in the container: the probe always fails.
+	inspector := readinessInspectorStub{vapError: errors.New("exit status 127")}
+	if err := waitForGatewayVAPs(context.Background(), deployment, inspector); err != nil {
+		t.Fatalf("xb10 VAPs awaited: %v", err)
+	}
+	deployment.Services[0].Type = "gateway"
+	if err := waitForGatewayVAPs(context.Background(), deployment, inspector); err == nil || !strings.Contains(err.Error(), "wifi24 slot 0") {
+		t.Fatalf("gateway VAP readiness error = %v", err)
+	}
+}
+
 func TestWaitForWirelessAuthenticationSelectsPersonalWirelessClient(t *testing.T) {
 	deployment := credentialPlan()
 	deployment.Services[1].Image.Repository = "ghcr.io/gdcs-dev/client"

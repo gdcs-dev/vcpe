@@ -22,6 +22,13 @@ var wirelessVAPPoll = 250 * time.Millisecond
 var wirelessMeshTimeout = 45 * time.Second
 var wirelessMeshPoll = 250 * time.Millisecond
 
+// firmwareManagedVAPTypes are service types whose own wireless stack (e.g.
+// RDK-B OneWifi on xb10) creates, names and addresses the VAPs on the radios
+// the control plane attaches. The planned VAP devices and BSSIDs do not apply
+// to them and they have no gateway-health-probe, so VAP readiness is not
+// awaited; the radios themselves are still ensured and released.
+var firmwareManagedVAPTypes = map[string]bool{"xb10": true}
+
 type wirelessReadinessInspector interface {
 	ContainerFile(context.Context, string, string) ([]byte, error)
 	ContainerVAPStatus(context.Context, string) ([]byte, error)
@@ -185,6 +192,9 @@ type observedVAP struct {
 func waitForGatewayVAPs(ctx context.Context, deployment plan.Deployment, inspector wirelessReadinessInspector) error {
 	expected := map[string]map[string]observedVAP{}
 	for _, service := range deployment.Services {
+		if firmwareManagedVAPTypes[service.Type] {
+			continue
+		}
 		for _, instance := range service.Instances {
 			container := instance.PodmanContainerName(deployment.Name, service.Name)
 			for _, radio := range instance.Radios {

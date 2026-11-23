@@ -132,9 +132,8 @@ monitor_default_route() {
     done
 }
 
-add_dummy_interface wl0
-add_dummy_interface wl1
-add_dummy_interface wl2
+# wl0/wl1/wl2 are hwsim radios declared in the manifest (xb10 service
+# radios); the control plane attaches them after the container starts.
 
 check_for_cm0_and_start_dhcp
 wait_for_erouter0_and_start_dhcp

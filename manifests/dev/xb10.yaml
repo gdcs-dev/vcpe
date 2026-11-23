@@ -4,6 +4,7 @@ metadata:
   name: xb10
   labels:
     scenario: xb10
+    environment: development
 spec:
   maxReplicasPerService: 3
   maxActiveDeployments: 10
@@ -16,6 +17,7 @@ spec:
   #        |                              GATEWAY wan (DHCP client, erouter0)
   #   cm-bridge   (10.7.201.0/24)  ── BNG eth2 (DHCP server)
   #        |                              GATEWAY cm
+  #   2.4/5/6 GHz media (hwsim) -- XB10 radios wl0 / wl1 / wl2
   networks:
     - role: mgmt
       ipv4:
@@ -45,6 +47,23 @@ spec:
       ipamDriver: none
     - role: lan-p4
       ipamDriver: none
+  # ── Wi-Fi ────────────────────────────────────────────────────────────────
+  # The XB10's three radios are hwsim radios on these media. The control plane
+  # attaches them to the xb10 container (as wl0/wl1/wl2) after it starts and
+  # releases them on `vcpe down`. OneWifi on the XB10 creates and configures
+  # the VAPs itself (wl0.1 ..., its own SSIDs and passphrases), so the
+  # network/secret below only satisfy the manifest schema for AP radios; they
+  # are not pushed into the XB10.
+  wirelessMedia:
+    - {name: rf24, band: 2.4ghz, channel: 1, widthMHz: 20}
+    - {name: rf5, band: 5ghz, channel: 36, widthMHz: 20}
+    - {name: rf6, band: 6ghz, channel: 5, widthMHz: 20}
+  wirelessNetworks:
+    - {name: private, ssid: xb10-private, security: wpa3-personal, passphraseSecretRef: xb10-wifi}
+  secrets:
+    - name: xb10-wifi
+      provider: literal
+      value: vcpe-development-only
   services:
     # ── BNG ─────────────────────────────────────────────────────────────────
     # Broadband Network Gateway: DHCP4/RADVD/DNS on WAN and CM segments,
@@ -123,6 +142,21 @@ spec:
           LISTEN_ADDR: ":8080"
       dependsOn:
         - bng
+    # ── Oktopus ──────────────────────────────────────────────────────────────
+    # USP controller. The XB10's USP agent (usp-pa) connects to it over STOMP
+    # (oktopus:61613, services/xb10/container/usp_factory_reset.conf).
+    - name: oktopus
+      type: oktopus
+      replicas: 1
+      image:
+        repository: ghcr.io/gdcs-dev/oktopus
+        tag: dev
+        pullPolicy: build-if-missing
+        buildContext: services/oktopus
+      interfaces:
+        - { role: mgmt }
+      dependsOn:
+        - bng
     # ── XB10 ─────────────────────────────────────────────────────────────────
     # RDK-B gateway simulator. Gets a DHCP lease from BNG on WAN (erouter0),
     # bridges LAN ports for attached clients.
@@ -143,11 +177,34 @@ spec:
         - { role: lan-p2, device: eth1 }
         - { role: lan-p3, device: eth2 }
         - { role: lan-p4, device: eth3 }
+      # RDK-B's own LAN bridge, named so the VAP declarations can refer to it.
+      bridges:
+        - name: brlan0
+      # wl0 = 2.4 GHz, wl1 = 5 GHz, wl2 = 6 GHz, as on the XB10.
+      radios:
+        - name: wifi24
+          medium: rf24
+          device: wl0
+          mode: ap
+          vaps:
+            - {slot: 0, network: private, bridge: brlan0}
+        - name: wifi5
+          medium: rf5
+          device: wl1
+          mode: ap
+          vaps:
+            - {slot: 0, network: private, bridge: brlan0}
+        - name: wifi6
+          medium: rf6
+          device: wl2
+          mode: ap
+          vaps:
+            - {slot: 0, network: private, bridge: brlan0}
       config:
         env:
           LAN_DNS: "10.0.0.1"
-      volumes:
-        - /mnt/docker_disk/shared/xb10-dev:/home/root/xb10-dev:rw
-        - /mnt/docker_disk/shared/downloads:/home/root/shared/downloads:rw
+      #volumes:
+      #  - /mnt/docker_disk/shared/xb10-dev:/home/root/xb10-dev:rw
+      #  - /mnt/docker_disk/shared/downloads:/home/root/shared/downloads:rw
       dependsOn:
         - bng
