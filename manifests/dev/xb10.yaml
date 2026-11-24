@@ -17,7 +17,7 @@ spec:
   #        |                              GATEWAY wan (DHCP client, erouter0)
   #   cm-bridge   (10.7.201.0/24)  ── BNG eth2 (DHCP server)
   #        |                              GATEWAY cm
-  #   2.4/5/6 GHz media (hwsim) -- XB10 radios wl0 / wl1 / wl2
+  #   2.4/5/6 GHz media (hwsim) -- XB10 radios wl0 / wl1 / wl2 -- Wi-Fi client
   networks:
     - role: mgmt
       ipv4:
@@ -50,10 +50,12 @@ spec:
   # ── Wi-Fi ────────────────────────────────────────────────────────────────
   # The XB10's three radios are hwsim radios on these media. The control plane
   # attaches them to the xb10 container (as wl0/wl1/wl2) after it starts and
-  # releases them on `vcpe down`. OneWifi on the XB10 creates and configures
-  # the VAPs itself (wl0.1 ..., its own SSIDs and passphrases), so the
-  # network/secret below only satisfy the manifest schema for AP radios; they
-  # are not pushed into the XB10.
+  # releases them on `vcpe down`. OneWifi on the XB10 creates the VAPs itself
+  # (wl0.1 ...). Each radio's slot-0 VAP below sets the XB10's private Wi-Fi
+  # on that band (private_ssid_2g/5g/6g): its SSID and passphrase come from
+  # the network and secret here, its BSSID from vCPE. OneWifi keeps its own
+  # security mode (WPA3-Personal on 6 GHz, WPA3-Personal-Transition on
+  # 2.4/5 GHz), which a wpa3-personal client joins.
   wirelessMedia:
     - {name: rf24, band: 2.4ghz, channel: 1, widthMHz: 20}
     - {name: rf5, band: 5ghz, channel: 36, widthMHz: 20}
@@ -208,3 +210,23 @@ spec:
       #  - /mnt/docker_disk/shared/downloads:/home/root/shared/downloads:rw
       dependsOn:
         - bng
+    # ── Wi-Fi client ─────────────────────────────────────────────────────────
+    # Station on the 2.4 GHz medium. Joins the XB10's private network and gets
+    # a LAN address (10.0.0.x) from the XB10 over brlan0. OneWifi on the XB10
+    # beacons about 40 s after the container starts, longer than the client's
+    # default 30 s association timeout, so the client waits longer.
+    - name: client
+      type: generic-container
+      replicas: 1
+      image:
+        repository: ghcr.io/gdcs-dev/client
+        tag: dev
+        pullPolicy: build-if-missing
+        buildContext: services/client
+      radios:
+        - {name: wifi, medium: rf24, network: private, device: wlan0, mode: station, addressing: dhcp, defaultRoute: true}
+      config:
+        command: ["/usr/local/bin/client"]
+        env:
+          VCPE_ASSOCIATION_TIMEOUT_SECONDS: "150"
+      dependsOn: [xb10]

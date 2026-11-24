@@ -177,6 +177,26 @@ func TestWaitForGatewayVAPsSkipsFirmwareManagedVAPs(t *testing.T) {
 	}
 }
 
+func TestWirelessAuthenticationTimeoutForFirmwareManagedAP(t *testing.T) {
+	deployment := plan.Deployment{Name: "edge", Services: []plan.Service{{
+		Name: "xb10", Type: "xb10", Instances: []plan.Instance{{Radios: []plan.Radio{{
+			Name: "wifi24", Mode: manifest.RadioModeAP, Medium: "rf24",
+		}}}},
+	}}}
+	if got := wirelessAuthenticationTimeoutFor(deployment); got != firmwareManagedAuthenticationTimeout {
+		t.Fatalf("xb10 AP timeout = %v, want %v", got, firmwareManagedAuthenticationTimeout)
+	}
+	deployment.Services[0].Type = "gateway"
+	if got := wirelessAuthenticationTimeoutFor(deployment); got != wirelessAuthenticationTimeout {
+		t.Fatalf("gateway AP timeout = %v, want %v", got, wirelessAuthenticationTimeout)
+	}
+	deployment.Services[0].Type = "xb10"
+	deployment.Services[0].Instances[0].Radios[0].Mode = "station"
+	if got := wirelessAuthenticationTimeoutFor(deployment); got != wirelessAuthenticationTimeout {
+		t.Fatalf("xb10 without AP radios timeout = %v, want %v", got, wirelessAuthenticationTimeout)
+	}
+}
+
 func TestWaitForWirelessAuthenticationSelectsPersonalWirelessClient(t *testing.T) {
 	deployment := credentialPlan()
 	deployment.Services[1].Image.Repository = "ghcr.io/gdcs-dev/client"

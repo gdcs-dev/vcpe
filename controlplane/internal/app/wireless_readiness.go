@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gdcs-dev/vcpe/controlplane/internal/manifest"
 	"github.com/gdcs-dev/vcpe/controlplane/internal/plan"
 )
 
@@ -23,11 +24,35 @@ var wirelessMeshTimeout = 45 * time.Second
 var wirelessMeshPoll = 250 * time.Millisecond
 
 // firmwareManagedVAPTypes are service types whose own wireless stack (e.g.
-// RDK-B OneWifi on xb10) creates, names and addresses the VAPs on the radios
-// the control plane attaches. The planned VAP devices and BSSIDs do not apply
-// to them and they have no gateway-health-probe, so VAP readiness is not
-// awaited; the radios themselves are still ensured and released.
+// RDK-B OneWifi on xb10) creates and names the VAPs on the radios the control
+// plane attaches. The planned VAP devices do not apply to them and they have
+// no gateway-health-probe, so VAP readiness is not awaited; the radios
+// themselves are still ensured and released.
 var firmwareManagedVAPTypes = map[string]bool{"xb10": true}
+
+// firmwareManagedAuthenticationTimeout replaces wirelessAuthenticationTimeout
+// when a firmware-managed service has AP radios: its stack brings the VAPs up
+// only once the firmware has booted (OneWifi on xb10 beacons about 40 s after
+// the container starts), so its clients authenticate later than a gateway's.
+var firmwareManagedAuthenticationTimeout = 3 * time.Minute
+
+// wirelessAuthenticationTimeoutFor is how long the deployment's clients get
+// to authenticate.
+func wirelessAuthenticationTimeoutFor(deployment plan.Deployment) time.Duration {
+	for _, service := range deployment.Services {
+		if !firmwareManagedVAPTypes[service.Type] {
+			continue
+		}
+		for _, instance := range service.Instances {
+			for _, radio := range instance.Radios {
+				if radio.Mode == manifest.RadioModeAP {
+					return firmwareManagedAuthenticationTimeout
+				}
+			}
+		}
+	}
+	return wirelessAuthenticationTimeout
+}
 
 type wirelessReadinessInspector interface {
 	ContainerFile(context.Context, string, string) ([]byte, error)
@@ -269,7 +294,7 @@ func waitForWirelessAuthentication(ctx context.Context, deployment plan.Deployme
 	if len(containers) == 0 {
 		return nil
 	}
-	waitCtx, cancel := context.WithTimeout(ctx, wirelessAuthenticationTimeout)
+	waitCtx, cancel := context.WithTimeout(ctx, wirelessAuthenticationTimeoutFor(deployment))
 	defer cancel()
 	pending := make(map[string]bool, len(containers))
 	for _, container := range containers {

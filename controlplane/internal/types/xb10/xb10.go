@@ -140,8 +140,12 @@ func renderXB10Compose(input render.Input, inst plan.Instance) string {
 	svc, topNets := servicetemplate.BuildComposeService(input, inst, servicetemplate.MACOnlyAttachment)
 	svc["privileged"] = true
 	svc["cap_add"] = []string{"NET_ADMIN", "NET_RAW"}
-	if len(input.Service.Volumes) > 0 {
-		svc["volumes"] = input.Service.Volumes
+	// Wireless passphrases for the AP radios' networks: the RADIO_*_PASSPHRASE_FILE
+	// environment points at these paths, as for the gateway type.
+	volumes := append([]string(nil), input.Service.Volumes...)
+	volumes = append(volumes, render.SecretFileMounts(input.WirelessCredentialFiles)...)
+	if len(volumes) > 0 {
+		svc["volumes"] = volumes
 	}
 	ports := append([]string(nil), input.Service.Ports...)
 	if len(ports) > 0 {

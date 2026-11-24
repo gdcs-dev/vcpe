@@ -49,6 +49,9 @@ func TestXB10RendererPreservesArtifactsAndNetworkPolicy(t *testing.T) {
 		}},
 		Service:     service,
 		HealthPorts: map[int]int{0: 47000, 1: 47001},
+		WirelessCredentialFiles: map[string]render.SecretFileHandle{
+			"private": {HostPath: "/state/edge/wireless/private/passphrase", ContainerPath: "/etc/vcpe/credentials/wireless/private/passphrase"},
+		},
 	})
 	if err != nil {
 		t.Fatalf("render xb10: %v", err)
@@ -88,7 +91,8 @@ func TestXB10RendererPreservesArtifactsAndNetworkPolicy(t *testing.T) {
 		if !xb10Contains(workload["ports"], "18080:8080") || !xb10Contains(workload["ports"], "127.0.0.1:"+healthPort+":9878") {
 			t.Errorf("service %q ports = %#v", name, workload["ports"])
 		}
-		if !xb10Contains(workload["volumes"], "./data:/data") {
+		if !xb10Contains(workload["volumes"], "./data:/data") ||
+			!xb10Contains(workload["volumes"], "/state/edge/wireless/private/passphrase:/etc/vcpe/credentials/wireless/private/passphrase:ro") {
 			t.Errorf("service %q volumes = %#v", name, workload["volumes"])
 		}
 		attachments := xb10Map(t, workload["networks"], "services."+name+".networks")
